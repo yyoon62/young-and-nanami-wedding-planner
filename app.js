@@ -2,39 +2,95 @@
   "use strict";
   var CFG = window.CONFIG || {};
   var PEOPLE = CFG.PEOPLE || ["Young", "Nanami"];
-  var LS_WHO = "wv_who", LS_VOTES = "wv_votes_v2";
+  var LS_WHO = "wv_who", LS_VOTES = "wv_votes_v2", LS_REQ = "wv_requests", SS_BANNER = "wv_banner_dismissed";
   var venues = [];
-  var votes = load(LS_VOTES, {}); // votes[slug][person] = {vote, note}
+  var votes = load(LS_VOTES, {}); // votes[slug][person] = {vote, note, dirty?}
   var who = localStorage.getItem(LS_WHO);
+  if (PEOPLE.indexOf(who) < 0) who = null;
   // A link like ?as=Nanami pre-selects who you are (handy for sending your partner a link).
   var asParam = new URLSearchParams(location.search).get("as");
   if (asParam && PEOPLE.indexOf(asParam) >= 0) { who = asParam; localStorage.setItem(LS_WHO, who); }
-  var filter = "all";
-  var syncOK = null;
-  var requests = load("wv_requests", []); // [{id, person, name, url, note, status, created}]
+  var view = "venues";      // venues | compare | requests
+  var filter = "all";       // all | Boston | NYC | both | todo
+  var sortMode = "default"; // compare sort: default | loved | cost
+  var syncState = null;     // null = local only, true = synced, false = offline
+  var requests = load(LS_REQ, []); // [{id, person, name, url, note, status, created}]
+  var FILTERS = ["all", "Boston", "NYC", "both", "todo"];
+  var VOTES = ["love", "maybe", "pass"];
+  var VLABEL = { love: "Love", maybe: "Maybe", pass: "Pass" };
+  var VICON = { love: "♥", maybe: "~", pass: "✕" };
+  var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  function $(id) { return document.getElementById(id); }
   function load(k, d) { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } }
   function saveLocal() { localStorage.setItem(LS_VOTES, JSON.stringify(votes)); }
   function other() { return PEOPLE.filter(function (p) { return p !== who; })[0]; }
   function get(slug, p) { return (votes[slug] && votes[slug][p]) || { vote: "", note: "" }; }
+  function isHttp(u) { return /^https?:\/\//i.test(u || ""); }
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
     if (text != null) e.textContent = text;
     return e;
   }
+  function extLink(cls, text, url) {
+    var a = el("a", cls, text);
+    if (isHttp(url)) { a.href = url; a.target = "_blank"; a.rel = "noopener noreferrer"; }
+    return a;
+  }
+  // Static icon markup only (no data), so building it from a string is safe.
+  var SVGNS = "http://www.w3.org/2000/svg";
+  function cameraIcon() {
+    var s = document.createElementNS(SVGNS, "svg");
+    s.setAttribute("viewBox", "0 0 48 48"); s.setAttribute("aria-hidden", "true");
+    s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor"); s.setAttribute("stroke-width", "2");
+    s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round");
+    [["path", { d: "M6 16a4 4 0 0 1 4-4h5l3-4h12l3 4h5a4 4 0 0 1 4 4v20a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z" }],
+     ["circle", { cx: "24", cy: "25", r: "8" }],
+     ["path", { d: "M24 21.5c-1.2-1.6-4-1-4 1.2 0 2 4 4.3 4 4.3s4-2.3 4-4.3c0-2.2-2.8-2.8-4-1.2z", fill: "currentColor", stroke: "none" }]
+    ].forEach(function (x) {
+      var n = document.createElementNS(SVGNS, x[0]);
+      Object.keys(x[1]).forEach(function (k) { n.setAttribute(k, x[1][k]); });
+      s.appendChild(n);
+    });
+    return s;
+  }
+
+  // ---------- derived data ----------
+  function agreement(slug) {
+    var m = get(slug, PEOPLE[0]).vote, o = get(slug, PEOPLE[1]).vote;
+    if (!m || !o) return "";
+    return m === o ? m : "mixed";
+  }
+  function votedCount(p) { return venues.filter(function (v) { return !!get(v.slug, p).vote; }).length; }
+  function bothLoveCount() { return venues.filter(function (v) { return agreement(v.slug) === "love"; }).length; }
+  function show(v, f) {
+    f = f || filter;
+    if (f === "Boston" || f === "NYC") return v.area === f;
+    if (f === "both") return agreement(v.slug) === "love";
+    if (f === "todo") return !get(v.slug, who).vote;
+    return true;
+  }
+  function areaLabel(a) { return a === "NYC" ? "NYC area" : a === "Boston" ? "Boston area" : a; }
 
   // ---------- sync ----------
-  function setSync(ok, msg) {
-    syncOK = ok;
-    var s = document.getElementById("sync");
-    s.className = "sync " + (ok === true ? "ok" : ok === false ? "bad" : "");
-    s.textContent = msg;
+  var SYNC_TEXT = {
+    local: ["On this device only", "Sync isn't set up yet, so votes are saved in this browser only."],
+    ok: ["Synced", "Votes are synced with the shared Google Sheet."],
+    bad: ["Offline – retrying", "Couldn't reach the shared sheet. Your votes are kept on this device and will be retried."]
+  };
+  function setSync(ok) {
+    syncState = ok;
+    var k = ok === true ? "ok" : ok === false ? "bad" : "local";
+    var s = $("sync");
+    s.className = "sync " + k;
+    s.title = SYNC_TEXT[k][1];
+    s.querySelector(".txt").textContent = SYNC_TEXT[k][0];
   }
   function remoteOn() { return !!CFG.APPS_SCRIPT_URL; }
 
   function pull() {
-    if (!remoteOn()) { setSync(null, "local only"); return Promise.resolve(); }
+    if (!remoteOn()) { setSync(null); return Promise.resolve(); }
     var u = CFG.APPS_SCRIPT_URL + "?key=" + encodeURIComponent(CFG.SHARED_KEY || "");
     return fetch(u).then(function (r) { return r.json(); }).then(function (rows) {
       if (!Array.isArray(rows)) throw new Error("bad response");
@@ -46,10 +102,20 @@
         votes[r.venue][r.person] = { vote: r.vote || "", note: r.note || "" };
       });
       saveLocal();
-      setSync(true, "synced");
+      setSync(true);
+      retryDirty();
       render();
       return pullRequests();
-    }).catch(function () { setSync(false, "offline"); });
+    }).catch(function () { setSync(false); });
+  }
+
+  // Re-send my edits that failed to save earlier (marked dirty), unless a note save is already pending.
+  function retryDirty() {
+    if (!who) return;
+    Object.keys(votes).forEach(function (slug) {
+      var mine = votes[slug] && votes[slug][who];
+      if (mine && mine.dirty && !noteTimers[slug] && !inflight[slug]) push(slug);
+    });
   }
 
   function pullRequests() {
@@ -57,15 +123,15 @@
     return fetch(u).then(function (r) { return r.json(); }).then(function (rows) {
       if (!Array.isArray(rows)) return;
       requests = rows;
-      localStorage.setItem("wv_requests", JSON.stringify(requests));
-      if (filter === "requests") renderReqList();
+      localStorage.setItem(LS_REQ, JSON.stringify(requests));
+      if (view === "requests") renderReqList();
     }).catch(function () {});
   }
 
   function submitRequest(name, url, note) {
     var item = { id: "local-" + Date.now(), person: who, name: name, url: url, note: note, status: "new", created: new Date().toISOString() };
     requests.push(item);
-    localStorage.setItem("wv_requests", JSON.stringify(requests));
+    localStorage.setItem(LS_REQ, JSON.stringify(requests));
     renderReqList();
     if (!remoteOn()) return Promise.resolve({ ok: false, local: true });
     return fetch(CFG.APPS_SCRIPT_URL, {
@@ -74,240 +140,616 @@
       body: JSON.stringify({ key: CFG.SHARED_KEY || "", action: "request", person: who, name: name, url: url, note: note })
     }).then(function (r) { return r.json(); }).then(function (res) {
       if (res && res.ok) pullRequests();
-      return res;
+      return res || { ok: false };
     }).catch(function () { return { ok: false }; });
   }
 
-  // ---------- venue requests ----------
-  var reqBuilt = false;
-  function renderReqList() {
-    var box = document.getElementById("reqList");
-    if (!box) return;
-    box.textContent = "";
-    if (!requests.length) { box.appendChild(el("p", null, "No requests yet.")); return; }
-    requests.slice().reverse().forEach(function (r) {
-      var d = el("div", "req");
-      d.appendChild(el("span", "status " + (r.status || "new"), r.status || "new"));
-      d.appendChild(el("div", "rname", r.name));
-      if (/^https?:\/\//i.test(r.url || "")) {
-        var a = el("a", null, r.url); a.href = r.url; a.target = "_blank"; a.rel = "noopener noreferrer";
-        d.appendChild(a);
-      }
-      if (r.note) d.appendChild(el("div", null, r.note));
-      d.appendChild(el("div", "rmeta", "Requested by " + r.person));
-      box.appendChild(d);
-    });
-  }
-
-  function renderRequests() {
-    var box = document.getElementById("requests");
-    if (!reqBuilt) {
-      reqBuilt = true;
-      var f = el("div", "reqform");
-      f.appendChild(el("h2", null, "Request a venue"));
-      f.appendChild(el("p", "note", "Add a venue you'd like researched. Claude will look up pricing and photos and add it to the list."));
-      var fields = [["Venue name *", "input", "rq-name", "e.g. The Gardens at Ashland"],
-                    ["Link (optional)", "input", "rq-url", "https://..."],
-                    ["Why / questions (optional)", "textarea", "rq-note", "What caught your eye? Anything to check?"]];
-      fields.forEach(function (x) {
-        var l = el("label", null, x[0]); l.htmlFor = x[2]; f.appendChild(l);
-        var i = el(x[1]); i.id = x[2]; i.placeholder = x[3];
-        if (x[1] === "input") i.maxLength = x[2] === "rq-name" ? 120 : 500; else i.maxLength = 1000;
-        f.appendChild(i);
-      });
-      var btn = el("button", null, "Send request"); var msg = el("span", "msg");
-      btn.addEventListener("click", function () {
-        var name = document.getElementById("rq-name").value.trim();
-        var url = document.getElementById("rq-url").value.trim();
-        var note = document.getElementById("rq-note").value.trim();
-        if (!name) { msg.textContent = "Please enter a venue name."; return; }
-        if (url && !/^https?:\/\//i.test(url)) { msg.textContent = "Link must start with http:// or https://"; return; }
-        btn.disabled = true; msg.textContent = "Sending...";
-        submitRequest(name, url, note).then(function (res) {
-          btn.disabled = false;
-          msg.textContent = res.ok ? "Sent." : res.local ? "Saved on this device only (sync is not set up)." : "Could not reach the sheet. Saved on this device; try again later.";
-          ["rq-name", "rq-url", "rq-note"].forEach(function (id) { document.getElementById(id).value = ""; });
-        });
-      });
-      f.appendChild(btn); f.appendChild(msg);
-      box.appendChild(f);
-      box.appendChild(el("h2", null, "All requests"));
-      var list = el("div"); list.id = "reqList"; box.appendChild(list);
-    }
-    renderReqList();
-  }
-
+  var inflight = {};
+  // Saves my vote+note for a venue. Resolves to "ok", "local" or "fail".
   function push(slug) {
+    votes[slug] = votes[slug] || {};
     var mine = get(slug, who);
-    mine.dirty = true; saveLocal();
-    if (!remoteOn()) return;
-    fetch(CFG.APPS_SCRIPT_URL, {
+    mine.dirty = true; votes[slug][who] = mine; saveLocal();
+    if (!remoteOn()) return Promise.resolve("local");
+    inflight[slug] = true;
+    var sent = { vote: mine.vote || "", note: mine.note || "" };
+    return fetch(CFG.APPS_SCRIPT_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight
-      body: JSON.stringify({ key: CFG.SHARED_KEY || "", venue: slug, person: who, vote: mine.vote || "", note: mine.note || "" })
+      body: JSON.stringify({ key: CFG.SHARED_KEY || "", venue: slug, person: who, vote: sent.vote, note: sent.note })
     }).then(function (r) { return r.json(); }).then(function (res) {
-      if (res && res.ok) { delete votes[slug][who].dirty; saveLocal(); setSync(true, "synced"); }
-      else setSync(false, "save failed");
-    }).catch(function () { setSync(false, "offline"); });
+      delete inflight[slug];
+      if (res && res.ok) {
+        var cur = votes[slug][who];
+        // only clear dirty if nothing changed while the request was in flight
+        if (cur && (cur.vote || "") === sent.vote && (cur.note || "") === sent.note) delete cur.dirty;
+        saveLocal(); setSync(true); return "ok";
+      }
+      setSync(false); return "fail";
+    }).catch(function () { delete inflight[slug]; setSync(false); return "fail"; });
   }
 
   // ---------- actions ----------
   function setVote(slug, v) {
     votes[slug] = votes[slug] || {};
     var cur = get(slug, who);
-    votes[slug][who] = { vote: cur.vote === v ? "" : v, note: cur.note };
+    votes[slug][who] = { vote: cur.vote === v ? "" : v, note: cur.note || "" };
     push(slug); render();
   }
   var noteTimers = {};
+  function setHint(slug, text, cls) {
+    var c = $("v-" + slug), h = c && c.querySelector(".hint");
+    if (h) { h.textContent = text; h.className = "hint" + (cls ? " " + cls : ""); }
+  }
   function setNote(slug, text) {
     votes[slug] = votes[slug] || {};
     var cur = get(slug, who);
-    votes[slug][who] = { vote: cur.vote, note: text, dirty: true };
+    votes[slug][who] = { vote: cur.vote || "", note: text, dirty: true };
     saveLocal();
+    setHint(slug, "Saving…");
     clearTimeout(noteTimers[slug]);
-    noteTimers[slug] = setTimeout(function () { push(slug); }, 700);
+    noteTimers[slug] = setTimeout(function () {
+      delete noteTimers[slug];
+      push(slug).then(function (res) {
+        if (noteTimers[slug]) return; // typing resumed
+        if (res === "ok") setHint(slug, "Saved ✓", "ok");
+        else if (res === "local") setHint(slug, "Saved on this device ✓", "ok");
+        else setHint(slug, "Not synced – will retry", "bad");
+      });
+    }, 700);
   }
 
-  // ---------- render ----------
-  function show(v) {
-    var m = get(v.slug, who).vote, o = get(v.slug, other()).vote;
-    if (filter === "all") return true;
-    if (filter === "Boston" || filter === "NYC") return v.area === filter;
-    if (filter === "both") return m === "love" && o === "love";
-    if (filter === "todo") return !m;
-    return true;
-  }
-
-  function voteRow(slug, person, mine) {
-    var row = el("div", "vrow " + (mine ? "mine" : "other"));
-    row.appendChild(el("span", "name", person));
-    var cur = get(slug, person).vote;
-    ["love", "maybe", "pass"].forEach(function (v) {
-      var b = el("button", v + (cur === v ? " on" : ""), v[0].toUpperCase() + v.slice(1));
-      if (mine) b.addEventListener("click", function () { setVote(slug, v); });
-      else b.disabled = true;
-      row.appendChild(b);
+  // ---------- cards ----------
+  function carousel(v) {
+    var media = el("div", "media");
+    if (!v.photos.length) {
+      var ph = el("div", "placeholder");
+      ph.appendChild(cameraIcon());
+      ph.appendChild(el("div", null, "No photos yet — see the venue site"));
+      var l0 = v.links && v.links[0];
+      if (l0 && isHttp(l0.url)) ph.appendChild(extLink("btnlink", l0.label + " ↗", l0.url));
+      media.appendChild(ph);
+      return media;
+    }
+    var n = v.photos.length;
+    var car = el("div", "carousel");
+    car.setAttribute("aria-label", v.name + " photos");
+    v.photos.forEach(function (p, i) {
+      var b = el("button", "ph"); b.type = "button";
+      b.setAttribute("aria-label", "Open " + v.name + " photo " + (i + 1) + " of " + n);
+      var im = el("img"); im.src = p; im.loading = i ? "lazy" : "eager"; im.decoding = "async";
+      im.alt = v.name + " photo " + (i + 1) + " of " + n;
+      b.appendChild(im);
+      b.addEventListener("click", function () { openLb(v, i, b); });
+      car.appendChild(b);
     });
-    return row;
+    media.appendChild(car);
+    if (n < 2) return media;
+    var count = el("span", "count", "1 / " + n);
+    var dots = el("div", "dots");
+    for (var i = 0; i < n; i++) dots.appendChild(el("i", i ? null : "on"));
+    var prev = el("button", "arrow prev", "‹"), next = el("button", "arrow next", "›");
+    prev.type = next.type = "button";
+    prev.setAttribute("aria-label", "Previous photo"); next.setAttribute("aria-label", "Next photo");
+    function step() { var f = car.firstChild; return f ? f.getBoundingClientRect().width + 4 : 1; }
+    function idx() {
+      if (car.scrollLeft >= car.scrollWidth - car.clientWidth - 2) return n - 1;
+      return Math.max(0, Math.min(n - 1, Math.round(car.scrollLeft / step())));
+    }
+    function update() {
+      var k = idx();
+      count.textContent = (k + 1) + " / " + n;
+      Array.prototype.forEach.call(dots.children, function (d, j) { d.className = j === k ? "on" : ""; });
+      prev.disabled = k === 0; next.disabled = k === n - 1;
+    }
+    function go(d) {
+      var k = Math.max(0, Math.min(n - 1, idx() + d));
+      car.scrollTo({ left: k * step(), behavior: reduceMotion ? "auto" : "smooth" });
+    }
+    var raf = 0;
+    car.addEventListener("scroll", function () { if (!raf) raf = requestAnimationFrame(function () { raf = 0; update(); }); }, { passive: true });
+    prev.addEventListener("click", function () { go(-1); });
+    next.addEventListener("click", function () { go(1); });
+    prev.disabled = true;
+    media._update = update;
+    media.appendChild(count); media.appendChild(dots); media.appendChild(prev); media.appendChild(next);
+    return media;
   }
+
+  function votePill(v, prefix) {
+    var t = v ? VICON[v] + " " + VLABEL[v] : "—";
+    return el("span", "vpill " + (v || "none"), prefix ? prefix + t : t);
+  }
+
+  var AGREE = { love: "♥ You both love this", mixed: "≈ Mixed feelings", pass: "Both passed", maybe: "~ Both on the fence" };
 
   function card(v) {
-    var c = el("section", "card");
-    c.appendChild(el("h2", null, v.name));
-    c.appendChild(el("div", "loc", v.location + " - " + v.type));
-    var car = el("div", "carousel");
-    if (!v.photos.length) car.appendChild(el("div", "none", "No photos yet. See links below."));
-    v.photos.forEach(function (p, i) {
-      var im = el("img"); im.src = p; im.loading = "lazy"; im.alt = v.name;
-      im.addEventListener("click", function () { openLb(v.photos, i); });
-      car.appendChild(im);
-    });
-    c.appendChild(car);
+    var mine = get(v.slug, who), theirs = get(v.slug, other()), ag = agreement(v.slug);
+    var c = el("article", "card" + (ag ? " ag-" + ag : "") + (ag === "pass" && filter === "all" ? " dim" : ""));
+    c.id = "v-" + v.slug;
+    c.appendChild(carousel(v));
+    var b = el("div", "body");
+    var head = el("div", "head");
+    head.appendChild(el("h2", null, v.name));
+    head.appendChild(el("span", "area " + v.area, areaLabel(v.area)));
+    b.appendChild(head);
+    b.appendChild(el("p", "loc", v.location + " · " + v.type));
     var f = el("div", "facts");
-    [["Site fee", v.siteFee], ["Full wedding (80 guests)", v.estimate]].forEach(function (kv) {
-      var d = el("div"); var b = el("b", null, kv[0] + ": "); d.appendChild(b); d.appendChild(document.createTextNode(kv[1])); f.appendChild(d);
+    [["Site fee", v.siteFee, "fact"], ["Est. total (80 guests)", v.estimate, "fact est"]].forEach(function (kv) {
+      var d = el("div", kv[2]); d.appendChild(el("span", "k", kv[0])); d.appendChild(el("span", "v", kv[1])); f.appendChild(d);
     });
-    c.appendChild(f);
-    c.appendChild(el("p", "note", v.note));
+    b.appendChild(f);
+    if (v.note) b.appendChild(el("p", "note", v.note));
     var links = el("div", "links");
-    v.links.forEach(function (l, i) {
-      if (i) links.appendChild(document.createTextNode(" | "));
-      var a = el("a", null, l.label); a.href = l.url; a.target = "_blank"; a.rel = "noopener"; links.appendChild(a);
+    (v.links || []).forEach(function (l) {
+      if (!isHttp(l.url)) return;
+      var label = l.label === "Official" ? "Official site" : l.label;
+      links.appendChild(extLink("linkchip", label + " ↗", l.url));
     });
-    c.appendChild(links);
-    var vt = el("div", "votes");
-    vt.appendChild(voteRow(v.slug, who, true));
-    vt.appendChild(voteRow(v.slug, other(), false));
-    var on = get(v.slug, other()).note;
-    if (on) vt.appendChild(el("div", "theirnote", other() + ": " + on));
-    var ta = el("textarea"); ta.placeholder = "Your notes (vibe, concerns, questions to ask)";
-    ta.value = get(v.slug, who).note || "";
+    if (links.childNodes.length) b.appendChild(links);
+
+    var bot = el("div", "bottom");
+    var vw = el("div");
+    var lbl = el("div", "lbl"); lbl.appendChild(el("span", null, "Your vote")); vw.appendChild(lbl);
+    var seg = el("div", "seg"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "Your vote for " + v.name);
+    VOTES.forEach(function (x) {
+      var btn = el("button", x); btn.type = "button";
+      btn.setAttribute("aria-pressed", mine.vote === x ? "true" : "false");
+      btn.setAttribute("data-fk", "vote-" + x);
+      btn.appendChild(el("span", "ic", VICON[x])).setAttribute("aria-hidden", "true");
+      btn.appendChild(el("span", null, VLABEL[x]));
+      btn.addEventListener("click", function () { setVote(v.slug, x); });
+      seg.appendChild(btn);
+    });
+    vw.appendChild(seg);
+    bot.appendChild(vw);
+
+    var sl = el("div", "status-line");
+    if (theirs.vote) sl.appendChild(votePill(theirs.vote, other() + ": "));
+    else sl.appendChild(el("span", "waiting", other() + " hasn't voted yet"));
+    if (ag) sl.appendChild(el("span", "agree " + ag, AGREE[ag]));
+    bot.appendChild(sl);
+
+    if (theirs.note) {
+      var q = el("div", "theirnote");
+      q.appendChild(el("span", "who", other() + "'s note"));
+      q.appendChild(document.createTextNode(theirs.note));
+      bot.appendChild(q);
+    }
+    var nw = el("div");
+    var nl = el("label", "lbl"); nl.htmlFor = "note-" + v.slug;
+    nl.appendChild(el("span", null, "Your notes")); nl.appendChild(el("span", "hint"));
+    nw.appendChild(nl);
+    var ta = el("textarea"); ta.id = "note-" + v.slug;
+    ta.placeholder = "Vibe, concerns, questions to ask…";
+    ta.value = mine.note || "";
     ta.addEventListener("input", function () { setNote(v.slug, ta.value); });
-    vt.appendChild(ta);
-    c.appendChild(vt);
+    ta.addEventListener("blur", function () { if (pendingRender) setTimeout(render, 0); });
+    nw.appendChild(ta);
+    bot.appendChild(nw);
+    b.appendChild(bot);
+    c.appendChild(b);
     return c;
   }
 
-  function pill(v) { return el("span", "pill " + (v || ""), v || "-"); }
+  function cardSig(v) {
+    var a = get(v.slug, PEOPLE[0]), b = get(v.slug, PEOPLE[1]);
+    return JSON.stringify([who, filter === "all", a.vote, a.note, b.vote, b.note]);
+  }
+
+  // ---------- list render (keyed, keeps carousel scroll and focus) ----------
+  var listKey = "", sigs = {}, pendingRender = false;
+  function typingIn(node) {
+    var a = document.activeElement;
+    return a && a.tagName === "TEXTAREA" && node.contains(a);
+  }
+  function swapCard(old, fresh) {
+    var a = document.activeElement, fk = old.contains(a) && a.getAttribute("data-fk");
+    var car = old.querySelector(".carousel"), sl = car ? car.scrollLeft : 0;
+    old.parentNode.replaceChild(fresh, old);
+    var nc = fresh.querySelector(".carousel");
+    if (nc && sl) { nc.scrollLeft = sl; if (nc.parentNode._update) nc.parentNode._update(); }
+    if (fk) { var t = fresh.querySelector('[data-fk="' + fk + '"]'); if (t) t.focus(); }
+  }
+  function renderList(force) {
+    var list = $("list");
+    var vis = venues.filter(function (v) { return show(v); });
+    var key = [who, filter].concat(vis.map(function (v) { return v.slug; })).join(",");
+    if (key === listKey) {
+      vis.forEach(function (v) {
+        var s = cardSig(v), old = $("v-" + v.slug);
+        if (!old || sigs[v.slug] === s) return;
+        if (typingIn(old)) { pendingRender = true; return; }
+        swapCard(old, card(v)); sigs[v.slug] = s;
+      });
+      return;
+    }
+    if (!force && typingIn(list)) { pendingRender = true; return; }
+    var scrolls = {};
+    list.querySelectorAll(".card").forEach(function (c) {
+      var car = c.querySelector(".carousel"); if (car && car.scrollLeft) scrolls[c.id] = car.scrollLeft;
+    });
+    listKey = key; sigs = {};
+    list.textContent = "";
+    vis.forEach(function (v) { list.appendChild(card(v)); sigs[v.slug] = cardSig(v); });
+    Object.keys(scrolls).forEach(function (id) {
+      var c = $(id), car = c && c.querySelector(".carousel");
+      if (car) { car.scrollLeft = scrolls[id]; if (car.parentNode._update) car.parentNode._update(); }
+    });
+    if (!vis.length) list.appendChild(emptyState());
+  }
+
+  function emptyState() {
+    var d = el("div", "empty");
+    if (filter === "both") {
+      d.appendChild(el("p", "big", "No mutual loves yet — keep voting!"));
+      d.appendChild(navBtn("See venues you haven't voted on", "#todo"));
+    } else if (filter === "todo") {
+      d.appendChild(el("p", "big", "You've voted on every venue 🎉"));
+      d.appendChild(navBtn("Compare your votes", "#compare"));
+    } else {
+      d.appendChild(el("p", "big", "Nothing here yet."));
+      d.appendChild(navBtn("Show all venues", "#all"));
+    }
+    return d;
+  }
+  function navBtn(text, hash) { var a = el("a", "btn", text); a.href = hash; return a; }
+
+  // ---------- header / nav ----------
+  function renderHeader() {
+    document.body.classList.toggle("nowho", !who);
+    var chip = $("switchWho"); chip.textContent = "";
+    if (who) {
+      chip.appendChild(el("span", "av " + (who === PEOPLE[0] ? "rose" : "sage"), who.charAt(0)));
+      var wl = el("span", "wl");
+      var me = el("span"); me.appendChild(document.createTextNode("You're ")); me.appendChild(el("b", null, who));
+      wl.appendChild(me); wl.appendChild(el("span", "sep", "·")); wl.appendChild(el("span", "sw", "Switch"));
+      chip.appendChild(wl);
+      chip.setAttribute("aria-label", "You're " + who + ". Switch person");
+    }
+    var total = venues.length, pr = $("progress"); pr.textContent = "";
+    if (who && total) {
+      [who, other()].forEach(function (p, i) {
+        var n = votedCount(p);
+        var d = el("div", "pp" + (i ? " partner" : ""));
+        d.title = p + " has voted on " + n + " of " + total + " venues";
+        var t = el("span"); t.appendChild(el("b", null, p)); t.appendChild(document.createTextNode(" " + n + "/" + total + (i ? " voted" : "")));
+        d.appendChild(t);
+        var tr = el("span", "track"), fi = el("span", "fill"); fi.style.width = Math.round(100 * n / total) + "%";
+        tr.appendChild(fi); d.appendChild(tr);
+        pr.appendChild(d);
+      });
+      var bl = el("a", "bothlink", "♥ " + bothLoveCount() + " you both love"); bl.href = "#both";
+      pr.appendChild(bl);
+    }
+    document.querySelectorAll(".views a").forEach(function (a) {
+      if (a.getAttribute("data-view") === view) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    });
+    var bn = $("banner");
+    var showBanner = who && !remoteOn() && !sessionStorage.getItem(SS_BANNER);
+    bn.classList.toggle("hide", !showBanner);
+    if (showBanner) $("bannerText").textContent = "Votes are saved on this device only until sync is set up. " + other() + " won't see your votes yet.";
+  }
+
+  var CHIP_LABEL = { all: "All", Boston: "Boston", NYC: "NYC", both: "♥ Both love", todo: "Not voted yet" };
+  function renderChips() {
+    var box = $("chips"), sl = box.scrollLeft; box.textContent = "";
+    FILTERS.forEach(function (f) {
+      var a = el("a", null, CHIP_LABEL[f]); a.href = "#" + f;
+      a.appendChild(el("span", "n", String(venues.filter(function (v) { return show(v, f); }).length)));
+      if (f === filter) a.setAttribute("aria-current", "true");
+      box.appendChild(a);
+    });
+    box.scrollLeft = sl; chipsFade();
+  }
+  function chipsFade() {
+    var box = $("chips");
+    box.classList.toggle("atend", box.scrollLeft + box.clientWidth >= box.scrollWidth - 4);
+  }
+  $("chips").addEventListener("scroll", chipsFade, { passive: true });
+  window.addEventListener("resize", chipsFade);
+
+  // ---------- compare ----------
+  function firstNum(s) { var m = /\d+(\.\d+)?/.exec(String(s || "").replace(/,/g, "")); return m ? parseFloat(m[0]) : Infinity; }
+  function loveScore(v) {
+    var sc = { love: 3, maybe: 1, pass: -2 }, t = 0;
+    PEOPLE.forEach(function (p) { t += sc[get(v.slug, p).vote] || 0; });
+    return t;
+  }
+  function sorted(list) {
+    var l = list.slice();
+    if (sortMode === "loved") l.sort(function (a, b) { return loveScore(b) - loveScore(a) || venues.indexOf(a) - venues.indexOf(b); });
+    if (sortMode === "cost") l.sort(function (a, b) { return firstNum(a.estimate) - firstNum(b.estimate) || venues.indexOf(a) - venues.indexOf(b); });
+    return l;
+  }
+  function thumb(v) {
+    if (!v.photos.length) { var d = el("span", "thumb"); d.setAttribute("aria-hidden", "true"); return d; }
+    var im = el("img", "thumb"); im.src = v.photos[0]; im.alt = ""; im.loading = "lazy"; return im;
+  }
+  function cardLink(a, v) {
+    a.href = "#v-" + v.slug;
+    // same hash twice doesn't fire hashchange, so handle that case directly
+    a.addEventListener("click", function (e) { if (location.hash === "#v-" + v.slug) { e.preventDefault(); applyHash(false); } });
+    return a;
+  }
+  function nameLink(v) {
+    var a = cardLink(el("a", "vname"), v);
+    a.appendChild(thumb(v)); a.appendChild(el("span", null, v.name));
+    return a;
+  }
+  function areas() {
+    var out = [];
+    venues.forEach(function (v) { if (out.indexOf(v.area) < 0) out.push(v.area); });
+    return out;
+  }
+  function summaryBox(cls, title, list, empty) {
+    var b = el("div", "sumbox " + cls);
+    var h = el("h3"); h.appendChild(el("span", null, title)); h.appendChild(el("span", "n", String(list.length)));
+    b.appendChild(h);
+    b.appendChild(el("p", null, list.length ? list.map(function (v) { return v.name; }).join(", ") : empty));
+    return b;
+  }
 
   function renderCompare() {
-    var box = document.getElementById("compare"); box.textContent = "";
-    var t = el("table"), h = el("tr");
-    ["Venue", "Area", "Site fee", "Full wedding", PEOPLE[0], PEOPLE[1]].forEach(function (x) { h.appendChild(el("th", null, x)); });
-    t.appendChild(h);
-    venues.forEach(function (v) {
-      var r = el("tr");
-      r.appendChild(el("td", null, v.name)); r.appendChild(el("td", null, v.area));
-      r.appendChild(el("td", null, v.siteFee)); r.appendChild(el("td", null, v.estimate));
-      PEOPLE.forEach(function (p) { var td = el("td"); td.appendChild(pill(get(v.slug, p).vote)); r.appendChild(td); });
-      t.appendChild(r);
+    var box = $("compareView"); box.textContent = "";
+    var bothLove = venues.filter(function (v) { return agreement(v.slug) === "love"; });
+    var mixed = venues.filter(function (v) { return agreement(v.slug) === "mixed"; });
+    var notBoth = venues.filter(function (v) { return !agreement(v.slug); });
+    var sum = el("div", "summary");
+    sum.appendChild(summaryBox("love", "♥ Both love", bothLove, "None yet"));
+    sum.appendChild(summaryBox("mixed", "≈ Mixed", mixed, "None"));
+    sum.appendChild(summaryBox("todo", "Not voted by both", notBoth, "All voted — nice!"));
+    box.appendChild(sum);
+
+    var tools = el("div", "cmptools");
+    tools.appendChild(el("h2", null, "Side by side"));
+    var sl = el("label", "sortsel"); sl.appendChild(document.createTextNode("Sort by"));
+    var sel = el("select"); sel.setAttribute("aria-label", "Sort venues");
+    [["default", "Default"], ["loved", "Most loved"], ["cost", "Lowest estimate"]].forEach(function (o) {
+      var op = el("option", null, o[1]); op.value = o[0]; if (o[0] === sortMode) op.selected = true; sel.appendChild(op);
     });
-    box.appendChild(t);
+    sel.addEventListener("change", function () { sortMode = sel.value; renderCompare(); var s = $("compareView").querySelector("select"); if (s) s.focus(); });
+    sl.appendChild(sel); tools.appendChild(sl);
+    box.appendChild(tools);
+
+    // desktop table
+    var wrap = el("div", "tablewrap"), t = el("table"), th = el("thead"), h = el("tr");
+    ["Venue", "Est. total", "Site fee", "You (" + who + ")", other(), "Agree?"].forEach(function (x) {
+      var c = el("th", null, x); c.scope = "col"; h.appendChild(c);
+    });
+    th.appendChild(h); t.appendChild(th);
+    var tb = el("tbody");
+    // mobile list
+    var ml = el("div", "mlist");
+    areas().forEach(function (area) {
+      var vs = sorted(venues.filter(function (v) { return v.area === area; }));
+      var g = el("tr", "grp"), gc = el("th", null, areaLabel(area)); gc.colSpan = 6; gc.scope = "colgroup"; g.appendChild(gc); tb.appendChild(g);
+      ml.appendChild(el("h3", "mgrp", areaLabel(area)));
+      vs.forEach(function (v) {
+        var ag = agreement(v.slug);
+        var r = el("tr"), nc = el("th"); nc.scope = "row"; nc.appendChild(nameLink(v)); r.appendChild(nc);
+        r.appendChild(el("td", "est", v.estimate));
+        r.appendChild(el("td", "fee", v.siteFee));
+        [who, other()].forEach(function (p) { var td = el("td"); td.appendChild(votePill(get(v.slug, p).vote)); r.appendChild(td); });
+        var agc = el("td", "ag");
+        if (ag === "love" || ag === "mixed") {
+          var s = el("span", ag, ag === "love" ? "♥" : "≈");
+          s.title = ag === "love" ? "You both love it" : "Mixed feelings";
+          agc.appendChild(s); agc.appendChild(el("span", "sr", s.title));
+        }
+        r.appendChild(agc);
+        tb.appendChild(r);
+
+        var row = el("div", "mrow");
+        row.appendChild(thumb(v));
+        var mm = el("div", "mmain");
+        var top = el("div", "mtop");
+        top.appendChild(cardLink(el("a", "vname", v.name), v));
+        if (ag === "love") top.appendChild(el("span", "agree love", "♥ Both"));
+        else if (ag === "mixed") top.appendChild(el("span", "agree mixed", "≈ Mixed"));
+        mm.appendChild(top);
+        var line = el("div", "mline");
+        line.appendChild(el("span", "mest", v.estimate));
+        line.appendChild(votePill(get(v.slug, who).vote, "You: "));
+        line.appendChild(votePill(get(v.slug, other()).vote, other() + ": "));
+        mm.appendChild(line);
+        mm.appendChild(el("div", "mfee", "Site fee: " + v.siteFee));
+        row.appendChild(mm);
+        ml.appendChild(row);
+      });
+    });
+    t.appendChild(tb); wrap.appendChild(t);
+    box.appendChild(wrap);
+    box.appendChild(ml);
   }
 
-  function render() {
-    if (!who) return;
-    document.getElementById("whoLabel").textContent = "You: " + who;
-    var list = document.getElementById("list"), cmp = document.getElementById("compare"), req = document.getElementById("requests");
-    var comparing = filter === "compare", requesting = filter === "requests";
-    list.classList.toggle("hide", comparing || requesting);
-    cmp.classList.toggle("hide", !comparing);
-    req.classList.toggle("hide", !requesting);
-    if (comparing) { renderCompare(); return; }
-    if (requesting) { renderRequests(); return; }
-    var active = document.activeElement, keep = active && active.tagName === "TEXTAREA";
-    if (keep) return; // don't re-render while typing a note
-    list.textContent = "";
-    var n = 0;
-    venues.forEach(function (v) { if (show(v)) { list.appendChild(card(v)); n++; } });
-    if (!n) list.appendChild(el("p", null, "Nothing here yet."));
+  // ---------- venue requests ----------
+  function relDate(s) {
+    var d = new Date(s); if (!s || isNaN(d)) return "";
+    var days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    if (days <= 0) return "today";
+    if (days === 1) return "yesterday";
+    if (days < 14) return days + " days ago";
+    if (days < 60) return Math.floor(days / 7) + " weeks ago";
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   }
+  function renderReqList() {
+    var box = $("reqList");
+    if (!box) return;
+    box.textContent = "";
+    if (!requests.length) { box.appendChild(el("p", "reqempty", "No requests yet. Spot a venue you like? Add it above.")); return; }
+    requests.slice().reverse().forEach(function (r) {
+      var d = el("div", "req");
+      var top = el("div", "rtop");
+      top.appendChild(el("div", "rname", r.name));
+      var st = String(r.status || "new");
+      top.appendChild(el("span", "status " + (["new", "researching", "added", "declined"].indexOf(st) >= 0 ? st : ""), st));
+      d.appendChild(top);
+      if (isHttp(r.url)) d.appendChild(extLink(null, r.url, r.url));
+      if (r.note) d.appendChild(el("div", "rnote", r.note));
+      var when = relDate(r.created);
+      d.appendChild(el("div", "rmeta", "Requested by " + r.person + (when ? " · " + when : "")));
+      box.appendChild(d);
+    });
+  }
+
+  var reqBuilt = false;
+  function renderRequests() {
+    var box = $("requestsView");
+    if (!reqBuilt) {
+      reqBuilt = true;
+      var lay = el("div", "reqlayout");
+      var f = el("form", "reqform"); f.noValidate = true;
+      f.appendChild(el("h2", null, "Request a venue"));
+      f.appendChild(el("p", "intro", "Add a venue you'd like researched. Claude will look up pricing and photos and add it to the list."));
+      var fields = [["Venue name *", "input", "rq-name", "e.g. The Gardens at Ashland"],
+                    ["Link (optional)", "input", "rq-url", "https://..."],
+                    ["Why / questions (optional)", "textarea", "rq-note", "What caught your eye? Anything to check?"]];
+      fields.forEach(function (x) {
+        var l = el("label", null, x[0]); l.htmlFor = x[2]; f.appendChild(l);
+        var i = el(x[1]); i.id = x[2]; i.placeholder = x[3];
+        if (x[1] === "input") { i.maxLength = x[2] === "rq-name" ? 120 : 500; i.type = x[2] === "rq-url" ? "url" : "text"; } else i.maxLength = 1000;
+        f.appendChild(i);
+      });
+      var act = el("div", "actions");
+      var btn = el("button", "btn", "Send request"); btn.type = "submit";
+      var msg = el("div", "notice hide"); msg.setAttribute("role", "status");
+      function say(text, cls) { msg.textContent = text; msg.className = "notice " + cls; }
+      f.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var name = $("rq-name").value.trim();
+        var url = $("rq-url").value.trim();
+        var note = $("rq-note").value.trim();
+        if (!name) { say("Please enter a venue name.", "warn"); $("rq-name").focus(); return; }
+        if (url && !isHttp(url)) { say("Link must start with http:// or https://", "warn"); $("rq-url").focus(); return; }
+        btn.disabled = true; say("Sending…", "warn");
+        submitRequest(name, url, note).then(function (res) {
+          btn.disabled = false;
+          if (res.ok) say("Sent ✓ It's on the list below.", "ok");
+          else say(res.local ? "Saved on this device only (sync is not set up)." : "Could not reach the sheet. Saved on this device; try again later.", "warn");
+          ["rq-name", "rq-url", "rq-note"].forEach(function (id) { $(id).value = ""; });
+        });
+      });
+      act.appendChild(btn); act.appendChild(msg);
+      f.appendChild(act);
+      lay.appendChild(f);
+      var col = el("div", "reqcol");
+      col.appendChild(el("h2", null, "All requests"));
+      var list = el("div"); list.id = "reqList"; col.appendChild(list);
+      lay.appendChild(col);
+      box.appendChild(lay);
+    }
+    renderReqList();
+  }
+
+  // ---------- render ----------
+  function render(force) {
+    renderHeader();
+    if (!who) return;
+    pendingRender = false;
+    $("venuesView").classList.toggle("hide", view !== "venues");
+    $("compareView").classList.toggle("hide", view !== "compare");
+    $("requestsView").classList.toggle("hide", view !== "requests");
+    if (view === "compare") renderCompare();
+    else if (view === "requests") renderRequests();
+    else { renderChips(); renderList(force === true); }
+  }
+
+  // ---------- hash routing ----------
+  function applyHash(initial) {
+    var h = decodeURIComponent(location.hash.replace(/^#/, "")), target = null;
+    if (h === "compare" || h === "requests") view = h;
+    else if (FILTERS.indexOf(h) >= 0) { view = "venues"; filter = h; }
+    else if (/^v-/.test(h) && venues.some(function (v) { return "v-" + v.slug === h; })) {
+      view = "venues"; if (!venues.some(function (v) { return "v-" + v.slug === h && show(v); })) filter = "all"; target = h;
+    } else if (!h) { view = "venues"; filter = "all"; }
+    else return; // unrelated hash (e.g. skip link)
+    render(true);
+    if (target) {
+      var c = $(target);
+      if (c) requestAnimationFrame(function () { c.scrollIntoView({ block: "start", behavior: reduceMotion || initial ? "auto" : "smooth" }); });
+    } else if (!initial) window.scrollTo(0, 0);
+  }
+  window.addEventListener("hashchange", function () { applyHash(false); });
 
   // ---------- lightbox ----------
-  var lbSet = [], lbIdx = 0;
-  function lbShow() { document.getElementById("lbImg").src = lbSet[lbIdx]; }
-  function openLb(set, i) { lbSet = set; lbIdx = i; lbShow(); document.getElementById("lb").classList.remove("hide"); }
-  function closeLb() { document.getElementById("lb").classList.add("hide"); }
-  document.getElementById("lbClose").addEventListener("click", closeLb);
-  document.getElementById("lbPrev").addEventListener("click", function () { lbIdx = (lbIdx + lbSet.length - 1) % lbSet.length; lbShow(); });
-  document.getElementById("lbNext").addEventListener("click", function () { lbIdx = (lbIdx + 1) % lbSet.length; lbShow(); });
-  document.addEventListener("keydown", function (e) {
-    if (document.getElementById("lb").classList.contains("hide")) return;
-    if (e.key === "Escape") closeLb();
-    if (e.key === "ArrowLeft") document.getElementById("lbPrev").click();
-    if (e.key === "ArrowRight") document.getElementById("lbNext").click();
-  });
+  var lbSet = [], lbIdx = 0, lbName = "", lbReturn = null;
+  function lbShow() {
+    var im = $("lbImg");
+    im.src = lbSet[lbIdx];
+    im.alt = lbName + " photo " + (lbIdx + 1) + " of " + lbSet.length;
+    $("lbName").textContent = lbName;
+    $("lbCount").textContent = (lbIdx + 1) + " / " + lbSet.length;
+    var multi = lbSet.length > 1;
+    $("lbPrev").classList.toggle("hide", !multi); $("lbNext").classList.toggle("hide", !multi);
+  }
+  function openLb(v, i, from) {
+    lbSet = v.photos; lbIdx = i; lbName = v.name; lbReturn = from || null; lbShow();
+    $("lb").classList.remove("hide"); document.body.classList.add("locked");
+    $("lbClose").focus();
+  }
+  function closeLb() {
+    $("lb").classList.add("hide"); document.body.classList.remove("locked");
+    if (lbReturn && document.body.contains(lbReturn)) lbReturn.focus();
+  }
+  function lbStep(d) { lbIdx = (lbIdx + lbSet.length + d) % lbSet.length; lbShow(); }
+  $("lbClose").addEventListener("click", closeLb);
+  $("lbPrev").addEventListener("click", function () { lbStep(-1); });
+  $("lbNext").addEventListener("click", function () { lbStep(1); });
+  $("lb").addEventListener("click", function (e) { if (e.target === this || e.target.className === "lbstage") closeLb(); });
+  var tx = null, ty = null;
+  $("lb").addEventListener("touchstart", function (e) { if (e.touches.length === 1) { tx = e.touches[0].clientX; ty = e.touches[0].clientY; } }, { passive: true });
+  $("lb").addEventListener("touchend", function (e) {
+    if (tx == null) return;
+    var dx = e.changedTouches[0].clientX - tx, dy = e.changedTouches[0].clientY - ty; tx = null;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) && lbSet.length > 1) lbStep(dx < 0 ? 1 : -1);
+  }, { passive: true });
 
-  // ---------- who / filters ----------
+  // ---------- who modal ----------
+  var modalReturn = null;
+  function openWho() {
+    modalReturn = document.activeElement;
+    $("who-modal").classList.remove("hide"); document.body.classList.add("locked");
+    var first = $("who-modal").querySelector("[data-who]"); if (first) first.focus();
+  }
+  function closeWho() {
+    $("who-modal").classList.add("hide"); document.body.classList.remove("locked");
+    if (modalReturn && modalReturn.focus && document.body.contains(modalReturn)) modalReturn.focus();
+  }
   function pickWho(w) {
     who = w; localStorage.setItem(LS_WHO, w);
-    document.getElementById("who-modal").classList.add("hide");
+    listKey = "";
+    closeWho();
     render(); pull();
   }
   document.querySelectorAll("#who-modal [data-who]").forEach(function (b) {
-    b.addEventListener("click", function () { pickWho(b.dataset.who); });
+    b.addEventListener("click", function () { pickWho(b.getAttribute("data-who")); });
   });
-  document.getElementById("switchWho").addEventListener("click", function () {
-    document.getElementById("who-modal").classList.remove("hide");
+  $("who-modal").addEventListener("click", function (e) { if (e.target === this && who) closeWho(); });
+  $("switchWho").addEventListener("click", openWho);
+  $("bannerClose").addEventListener("click", function () {
+    try { sessionStorage.setItem(SS_BANNER, "1"); } catch (e) {}
+    $("banner").classList.add("hide");
   });
-  document.querySelectorAll("#filters button").forEach(function (b) {
-    b.addEventListener("click", function () {
-      filter = b.dataset.f;
-      document.querySelectorAll("#filters button").forEach(function (x) { x.classList.toggle("on", x === b); });
-      render();
-    });
+
+  document.addEventListener("keydown", function (e) {
+    if (!$("lb").classList.contains("hide")) {
+      if (e.key === "Escape") closeLb();
+      if (e.key === "ArrowLeft") lbStep(-1);
+      if (e.key === "ArrowRight") lbStep(1);
+      return;
+    }
+    if (!$("who-modal").classList.contains("hide") && e.key === "Escape" && who) closeWho();
   });
 
   // ---------- boot ----------
+  setSync(remoteOn() ? true : null);
+  if (remoteOn()) { $("sync").querySelector(".txt").textContent = "Connecting…"; $("sync").className = "sync local"; }
   fetch("data/venues.json").then(function (r) { return r.json(); }).then(function (d) {
     venues = d;
-    var h = location.hash.replace("#", ""); // e.g. #requests opens that tab directly
-    if (["all", "Boston", "NYC", "both", "todo", "compare", "requests"].indexOf(h) >= 0) {
-      filter = h;
-      document.querySelectorAll("#filters button").forEach(function (x) { x.classList.toggle("on", x.dataset.f === h); });
-    }
-    if (!who) document.getElementById("who-modal").classList.remove("hide");
-    render(); pull();
+    if (!who) { renderHeader(); openWho(); }
+    applyHash(true);
+    pull();
     setInterval(pull, 30000);
     window.addEventListener("focus", pull);
   });

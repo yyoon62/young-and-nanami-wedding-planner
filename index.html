@@ -4,48 +4,61 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>Wedding Venues</title>
+<meta name="theme-color" content="#FBF7F2">
+<title>Young &amp; Nanami's Venues</title>
 <link rel="stylesheet" href="styles.css">
 </head>
-<body>
-<header>
+<body class="nowho">
+<a class="skip" href="#main">Skip to venues</a>
+<header id="hdr">
   <div class="top">
-    <h1>Wedding venues</h1>
-    <div class="who">
-      <span id="whoLabel"></span>
-      <button id="switchWho" class="link">switch</button>
-      <span id="sync" class="sync" title="Sync status">...</span>
+    <div class="brand">
+      <h1><span class="heart" aria-hidden="true">&#9829;</span> <span id="title">Young &amp; Nanami's Venues</span></h1>
+      <span id="sync" class="sync local" role="status" title="Sync status"><span class="dot" aria-hidden="true"></span><span class="txt">On this device only</span></span>
     </div>
+    <button id="switchWho" class="whochip" type="button" aria-label="Switch who is planning"></button>
   </div>
-  <nav id="filters">
-    <button data-f="all" class="on">All</button>
-    <button data-f="Boston">Boston</button>
-    <button data-f="NYC">NYC</button>
-    <button data-f="both">Both love</button>
-    <button data-f="todo">I haven't voted</button>
-    <button data-f="compare">Compare</button>
-    <button data-f="requests">Request a venue</button>
-  </nav>
+  <div class="bar">
+    <nav class="views" aria-label="Views">
+      <a href="#all" data-view="venues">Venues</a>
+      <a href="#compare" data-view="compare">Compare</a>
+      <a href="#requests" data-view="requests">Requests</a>
+    </nav>
+    <div class="progress" id="progress" aria-label="Voting progress"></div>
+  </div>
 </header>
 
-<main id="list"></main>
-<main id="compare" class="hide"></main>
-<main id="requests" class="hide"></main>
+<div id="banner" class="banner hide" role="note">
+  <span id="bannerText"></span>
+  <button id="bannerClose" type="button" aria-label="Dismiss">&#10005;</button>
+</div>
 
-<div id="who-modal" class="modal hide">
+<div id="main" tabindex="-1">
+  <div id="venuesView">
+    <nav class="chips" id="chips" aria-label="Filter venues"></nav>
+    <div id="list" class="grid"></div>
+  </div>
+  <div id="compareView" class="hide"></div>
+  <div id="requestsView" class="hide"></div>
+</div>
+
+<div id="who-modal" class="modal hide" role="dialog" aria-modal="true" aria-labelledby="whoTitle">
   <div class="box">
-    <h2>Who are you?</h2>
-    <p>Your votes are saved under this name.</p>
-    <button data-who="Young">Young</button>
-    <button data-who="Nanami">Nanami</button>
+    <h2 id="whoTitle">Welcome! Who's planning today?</h2>
+    <p>Pick once — you can switch anytime from the top bar.</p>
+    <div class="choices">
+      <button type="button" data-who="Young" class="choice"><span class="av rose" aria-hidden="true">Y</span><span class="cname">Young</span></button>
+      <button type="button" data-who="Nanami" class="choice"><span class="av sage" aria-hidden="true">N</span><span class="cname">Nanami</span></button>
+    </div>
   </div>
 </div>
 
-<div id="lb" class="hide">
-  <button id="lbPrev" aria-label="Previous">&#8249;</button>
-  <img id="lbImg" alt="">
-  <button id="lbNext" aria-label="Next">&#8250;</button>
-  <button id="lbClose" aria-label="Close">&times;</button>
+<div id="lb" class="hide" role="dialog" aria-modal="true" aria-label="Photo viewer">
+  <div class="lbstage"><img id="lbImg" alt=""></div>
+  <div class="lbcap"><span id="lbName"></span> <span id="lbCount" class="lbcount"></span></div>
+  <button id="lbPrev" type="button" aria-label="Previous photo">&#8249;</button>
+  <button id="lbNext" type="button" aria-label="Next photo">&#8250;</button>
+  <button id="lbClose" type="button" aria-label="Close">&times;</button>
 </div>
 
 <footer>Estimates are rough planning numbers, not quotes. Photos are from venue websites and Here Comes The Guide, for personal use only.</footer>
