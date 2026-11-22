@@ -273,5 +273,435 @@
       }
     ],
     "photos": []
+  },
+  {
+    "slug": "terrain",
+    "name": "Terrain Gardens at Wayland Village",
+    "location": "Wayland, MA",
+    "area": "Boston",
+    "type": "Glass garden venue, in-house cafe catering",
+    "siteFee": "$3.5-11k + $135-170/guest food, 21% service",
+    "estimate": "$48-78k",
+    "note": "About 20 min from Acton. Everything indoors under glass, so no rain plan needed. Saturdays need 90+ guests.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/terrain-gardens-at-wayland-village"
+      }
+    ],
+    "photos": [
+      "photos/terrain/01.jpg",
+      "photos/terrain/02.jpg",
+      "photos/terrain/03.jpg",
+      "photos/terrain/04.jpg",
+      "photos/terrain/05.jpg",
+      "photos/terrain/06.jpg"
+    ]
+  },
+  {
+    "slug": "farmstead",
+    "name": "The Farmstead",
+    "location": "Harvard, MA",
+    "area": "Boston",
+    "type": "Farm with sailcloth tent, in-house farm-to-table",
+    "siteFee": "Package $10k Fri/Sun, $16k Sat; food $94-125 + bar $30-55/guest",
+    "estimate": "$51-80k",
+    "note": "About 15 min from Acton. A full-weekend package with lodging is $29k.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/the-farmstead"
+      }
+    ],
+    "photos": [
+      "photos/farmstead/01.jpg",
+      "photos/farmstead/02.jpg",
+      "photos/farmstead/03.jpg",
+      "photos/farmstead/04.jpg",
+      "photos/farmstead/05.jpg",
+      "photos/farmstead/06.jpg"
+    ]
+  },
+  {
+    "slug": "sanctuary",
+    "name": "Sanctuary",
+    "location": "Maynard, MA",
+    "area": "Boston",
+    "type": "Converted church event space with speakeasy lounge",
+    "siteFee": "$6k ceremony + reception; $30/guest bar minimum",
+    "estimate": "$46-77k",
+    "note": "Next town over from Acton. Bring your own caterer; bar, tables, chairs, linens and basic sound included.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/sanctuary"
+      }
+    ],
+    "photos": [
+      "photos/sanctuary/01.jpg",
+      "photos/sanctuary/03.jpg",
+      "photos/sanctuary/04.jpg",
+      "photos/sanctuary/05.jpg",
+      "photos/sanctuary/06.jpg"
+    ]
+  },
+  {
+    "slug": "eustis",
+    "name": "Eustis Estate",
+    "location": "Milton, MA",
+    "area": "Boston",
+    "type": "Historic mansion with tented lawn",
+    "siteFee": "$5.2k tented event (tax-free)",
+    "estimate": "$55-90k",
+    "note": "Historic New England property. Exclusive caterers and tent vendor add to the cost.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/eustis-estate"
+      }
+    ],
+    "photos": [
+      "photos/eustis/01.jpg",
+      "photos/eustis/02.jpg",
+      "photos/eustis/03.jpg",
+      "photos/eustis/04.jpg",
+      "photos/eustis/05.jpg",
+      "photos/eustis/06.jpg"
+    ]
+  },
+  {
+    "slug": "glenmagna",
+    "name": "Glen Magna Farms",
+    "location": "Danvers, MA",
+    "area": "Boston",
+    "type": "Historic estate and gardens",
+    "siteFee": "$6k Mon-Thu, $8.2k Fri/Sun, $9.8k Sat; meals $88-125/guest",
+    "estimate": "$45-71k",
+    "note": "North Shore. Caterer includes tableware, linens, decor and staff.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/glen-magna-farms"
+      }
+    ],
+    "photos": [
+      "photos/glenmagna/01.jpg",
+      "photos/glenmagna/02.jpg",
+      "photos/glenmagna/03.jpg",
+      "photos/glenmagna/04.jpg",
+      "photos/glenmagna/05.jpg",
+      "photos/glenmagna/06.jpg"
+    ]
+  },
+  {
+    "slug": "moraine",
+    "name": "The Estate at Moraine Farm",
+    "location": "Beverly, MA",
+    "area": "Boston",
+    "type": "Olmsted-designed estate, in-house farm-to-table",
+    "siteFee": "$0-7k by day + F&B minimum; meals $100-124/guest",
+    "estimate": "$41-68k",
+    "note": "No venue fee Monday-Thursday. 75-guest minimum.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/the-estate-at-moraine-farm"
+      }
+    ],
+    "photos": [
+      "photos/moraine/01.jpg",
+      "photos/moraine/02.jpg",
+      "photos/moraine/03.jpg",
+      "photos/moraine/04.jpg",
+      "photos/moraine/05.jpg",
+      "photos/moraine/06.jpg"
+    ]
+  },
+  {
+    "slug": "longhill",
+    "name": "Long Hill",
+    "location": "Beverly, MA",
+    "area": "Boston",
+    "type": "Garden estate with event tent",
+    "siteFee": "$7.5-8.5k incl. tent, tables, chairs",
+    "estimate": "$50-78k",
+    "note": "Exclusive caterer. Event window 4:30-10 PM.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/long-hill"
+      }
+    ],
+    "photos": [
+      "photos/longhill/01.jpg",
+      "photos/longhill/02.jpg",
+      "photos/longhill/03.jpg",
+      "photos/longhill/04.jpg",
+      "photos/longhill/05.jpg",
+      "photos/longhill/06.jpg"
+    ]
+  },
+  {
+    "slug": "spencerpeirce",
+    "name": "Spencer-Peirce-Little Farm",
+    "location": "Newbury, MA",
+    "area": "Boston",
+    "type": "230-acre colonial farm",
+    "siteFee": "$2.2k Sun-Fri, $2.5k Sat",
+    "estimate": "$56-90k",
+    "note": "Very low site fee, but you add a tent, caterer and rentals.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/spencer-peirce-little-farm"
+      }
+    ],
+    "photos": [
+      "photos/spencerpeirce/01.jpg",
+      "photos/spencerpeirce/02.jpg",
+      "photos/spencerpeirce/03.jpg",
+      "photos/spencerpeirce/04.jpg",
+      "photos/spencerpeirce/05.jpg",
+      "photos/spencerpeirce/06.jpg"
+    ]
+  },
+  {
+    "slug": "harryparker",
+    "name": "Harry Parker Boathouse",
+    "location": "Boston (Brighton), MA",
+    "area": "Boston",
+    "type": "Rowing boathouse on the Charles River",
+    "siteFee": "$5.5-8k",
+    "estimate": "$54-85k",
+    "note": "Low confidence: catering policy not found. Ask the venue.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/harry-parker-boathouse"
+      }
+    ],
+    "photos": [
+      "photos/harryparker/01.jpg",
+      "photos/harryparker/02.jpg",
+      "photos/harryparker/03.jpg",
+      "photos/harryparker/04.jpg",
+      "photos/harryparker/05.jpg",
+      "photos/harryparker/06.jpg"
+    ]
+  },
+  {
+    "slug": "bridge26",
+    "name": "26 Bridge",
+    "location": "DUMBO, Brooklyn",
+    "area": "NYC",
+    "type": "Industrial loft, bring your own caterer",
+    "siteFee": "$6k Mon-Thu, $7k Sun, $8k Fri, $9.5k Sat",
+    "estimate": "$64-96k",
+    "note": "14-hour rental, 11 AM-1 AM. You bring caterer and alcohol; event insurance extra.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/new-york/26-bridge"
+      }
+    ],
+    "photos": [
+      "photos/bridge26/01.jpg",
+      "photos/bridge26/02.jpg",
+      "photos/bridge26/03.jpg",
+      "photos/bridge26/04.jpg",
+      "photos/bridge26/05.jpg",
+      "photos/bridge26/06.jpg"
+    ]
+  },
+  {
+    "slug": "greenpointloft",
+    "name": "Greenpoint Loft",
+    "location": "Greenpoint, Brooklyn",
+    "area": "NYC",
+    "type": "Loft with roof deck, bring your own caterer",
+    "siteFee": "$6k Mon-Thu, $7k Sun, $8k Fri, $9.5k Sat",
+    "estimate": "$64-96k",
+    "note": "Same owner and pricing as 26 Bridge; roof deck included.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/new-york/greenpoint-loft"
+      }
+    ],
+    "photos": [
+      "photos/greenpointloft/01.jpg",
+      "photos/greenpointloft/02.jpg",
+      "photos/greenpointloft/03.jpg",
+      "photos/greenpointloft/04.jpg",
+      "photos/greenpointloft/05.jpg",
+      "photos/greenpointloft/06.jpg"
+    ]
+  },
+  {
+    "slug": "picnichouse",
+    "name": "The Picnic House",
+    "location": "Prospect Park, Brooklyn",
+    "area": "NYC",
+    "type": "Park pavilion",
+    "siteFee": "$3.5-7k by day and season",
+    "estimate": "$55-80k",
+    "note": "Venue says couples spend about $35k on catering, rentals, entertainment and AV.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/new-york/the-picnic-house"
+      }
+    ],
+    "photos": [
+      "photos/picnichouse/01.jpg",
+      "photos/picnichouse/02.jpg",
+      "photos/picnichouse/03.jpg",
+      "photos/picnichouse/04.jpg",
+      "photos/picnichouse/05.jpg",
+      "photos/picnichouse/06.jpg"
+    ]
+  },
+  {
+    "slug": "greenwood",
+    "name": "The Green-House at Green-Wood",
+    "location": "Green-Wood Cemetery, Brooklyn",
+    "area": "NYC",
+    "type": "Glass event space in historic gardens",
+    "siteFee": "$5.7k Fri/Sun, $6.7k Sat; chapel ceremony +$2.75k",
+    "estimate": "$59-90k",
+    "note": "Exclusive caterer (Purslane). Up to 9 hours.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/new-york/the-green-house-at-green-wood-cemetery"
+      }
+    ],
+    "photos": [
+      "photos/greenwood/01.jpg",
+      "photos/greenwood/02.jpg",
+      "photos/greenwood/03.jpg",
+      "photos/greenwood/04.jpg",
+      "photos/greenwood/05.jpg",
+      "photos/greenwood/06.jpg"
+    ]
+  },
+  {
+    "slug": "bedell",
+    "name": "Bedell Cellars",
+    "location": "Cutchogue, North Fork, NY",
+    "area": "NYC",
+    "type": "Winery",
+    "siteFee": "$10-20k",
+    "estimate": "$68-107k",
+    "note": "Low confidence: catering policy not found. Ask the venue.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/new-york/bedell-cellars"
+      }
+    ],
+    "photos": [
+      "photos/bedell/01.jpg",
+      "photos/bedell/03.jpg",
+      "photos/bedell/04.jpg",
+      "photos/bedell/05.jpg",
+      "photos/bedell/06.jpg"
+    ]
+  },
+  {
+    "slug": "nybg",
+    "name": "New York Botanical Garden",
+    "location": "Bronx, NY",
+    "area": "NYC",
+    "type": "Botanical garden, all-inclusive packages",
+    "siteFee": "Packages from $300/guest + $2.25-4.5k space; 23% admin fee",
+    "estimate": "$69-87k",
+    "note": "Guest minimums of 70-150 depending on season and space; garden membership required.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/new-york/the-new-york-botanical-garden"
+      }
+    ],
+    "photos": [
+      "photos/nybg/01.jpg",
+      "photos/nybg/02.jpg",
+      "photos/nybg/03.jpg",
+      "photos/nybg/04.jpg",
+      "photos/nybg/05.jpg",
+      "photos/nybg/06.jpg"
+    ]
+  },
+  {
+    "slug": "lyndhurst",
+    "name": "Lyndhurst Mansion",
+    "location": "Tarrytown, NY (Westchester)",
+    "area": "NYC",
+    "type": "Gothic Revival mansion on the Hudson",
+    "siteFee": "$3-12k + $1.5k ceremony; 20% admin fee",
+    "estimate": "$53-92k",
+    "note": "About 45 min from NYC. Food and beverage minimum from $5k.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/new-york/lyndhurst-mansion"
+      }
+    ],
+    "photos": [
+      "photos/lyndhurst/01.jpg",
+      "photos/lyndhurst/02.jpg",
+      "photos/lyndhurst/03.jpg",
+      "photos/lyndhurst/04.jpg",
+      "photos/lyndhurst/05.jpg",
+      "photos/lyndhurst/06.jpg"
+    ]
+  },
+  {
+    "slug": "wainwright",
+    "name": "Wainwright House",
+    "location": "Rye, NY (Westchester)",
+    "area": "NYC",
+    "type": "Waterfront mansion and garden tent",
+    "siteFee": "$6.5-20k + $170-250/guest food and alcohol",
+    "estimate": "$55-96k",
+    "note": "About 45 min from NYC. 10-20% admin fee.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/new-york/wainwright-house"
+      }
+    ],
+    "photos": [
+      "photos/wainwright/01.jpg",
+      "photos/wainwright/02.jpg",
+      "photos/wainwright/03.jpg",
+      "photos/wainwright/04.jpg",
+      "photos/wainwright/05.jpg",
+      "photos/wainwright/06.jpg"
+    ]
+  },
+  {
+    "slug": "bloominghill",
+    "name": "Blooming Hill Farm",
+    "location": "Monroe, NY (Hudson Valley)",
+    "area": "NYC",
+    "type": "Farm with farm-to-table catering",
+    "siteFee": "$9.5k Fri/Sun, $12.5k Sat; food $155-190 + bar $55-90/guest",
+    "estimate": "$64-99k",
+    "note": "About 1h15 from NYC. Saturdays need 100 guests.",
+    "links": [
+      {
+        "label": "Details & photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/new-york/blooming-hill-farm"
+      }
+    ],
+    "photos": [
+      "photos/bloominghill/01.jpg",
+      "photos/bloominghill/02.jpg",
+      "photos/bloominghill/03.jpg",
+      "photos/bloominghill/04.jpg",
+      "photos/bloominghill/05.jpg",
+      "photos/bloominghill/06.jpg"
+    ]
   }
 ]
