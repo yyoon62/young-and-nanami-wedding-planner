@@ -27,6 +27,19 @@ Both of you open the same site and pick your name once. Votes refresh every 30 s
 
 If you change `Code.gs` later, use **Deploy > Manage deployments > Edit > New version**, or the URL keeps running the old code.
 
+## Requesting new venues
+
+Either of you can open the **Request a venue** tab, enter a venue name (plus an optional
+link and note) and send it. Requests are saved to a "Requests" tab in the Google Sheet
+and show up for both of you with a status: new, researching, added or declined.
+
+To process requests, ask Claude to "check venue requests". Claude reads the list from the
+sync URL in `config.js`, researches pricing and photos, adds the venue to `data/venues.json`,
+and marks the request as added. You can also change the Status column in the sheet by hand.
+
+If you updated `Code.gs` after the first deployment, redeploy it as a new version
+(Deploy > Manage deployments > Edit > New version) so the request feature is live.
+
 ## Hosting: read this before publishing
 
 **GitHub Pages sites are public on the internet even when the repo is private** (only

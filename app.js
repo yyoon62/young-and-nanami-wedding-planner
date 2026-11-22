@@ -11,6 +11,7 @@
   if (asParam && PEOPLE.indexOf(asParam) >= 0) { who = asParam; localStorage.setItem(LS_WHO, who); }
   var filter = "all";
   var syncOK = null;
+  var requests = load("wv_requests", []); // [{id, person, name, url, note, status, created}]
 
   function load(k, d) { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } }
   function saveLocal() { localStorage.setItem(LS_VOTES, JSON.stringify(votes)); }
@@ -47,7 +48,93 @@
       saveLocal();
       setSync(true, "synced");
       render();
+      return pullRequests();
     }).catch(function () { setSync(false, "offline"); });
+  }
+
+  function pullRequests() {
+    var u = CFG.APPS_SCRIPT_URL + "?action=requests&key=" + encodeURIComponent(CFG.SHARED_KEY || "");
+    return fetch(u).then(function (r) { return r.json(); }).then(function (rows) {
+      if (!Array.isArray(rows)) return;
+      requests = rows;
+      localStorage.setItem("wv_requests", JSON.stringify(requests));
+      if (filter === "requests") renderReqList();
+    }).catch(function () {});
+  }
+
+  function submitRequest(name, url, note) {
+    var item = { id: "local-" + Date.now(), person: who, name: name, url: url, note: note, status: "new", created: new Date().toISOString() };
+    requests.push(item);
+    localStorage.setItem("wv_requests", JSON.stringify(requests));
+    renderReqList();
+    if (!remoteOn()) return Promise.resolve({ ok: false, local: true });
+    return fetch(CFG.APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ key: CFG.SHARED_KEY || "", action: "request", person: who, name: name, url: url, note: note })
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res && res.ok) pullRequests();
+      return res;
+    }).catch(function () { return { ok: false }; });
+  }
+
+  // ---------- venue requests ----------
+  var reqBuilt = false;
+  function renderReqList() {
+    var box = document.getElementById("reqList");
+    if (!box) return;
+    box.textContent = "";
+    if (!requests.length) { box.appendChild(el("p", null, "No requests yet.")); return; }
+    requests.slice().reverse().forEach(function (r) {
+      var d = el("div", "req");
+      d.appendChild(el("span", "status " + (r.status || "new"), r.status || "new"));
+      d.appendChild(el("div", "rname", r.name));
+      if (/^https?:\/\//i.test(r.url || "")) {
+        var a = el("a", null, r.url); a.href = r.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+        d.appendChild(a);
+      }
+      if (r.note) d.appendChild(el("div", null, r.note));
+      d.appendChild(el("div", "rmeta", "Requested by " + r.person));
+      box.appendChild(d);
+    });
+  }
+
+  function renderRequests() {
+    var box = document.getElementById("requests");
+    if (!reqBuilt) {
+      reqBuilt = true;
+      var f = el("div", "reqform");
+      f.appendChild(el("h2", null, "Request a venue"));
+      f.appendChild(el("p", "note", "Add a venue you'd like researched. Claude will look up pricing and photos and add it to the list."));
+      var fields = [["Venue name *", "input", "rq-name", "e.g. The Gardens at Ashland"],
+                    ["Link (optional)", "input", "rq-url", "https://..."],
+                    ["Why / questions (optional)", "textarea", "rq-note", "What caught your eye? Anything to check?"]];
+      fields.forEach(function (x) {
+        var l = el("label", null, x[0]); l.htmlFor = x[2]; f.appendChild(l);
+        var i = el(x[1]); i.id = x[2]; i.placeholder = x[3];
+        if (x[1] === "input") i.maxLength = x[2] === "rq-name" ? 120 : 500; else i.maxLength = 1000;
+        f.appendChild(i);
+      });
+      var btn = el("button", null, "Send request"); var msg = el("span", "msg");
+      btn.addEventListener("click", function () {
+        var name = document.getElementById("rq-name").value.trim();
+        var url = document.getElementById("rq-url").value.trim();
+        var note = document.getElementById("rq-note").value.trim();
+        if (!name) { msg.textContent = "Please enter a venue name."; return; }
+        if (url && !/^https?:\/\//i.test(url)) { msg.textContent = "Link must start with http:// or https://"; return; }
+        btn.disabled = true; msg.textContent = "Sending...";
+        submitRequest(name, url, note).then(function (res) {
+          btn.disabled = false;
+          msg.textContent = res.ok ? "Sent." : res.local ? "Saved on this device only (sync is not set up)." : "Could not reach the sheet. Saved on this device; try again later.";
+          ["rq-name", "rq-url", "rq-note"].forEach(function (id) { document.getElementById(id).value = ""; });
+        });
+      });
+      f.appendChild(btn); f.appendChild(msg);
+      box.appendChild(f);
+      box.appendChild(el("h2", null, "All requests"));
+      var list = el("div"); list.id = "reqList"; box.appendChild(list);
+    }
+    renderReqList();
   }
 
   function push(slug) {
@@ -161,10 +248,13 @@
   function render() {
     if (!who) return;
     document.getElementById("whoLabel").textContent = "You: " + who;
-    var list = document.getElementById("list"), cmp = document.getElementById("compare");
-    var comparing = filter === "compare";
-    list.classList.toggle("hide", comparing); cmp.classList.toggle("hide", !comparing);
+    var list = document.getElementById("list"), cmp = document.getElementById("compare"), req = document.getElementById("requests");
+    var comparing = filter === "compare", requesting = filter === "requests";
+    list.classList.toggle("hide", comparing || requesting);
+    cmp.classList.toggle("hide", !comparing);
+    req.classList.toggle("hide", !requesting);
     if (comparing) { renderCompare(); return; }
+    if (requesting) { renderRequests(); return; }
     var active = document.activeElement, keep = active && active.tagName === "TEXTAREA";
     if (keep) return; // don't re-render while typing a note
     list.textContent = "";
@@ -211,6 +301,11 @@
   // ---------- boot ----------
   fetch("data/venues.json").then(function (r) { return r.json(); }).then(function (d) {
     venues = d;
+    var h = location.hash.replace("#", ""); // e.g. #requests opens that tab directly
+    if (["all", "Boston", "NYC", "both", "todo", "compare", "requests"].indexOf(h) >= 0) {
+      filter = h;
+      document.querySelectorAll("#filters button").forEach(function (x) { x.classList.toggle("on", x.dataset.f === h); });
+    }
     if (!who) document.getElementById("who-modal").classList.remove("hide");
     render(); pull();
     setInterval(pull, 30000);
