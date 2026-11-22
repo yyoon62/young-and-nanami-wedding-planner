@@ -54,6 +54,8 @@ body.nowho .whochip,body.nowho .sync,body.nowho .bar,body.nowho #main,body.nowho
 .pp.partner .fill{background:var(--sage)}
 .bothlink{flex:none;display:inline-flex;align-items:center;gap:4px;min-height:28px;padding:2px 10px;border-radius:999px;background:var(--rose-tint);color:var(--rose-deep);font-size:12px;font-weight:600;white-space:nowrap}
 .bothlink:hover{text-decoration:none;background:#F2D9DD}
+.bothlink.zero{background:var(--grey-tint);color:var(--muted);font-weight:500}
+.bothlink2.zero{color:var(--muted);font-weight:500}
 
 /* view tabs: segmented control */
 .views{display:grid;grid-template-columns:repeat(3,1fr);background:var(--grey-tint);border-radius:999px;padding:2px;gap:2px}

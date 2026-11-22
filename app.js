@@ -454,7 +454,8 @@
     var pr = $("progress"); pr.textContent = "";
     if (who && venues.length) {
       progressBars().forEach(function (d) { pr.appendChild(d); });
-      var bl = el("a", "bothlink", "♥ " + bothLoveCount() + " you both love"); bl.href = "#both";
+      var nb = bothLoveCount();
+      var bl = el("a", "bothlink" + (nb ? "" : " zero"), nb ? "♥ " + nb + " you both love" : "No mutual loves yet"); bl.href = "#both";
       pr.appendChild(bl);
     }
     document.querySelectorAll(".views a").forEach(function (a) {
@@ -489,7 +490,8 @@
     var bars = el("div", "pbars");
     progressBars().forEach(function (d) { bars.appendChild(d); });
     prog.appendChild(bars);
-    var bl = el("a", "bothlink2", "♥ " + bothLoveCount() + " you both love →"); bl.href = "#both";
+    var nb = bothLoveCount();
+    var bl = el("a", "bothlink2" + (nb ? "" : " zero"), nb ? "♥ " + nb + " you both love →" : "No mutual loves yet"); bl.href = "#both";
     prog.appendChild(bl);
     c.appendChild(prog);
     if (showLocal) {
@@ -817,7 +819,7 @@
   function openWho() {
     modalReturn = document.activeElement;
     $("who-modal").classList.remove("hide"); document.body.classList.add("locked");
-    var first = $("who-modal").querySelector("[data-who]"); if (first) first.focus();
+    var first = $("who-modal").querySelector("[data-who]"); if (first) first.focus({ focusVisible: false });
   }
   function closeWho() {
     $("who-modal").classList.add("hide"); document.body.classList.remove("locked");
