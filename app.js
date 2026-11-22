@@ -79,13 +79,26 @@
     ok: ["Synced", "Votes are synced with the shared Google Sheet."],
     bad: ["Offline – retrying", "Couldn't reach the shared sheet. Your votes are kept on this device and will be retried."]
   };
-  function setSync(ok) {
+  var syncKey = "local", syncLabel = null;
+  function setSync(ok, label) {
     syncState = ok;
-    var k = ok === true ? "ok" : ok === false ? "bad" : "local";
+    syncKey = ok === true ? "ok" : ok === false ? "bad" : "local";
+    syncLabel = label || null;
     var s = $("sync");
-    s.className = "sync " + k;
-    s.title = SYNC_TEXT[k][1];
-    s.querySelector(".txt").textContent = SYNC_TEXT[k][0];
+    s.className = "sync " + syncKey;
+    s.title = SYNC_TEXT[syncKey][1];
+    s.querySelector(".txt").textContent = syncLabel || SYNC_TEXT[syncKey][0];
+    syncChip();
+  }
+  // On phones the sync state is a colored dot on the avatar; full text lives in title/aria-label.
+  function syncChip() {
+    var chip = $("switchWho"), d = chip.querySelector(".sdot");
+    var txt = syncLabel || SYNC_TEXT[syncKey][0];
+    if (d) d.className = "sdot " + syncKey;
+    if (who) {
+      chip.setAttribute("aria-label", "You're " + who + ". Sync: " + txt + ". Switch person");
+      chip.title = "Sync: " + txt + " — " + SYNC_TEXT[syncKey][1];
+    }
   }
   function remoteOn() { return !!CFG.APPS_SCRIPT_URL; }
 
@@ -209,9 +222,12 @@
       var l0 = v.links && v.links[0];
       if (l0 && isHttp(l0.url)) ph.appendChild(extLink("btnlink", l0.label + " ↗", l0.url));
       media.appendChild(ph);
-      return media;
+      var w0 = el("div", "mediawrap"); w0.appendChild(media); w0.appendChild(el("div", "dots"));
+      return w0;
     }
     var n = v.photos.length;
+    var wrap = el("div", "mediawrap"), dots = el("div", "dots");
+    wrap.appendChild(media); wrap.appendChild(dots);
     var car = el("div", "carousel");
     car.setAttribute("aria-label", v.name + " photos");
     v.photos.forEach(function (p, i) {
@@ -224,9 +240,8 @@
       car.appendChild(b);
     });
     media.appendChild(car);
-    if (n < 2) return media;
+    if (n < 2) return wrap;
     var count = el("span", "count", "1 / " + n);
-    var dots = el("div", "dots");
     for (var i = 0; i < n; i++) dots.appendChild(el("i", i ? null : "on"));
     var prev = el("button", "arrow prev", "‹"), next = el("button", "arrow next", "›");
     prev.type = next.type = "button";
@@ -251,9 +266,9 @@
     prev.addEventListener("click", function () { go(-1); });
     next.addEventListener("click", function () { go(1); });
     prev.disabled = true;
-    media._update = update;
-    media.appendChild(count); media.appendChild(dots); media.appendChild(prev); media.appendChild(next);
-    return media;
+    car._update = update;
+    media.appendChild(count); media.appendChild(prev); media.appendChild(next);
+    return wrap;
   }
 
   function votePill(v, prefix) {
@@ -276,7 +291,13 @@
     b.appendChild(el("p", "loc", v.location + " · " + v.type));
     var f = el("div", "facts");
     [["Site fee", v.siteFee, "fact"], ["Est. total (80 guests)", v.estimate, "fact est"]].forEach(function (kv) {
-      var d = el("div", kv[2]); d.appendChild(el("span", "k", kv[0])); d.appendChild(el("span", "v", kv[1])); f.appendChild(d);
+      var d = el("div", kv[2]); d.appendChild(el("span", "k", kv[0]));
+      if (kv[2] === "fact est") {
+        var sp = splitEst(kv[1]);
+        d.appendChild(el("span", "v", sp[0]));
+        if (sp[1]) d.appendChild(el("span", "sub", sp[1]));
+      } else d.appendChild(el("span", "v", kv[1]));
+      f.appendChild(d);
     });
     b.appendChild(f);
     if (v.note) b.appendChild(el("p", "note", v.note));
@@ -290,7 +311,7 @@
 
     var bot = el("div", "bottom");
     var vw = el("div");
-    var lbl = el("div", "lbl"); lbl.appendChild(el("span", null, "Your vote")); vw.appendChild(lbl);
+    var lbl = el("div", "lbl vhead"); lbl.appendChild(el("span", null, "Your vote")); vw.appendChild(lbl);
     var seg = el("div", "seg"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "Your vote for " + v.name);
     VOTES.forEach(function (x) {
       var btn = el("button", x); btn.type = "button";
@@ -308,7 +329,7 @@
     if (theirs.vote) sl.appendChild(votePill(theirs.vote, other() + ": "));
     else sl.appendChild(el("span", "waiting", other() + " hasn't voted yet"));
     if (ag) sl.appendChild(el("span", "agree " + ag, AGREE[ag]));
-    bot.appendChild(sl);
+    lbl.appendChild(sl); // partner status + agreement sit on the "Your vote" line
 
     if (theirs.note) {
       var q = el("div", "theirnote");
@@ -316,21 +337,40 @@
       q.appendChild(document.createTextNode(theirs.note));
       bot.appendChild(q);
     }
-    var nw = el("div");
+    var nw = el("div", "notes");
     var nl = el("label", "lbl"); nl.htmlFor = "note-" + v.slug;
     nl.appendChild(el("span", null, "Your notes")); nl.appendChild(el("span", "hint"));
     nw.appendChild(nl);
-    var ta = el("textarea"); ta.id = "note-" + v.slug;
+    var ta = el("textarea"); ta.id = "note-" + v.slug; ta.rows = 2;
     ta.placeholder = "Vibe, concerns, questions to ask…";
     ta.value = mine.note || "";
-    ta.addEventListener("input", function () { setNote(v.slug, ta.value); });
+    ta.addEventListener("input", function () { autosize(ta); setNote(v.slug, ta.value); });
     ta.addEventListener("blur", function () { if (pendingRender) setTimeout(render, 0); });
     nw.appendChild(ta);
+    if (!mine.note) {
+      // Collapsed until needed: keeps phone cards short.
+      nw.classList.add("hide");
+      var add = el("button", "addnote"); add.type = "button"; add.setAttribute("data-fk", "addnote");
+      add.appendChild(el("span", "plus", "＋")).setAttribute("aria-hidden", "true");
+      add.appendChild(el("span", null, "Add a note"));
+      add.setAttribute("aria-expanded", "false"); add.setAttribute("aria-controls", "note-" + v.slug);
+      add.addEventListener("click", function () {
+        add.classList.add("hide"); nw.classList.remove("hide"); ta.focus();
+      });
+      bot.appendChild(add);
+    } else requestAnimationFrame(function () { if (ta.isConnected) autosize(ta); });
     bot.appendChild(nw);
     b.appendChild(bot);
     c.appendChild(b);
     return c;
   }
+
+  // "$85-90k (up to $125k)" -> ["$85-90k", "(up to $125k)"]
+  function splitEst(s) {
+    s = String(s || ""); var i = s.indexOf("(");
+    return i > 0 ? [s.slice(0, i).trim(), s.slice(i).trim()] : [s, ""];
+  }
+  function autosize(ta) { ta.style.height = "auto"; ta.style.height = (ta.scrollHeight + 2) + "px"; }
 
   function cardSig(v) {
     var a = get(v.slug, PEOPLE[0]), b = get(v.slug, PEOPLE[1]);
@@ -348,7 +388,7 @@
     var car = old.querySelector(".carousel"), sl = car ? car.scrollLeft : 0;
     old.parentNode.replaceChild(fresh, old);
     var nc = fresh.querySelector(".carousel");
-    if (nc && sl) { nc.scrollLeft = sl; if (nc.parentNode._update) nc.parentNode._update(); }
+    if (nc && sl) { nc.scrollLeft = sl; if (nc._update) nc._update(); }
     if (fk) { var t = fresh.querySelector('[data-fk="' + fk + '"]'); if (t) t.focus(); }
   }
   function renderList(force) {
@@ -374,7 +414,7 @@
     vis.forEach(function (v) { list.appendChild(card(v)); sigs[v.slug] = cardSig(v); });
     Object.keys(scrolls).forEach(function (id) {
       var c = $(id), car = c && c.querySelector(".carousel");
-      if (car) { car.scrollLeft = scrolls[id]; if (car.parentNode._update) car.parentNode._update(); }
+      if (car) { car.scrollLeft = scrolls[id]; if (car._update) car._update(); }
     });
     if (!vis.length) list.appendChild(emptyState());
   }
@@ -400,35 +440,69 @@
     document.body.classList.toggle("nowho", !who);
     var chip = $("switchWho"); chip.textContent = "";
     if (who) {
-      chip.appendChild(el("span", "av " + (who === PEOPLE[0] ? "rose" : "sage"), who.charAt(0)));
+      var avw = el("span", "avw");
+      avw.appendChild(el("span", "av " + (who === PEOPLE[0] ? "rose" : "sage"), who.charAt(0)));
+      avw.appendChild(el("span", "sdot " + syncKey));
+      chip.appendChild(avw);
       var wl = el("span", "wl");
       var me = el("span"); me.appendChild(document.createTextNode("You're ")); me.appendChild(el("b", null, who));
+      me.className = "me";
       wl.appendChild(me); wl.appendChild(el("span", "sep", "·")); wl.appendChild(el("span", "sw", "Switch"));
       chip.appendChild(wl);
-      chip.setAttribute("aria-label", "You're " + who + ". Switch person");
+      syncChip();
     }
-    var total = venues.length, pr = $("progress"); pr.textContent = "";
-    if (who && total) {
-      [who, other()].forEach(function (p, i) {
-        var n = votedCount(p);
-        var d = el("div", "pp" + (i ? " partner" : ""));
-        d.title = p + " has voted on " + n + " of " + total + " venues";
-        var t = el("span"); t.appendChild(el("b", null, p)); t.appendChild(document.createTextNode(" " + n + "/" + total + (i ? " voted" : "")));
-        d.appendChild(t);
-        var tr = el("span", "track"), fi = el("span", "fill"); fi.style.width = Math.round(100 * n / total) + "%";
-        tr.appendChild(fi); d.appendChild(tr);
-        pr.appendChild(d);
-      });
+    var pr = $("progress"); pr.textContent = "";
+    if (who && venues.length) {
+      progressBars().forEach(function (d) { pr.appendChild(d); });
       var bl = el("a", "bothlink", "♥ " + bothLoveCount() + " you both love"); bl.href = "#both";
       pr.appendChild(bl);
     }
     document.querySelectorAll(".views a").forEach(function (a) {
       if (a.getAttribute("data-view") === view) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     });
-    var bn = $("banner");
-    var showBanner = who && !remoteOn() && !sessionStorage.getItem(SS_BANNER);
-    bn.classList.toggle("hide", !showBanner);
-    if (showBanner) $("bannerText").textContent = "Votes are saved on this device only until sync is set up. " + other() + " won't see your votes yet.";
+    document.body.classList.toggle("v-venues", view === "venues");
+    renderPCard();
+  }
+
+  function progressBars() {
+    var total = venues.length;
+    return [who, other()].map(function (p, i) {
+      var n = votedCount(p);
+      var d = el("div", "pp" + (i ? " partner" : ""));
+      d.title = p + " has voted on " + n + " of " + total + " venues";
+      var t = el("span"); t.appendChild(el("b", null, p)); t.appendChild(document.createTextNode(" " + n + "/" + total));
+      d.appendChild(t);
+      var tr = el("span", "track"), fi = el("span", "fill"); fi.style.width = Math.round(100 * n / total) + "%";
+      tr.appendChild(fi); d.appendChild(tr);
+      return d;
+    });
+  }
+  function localDismissed() { try { return !!sessionStorage.getItem(SS_BANNER); } catch (e) { return false; } }
+
+  // "Our progress" card: progress on phones (Venues view only) + the local-only notice everywhere.
+  function renderPCard() {
+    var c = $("pcard"); c.textContent = "";
+    if (!who || !venues.length) { c.className = "pcard hide"; return; }
+    var showLocal = !remoteOn() && !localDismissed();
+    c.className = "pcard" + (showLocal ? "" : " noline");
+    var prog = el("div", "prog");
+    var bars = el("div", "pbars");
+    progressBars().forEach(function (d) { bars.appendChild(d); });
+    prog.appendChild(bars);
+    var bl = el("a", "bothlink2", "♥ " + bothLoveCount() + " you both love →"); bl.href = "#both";
+    prog.appendChild(bl);
+    c.appendChild(prog);
+    if (showLocal) {
+      var ln = el("div", "localline");
+      ln.appendChild(el("span", null, "Saved on this device only — " + other() + " won't see your votes until sync is set up."));
+      var x = el("button", "x", "✕"); x.type = "button"; x.setAttribute("aria-label", "Dismiss this notice");
+      x.addEventListener("click", function () {
+        try { sessionStorage.setItem(SS_BANNER, "1"); } catch (e) {}
+        renderPCard();
+      });
+      ln.appendChild(x);
+      c.appendChild(ln);
+    }
   }
 
   var CHIP_LABEL = { all: "All", Boston: "Boston", NYC: "NYC", both: "♥ Both love", todo: "Not voted yet" };
@@ -482,12 +556,35 @@
     venues.forEach(function (v) { if (out.indexOf(v.area) < 0) out.push(v.area); });
     return out;
   }
-  function summaryBox(cls, title, list, empty) {
-    var b = el("div", "sumbox " + cls);
-    var h = el("h3"); h.appendChild(el("span", null, title)); h.appendChild(el("span", "n", String(list.length)));
-    b.appendChild(h);
-    b.appendChild(el("p", null, list.length ? list.map(function (v) { return v.name; }).join(", ") : empty));
+  function summaryTile(cls, icon, label, list, names) {
+    var b = el(cls === "love" ? "a" : "button", "tile " + cls);
+    var top = el("span", "tn");
+    if (icon) top.appendChild(el("span", "ti", icon)).setAttribute("aria-hidden", "true");
+    top.appendChild(document.createTextNode(String(list.length)));
+    b.appendChild(top);
+    b.appendChild(el("span", "tl", label));
+    if (names && list.length) {
+      var shown = list.slice(0, 3).map(function (v) { return v.name; }).join(", ");
+      b.appendChild(el("span", "tnames", shown + (list.length > 3 ? " +" + (list.length - 3) : "")));
+    }
+    if (cls === "love") b.href = "#both";
+    else {
+      b.type = "button";
+      if (!list.length) b.disabled = true;
+      b.addEventListener("click", function () { scrollToRow(list[0]); });
+    }
     return b;
+  }
+  // Scroll to a venue's row in whichever compare layout (table or phone list) is visible.
+  function scrollToRow(v) {
+    if (!v) return;
+    ["cmp-", "cmpm-"].forEach(function (pre) {
+      var r = $(pre + v.slug);
+      if (r && r.offsetParent) {
+        r.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+        r.classList.remove("flash"); void r.offsetWidth; r.classList.add("flash");
+      }
+    });
   }
 
   function renderCompare() {
@@ -496,9 +593,13 @@
     var mixed = venues.filter(function (v) { return agreement(v.slug) === "mixed"; });
     var notBoth = venues.filter(function (v) { return !agreement(v.slug); });
     var sum = el("div", "summary");
-    sum.appendChild(summaryBox("love", "♥ Both love", bothLove, "None yet"));
-    sum.appendChild(summaryBox("mixed", "≈ Mixed", mixed, "None"));
-    sum.appendChild(summaryBox("todo", "Not voted by both", notBoth, "All voted — nice!"));
+    // first matching row in the current display order
+    var order = [];
+    areas().forEach(function (a) { order = order.concat(sorted(venues.filter(function (v) { return v.area === a; }))); });
+    function inOrder(list) { return order.filter(function (v) { return list.indexOf(v) >= 0; }); }
+    sum.appendChild(summaryTile("love", "♥", "Both love", bothLove, true));
+    sum.appendChild(summaryTile("mixed", "≈", "Mixed", inOrder(mixed)));
+    sum.appendChild(summaryTile("todo", "", "Not voted by both", inOrder(notBoth)));
     box.appendChild(sum);
 
     var tools = el("div", "cmptools");
@@ -527,31 +628,37 @@
       ml.appendChild(el("h3", "mgrp", areaLabel(area)));
       vs.forEach(function (v) {
         var ag = agreement(v.slug);
-        var r = el("tr"), nc = el("th"); nc.scope = "row"; nc.appendChild(nameLink(v)); r.appendChild(nc);
+        var r = el("tr"), nc = el("th"); r.id = "cmp-" + v.slug; nc.scope = "row"; nc.appendChild(nameLink(v)); r.appendChild(nc);
         r.appendChild(el("td", "est", v.estimate));
         r.appendChild(el("td", "fee", v.siteFee));
         [who, other()].forEach(function (p) { var td = el("td"); td.appendChild(votePill(get(v.slug, p).vote)); r.appendChild(td); });
         var agc = el("td", "ag");
-        if (ag === "love" || ag === "mixed") {
-          var s = el("span", ag, ag === "love" ? "♥" : "≈");
-          s.title = ag === "love" ? "You both love it" : "Mixed feelings";
+        if (ag === "love" || ag === "mixed" || ag === "pass") {
+          var s = el("span", ag, ag === "love" ? "♥" : ag === "mixed" ? "≈" : "✕");
+          s.title = ag === "love" ? "You both love it" : ag === "mixed" ? "Mixed feelings" : "Both passed";
+          s.setAttribute("aria-hidden", "true");
           agc.appendChild(s); agc.appendChild(el("span", "sr", s.title));
         }
         r.appendChild(agc);
         tb.appendChild(r);
 
-        var row = el("div", "mrow");
+        var row = el("div", "mrow"); row.id = "cmpm-" + v.slug;
         row.appendChild(thumb(v));
         var mm = el("div", "mmain");
         var top = el("div", "mtop");
         top.appendChild(cardLink(el("a", "vname", v.name), v));
         if (ag === "love") top.appendChild(el("span", "agree love", "♥ Both"));
         else if (ag === "mixed") top.appendChild(el("span", "agree mixed", "≈ Mixed"));
+        else if (ag === "pass") top.appendChild(el("span", "agree pass", "✕ Both passed"));
         mm.appendChild(top);
-        var line = el("div", "mline");
-        line.appendChild(el("span", "mest", v.estimate));
-        line.appendChild(votePill(get(v.slug, who).vote, "You: "));
-        line.appendChild(votePill(get(v.slug, other()).vote, other() + ": "));
+        mm.appendChild(el("div", "mest", v.estimate));
+        var line = el("div", "mvotes");
+        [["You", who], [other(), other()]].forEach(function (x) {
+          var cell = el("div", "mv");
+          cell.appendChild(el("span", "mwho", x[0]));
+          cell.appendChild(votePill(get(v.slug, x[1]).vote));
+          line.appendChild(cell);
+        });
         mm.appendChild(line);
         mm.appendChild(el("div", "mfee", "Site fee: " + v.siteFee));
         row.appendChild(mm);
@@ -727,10 +834,6 @@
   });
   $("who-modal").addEventListener("click", function (e) { if (e.target === this && who) closeWho(); });
   $("switchWho").addEventListener("click", openWho);
-  $("bannerClose").addEventListener("click", function () {
-    try { sessionStorage.setItem(SS_BANNER, "1"); } catch (e) {}
-    $("banner").classList.add("hide");
-  });
 
   document.addEventListener("keydown", function (e) {
     if (!$("lb").classList.contains("hide")) {
@@ -743,8 +846,7 @@
   });
 
   // ---------- boot ----------
-  setSync(remoteOn() ? true : null);
-  if (remoteOn()) { $("sync").querySelector(".txt").textContent = "Connecting…"; $("sync").className = "sync local"; }
+  setSync(null, remoteOn() ? "Connecting…" : null);
   fetch("data/venues.json").then(function (r) { return r.json(); }).then(function (d) {
     venues = d;
     if (!who) { renderHeader(); openWho(); }
