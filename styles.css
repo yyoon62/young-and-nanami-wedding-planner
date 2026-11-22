@@ -1,0 +1,49 @@
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,Helvetica,Arial,sans-serif;background:#faf8f5;color:#222}
+.hide{display:none!important}
+header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid #ddd;padding:8px 12px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+h1{font-size:18px;margin:0}
+.who{font-size:13px;color:#555;display:flex;align-items:center;gap:6px}
+.link{border:0;background:none;color:#2a5db0;cursor:pointer;padding:0;font-size:13px}
+.sync{font-size:12px;padding:2px 6px;border-radius:10px;background:#eee}
+.sync.ok{background:#d9f2dc;color:#1d6b2a}.sync.bad{background:#fde1e1;color:#a22}
+nav{display:flex;gap:6px;overflow-x:auto;margin-top:8px;padding-bottom:2px}
+nav button{white-space:nowrap;border:1px solid #ccc;background:#fff;border-radius:16px;padding:5px 12px;cursor:pointer;font-size:13px}
+nav button.on{background:#222;color:#fff;border-color:#222}
+main{max-width:1000px;margin:0 auto;padding:10px}
+.card{background:#fff;border:1px solid #e3ded6;border-radius:12px;margin:14px 0;overflow:hidden}
+.card h2{font-size:18px;margin:12px 12px 2px}
+.card .loc{font-size:13px;color:#666;margin:0 12px 8px}
+.carousel{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:4px;-webkit-overflow-scrolling:touch}
+.carousel img{flex:0 0 88%;max-width:560px;height:260px;object-fit:cover;scroll-snap-align:center;cursor:zoom-in;background:#eee}
+.carousel .none{padding:30px 12px;color:#888;font-size:14px}
+.facts{margin:10px 12px;font-size:14px;line-height:1.5}
+.facts b{color:#555}
+.note{margin:0 12px 8px;color:#555;font-size:14px}
+.links{margin:0 12px 10px;font-size:14px}
+.votes{border-top:1px solid #eee;padding:10px 12px}
+.vrow{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:14px;flex-wrap:wrap}
+.vrow .name{width:64px;font-weight:600}
+.vrow button{border:1px solid #bbb;background:#fff;border-radius:8px;padding:6px 12px;font-size:14px}
+.vrow.mine button{cursor:pointer}
+.vrow.other button{cursor:default;opacity:.55}
+button.on.love{background:#f9c9d4;border-color:#e08aa0;opacity:1}
+button.on.maybe{background:#fbe9b0;border-color:#d9b94e;opacity:1}
+button.on.pass{background:#ddd;border-color:#999;opacity:1}
+.theirnote{font-size:13px;color:#555;background:#f6f3ee;border-radius:6px;padding:6px 8px;margin:0 0 8px;white-space:pre-wrap}
+textarea{width:100%;height:56px;font:inherit;font-size:14px;padding:6px}
+table{border-collapse:collapse;width:100%;font-size:13px;background:#fff}
+th,td{border:1px solid #e3ded6;padding:6px 8px;text-align:left;vertical-align:top}
+th{background:#f3efe8}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eee}
+.pill.love{background:#f9c9d4}.pill.maybe{background:#fbe9b0}.pill.pass{background:#ddd}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:30}
+.modal .box{background:#fff;padding:20px 24px;border-radius:12px;text-align:center}
+.modal button{margin:6px;padding:10px 22px;font-size:16px;border-radius:8px;border:1px solid #999;background:#fff;cursor:pointer}
+#lb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:40;display:flex;align-items:center;justify-content:center}
+#lbImg{max-width:96vw;max-height:92vh}
+#lb button{position:absolute;background:rgba(255,255,255,.15);border:0;color:#fff;font-size:34px;width:48px;height:60px;cursor:pointer;border-radius:8px}
+#lbPrev{left:6px}#lbNext{right:6px}#lbClose{top:8px;right:8px;height:48px}
+footer{font-size:12px;color:#777;text-align:center;padding:18px 12px 30px}
+@media(min-width:700px){.carousel img{flex-basis:46%;height:240px}}

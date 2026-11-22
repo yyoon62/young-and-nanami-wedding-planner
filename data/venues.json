@@ -1,0 +1,277 @@
+[
+  {
+    "slug": "codman",
+    "name": "Codman Estate",
+    "location": "Lincoln, MA",
+    "area": "Boston",
+    "type": "Historic estate, gardens, carriage house",
+    "siteFee": "$1.4k weekday, $2.1k Sun, $2.8-3.8k Sat",
+    "estimate": "$45-80k",
+    "note": "Very low site fee; you add caterer, rentals, tent. Close to Acton.",
+    "links": [
+      {
+        "label": "Official",
+        "url": "https://www.historicnewengland.org/historic-properties/function-rentals/codman-estate-gardens-and-carriage-house/weddings-and-special-events"
+      },
+      {
+        "label": "More photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/codman-estate"
+      }
+    ],
+    "photos": [
+      "photos/codman/01.jpg",
+      "photos/codman/02.jpg",
+      "photos/codman/03.jpg",
+      "photos/codman/04.jpg",
+      "photos/codman/05.jpg",
+      "photos/codman/06.jpg",
+      "photos/codman/07.jpg",
+      "photos/codman/08.jpg"
+    ]
+  },
+  {
+    "slug": "fruitlands",
+    "name": "Fruitlands Museum",
+    "location": "Harvard, MA",
+    "area": "Boston",
+    "type": "Hilltop museum grounds (Trustees)",
+    "siteFee": "$2.5-6k site; food minimum $5-12.5k",
+    "estimate": "$45-70k",
+    "note": "Hilltop views; sources conflict on pricing, get a quote.",
+    "links": [
+      {
+        "label": "Official",
+        "url": "https://thetrustees.org/content/fruitlands-venue-rental/"
+      },
+      {
+        "label": "More photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/fruitlands-museum"
+      }
+    ],
+    "photos": [
+      "photos/fruitlands/01.jpg",
+      "photos/fruitlands/02.jpg",
+      "photos/fruitlands/03.jpg",
+      "photos/fruitlands/04.jpg",
+      "photos/fruitlands/05.jpg",
+      "photos/fruitlands/06.jpg",
+      "photos/fruitlands/07.jpg",
+      "photos/fruitlands/08.jpg"
+    ]
+  },
+  {
+    "slug": "lyman",
+    "name": "Lyman Estate",
+    "location": "Waltham, MA",
+    "area": "Boston",
+    "type": "Historic estate and greenhouses",
+    "siteFee": "$1.6k off-peak, $3.2k peak (to $6.2k)",
+    "estimate": "$45-80k",
+    "note": "Low site fee; bring caterer and rentals.",
+    "links": [
+      {
+        "label": "More photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/lyman-estate"
+      }
+    ],
+    "photos": [
+      "photos/lyman/01.jpg",
+      "photos/lyman/02.jpg",
+      "photos/lyman/03.jpg",
+      "photos/lyman/04.jpg",
+      "photos/lyman/05.jpg",
+      "photos/lyman/06.jpg",
+      "photos/lyman/07.jpg",
+      "photos/lyman/08.jpg"
+    ]
+  },
+  {
+    "slug": "gore",
+    "name": "Gore Place",
+    "location": "Waltham, MA",
+    "area": "Boston",
+    "type": "Historic mansion, tent or carriage house",
+    "siteFee": "$1.5-6k + $250 admin fee",
+    "estimate": "$45-80k",
+    "note": "Tent likely needed for 80 guests; check FY27 sheet.",
+    "links": [
+      {
+        "label": "Pricing sheet",
+        "url": "https://goreplace.org/images/uploads/FY27_Rental_Pricing.pdf"
+      },
+      {
+        "label": "More photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/gore-place"
+      }
+    ],
+    "photos": [
+      "photos/gore/01.jpg",
+      "photos/gore/02.jpg",
+      "photos/gore/03.jpg",
+      "photos/gore/04.jpg",
+      "photos/gore/05.jpg",
+      "photos/gore/06.jpg",
+      "photos/gore/07.jpg",
+      "photos/gore/08.jpg"
+    ]
+  },
+  {
+    "slug": "willowdale",
+    "name": "Willowdale Estate",
+    "location": "Topsfield, MA",
+    "area": "Boston",
+    "type": "Estate, all-inclusive style",
+    "siteFee": "$7.5-12k site + $2.5k ceremony; food $140-150 pp",
+    "estimate": "$55-75k",
+    "note": "Tables, chairs, linens and service included; about 45 min from Acton.",
+    "links": [
+      {
+        "label": "Official",
+        "url": "https://willowdaleestate.com/weddings/pricing"
+      },
+      {
+        "label": "Cost article",
+        "url": "https://tulletogether.com/2025/05/27/how-much-does-it-cost-to-get-married-at-willowdale-estate/"
+      }
+    ],
+    "photos": [
+      "photos/willowdale/01.jpg",
+      "photos/willowdale/03.jpg",
+      "photos/willowdale/04.jpg",
+      "photos/willowdale/05.jpg",
+      "photos/willowdale/06.jpg",
+      "photos/willowdale/07.jpg",
+      "photos/willowdale/08.jpg"
+    ]
+  },
+  {
+    "slug": "nashoba",
+    "name": "Nashoba Valley Winery",
+    "location": "Bolton, MA",
+    "area": "Boston",
+    "type": "Winery pavilion",
+    "siteFee": "~$3,250 pavilion + food (old figure)",
+    "estimate": "$35-55k",
+    "note": "Low confidence on price; only 1 photo found.",
+    "links": [
+      {
+        "label": "Official",
+        "url": "https://nashobawinery.com/functions-2/"
+      }
+    ],
+    "photos": [
+      "photos/nashoba/01.jpg"
+    ]
+  },
+  {
+    "slug": "foundry",
+    "name": "The Foundry",
+    "location": "Long Island City, NYC",
+    "area": "NYC",
+    "type": "Industrial courtyard + main space",
+    "siteFee": "$11-20k site; caterer $200-400+ pp (approved list)",
+    "estimate": "$85-90k (up to $125k)",
+    "note": "Benchmark venue; our budget sheet is built on it.",
+    "links": [
+      {
+        "label": "More photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/new-york/the-foundry"
+      },
+      {
+        "label": "Cost article",
+        "url": "https://tulletogether.com/2025/05/04/how-much-does-it-cost-to-get-married-at-the-foundry-in-nyc/"
+      }
+    ],
+    "photos": [
+      "photos/foundry/01.jpg",
+      "photos/foundry/02.jpg",
+      "photos/foundry/03.jpg",
+      "photos/foundry/04.jpg",
+      "photos/foundry/05.jpg",
+      "photos/foundry/06.jpg",
+      "photos/foundry/07.jpg",
+      "photos/foundry/08.jpg"
+    ]
+  },
+  {
+    "slug": "brecknock",
+    "name": "Brecknock Hall",
+    "location": "Greenport, North Fork, NY",
+    "area": "NYC",
+    "type": "Stone mansion estate + lawn",
+    "siteFee": "$9.6k + $800 tent; caterer extra",
+    "estimate": "$60-100k (North Fork)",
+    "note": "Reception tent only required at 83+ guests; ask about 80.",
+    "links": [
+      {
+        "label": "More photos",
+        "url": "https://www.herecomestheguide.com/wedding-venues/new-york/brecknock-hall"
+      },
+      {
+        "label": "Pricing source",
+        "url": "https://tulletogether.com/2026/09/25/mansion-and-estate-wedding-venues-in-the-greater-nyc-area-and-how-much-they-cost/"
+      }
+    ],
+    "photos": [
+      "photos/brecknock/01.jpg",
+      "photos/brecknock/02.jpg",
+      "photos/brecknock/03.jpg",
+      "photos/brecknock/04.jpg",
+      "photos/brecknock/05.jpg",
+      "photos/brecknock/06.jpg",
+      "photos/brecknock/07.jpg",
+      "photos/brecknock/08.jpg"
+    ]
+  },
+  {
+    "slug": "duckwalk",
+    "name": "Duck Walk Vineyards",
+    "location": "Southold, North Fork, NY",
+    "area": "NYC",
+    "type": "Vineyard, tent",
+    "siteFee": "$5.5k off-peak, $8.5k peak site fee",
+    "estimate": "$60-100k (North Fork)",
+    "note": "Photos not added (site blocked downloads).",
+    "links": [
+      {
+        "label": "WeddingWire",
+        "url": "https://weddingwire.com/biz/duckwalk-vineyard-southold/6ff854b5aff37b6c.html"
+      }
+    ],
+    "photos": []
+  },
+  {
+    "slug": "nfmeadows",
+    "name": "North Fork Meadows",
+    "location": "Aquebogue, NY",
+    "area": "NYC",
+    "type": "Open land with tent",
+    "siteFee": "$19.5k (75 guests) / $21.5k (100)",
+    "estimate": "$60-100k (North Fork)",
+    "note": "Photos not added yet.",
+    "links": [
+      {
+        "label": "Zola",
+        "url": "https://zola.com/wedding-vendors/wedding-venues/north-fork-meadows"
+      }
+    ],
+    "photos": []
+  },
+  {
+    "slug": "meadowlark",
+    "name": "Meadowlark North Fork",
+    "location": "Cutchogue, NY",
+    "area": "NYC",
+    "type": "Vineyard garden",
+    "siteFee": "$14.5-16.5k + tax + 10% admin (unverified)",
+    "estimate": "$60-100k (North Fork)",
+    "note": "Photos not added (site blocked downloads).",
+    "links": [
+      {
+        "label": "The Knot",
+        "url": "https://theknot.com/marketplace/meadowlark-north-fork-by-macari-vineyards-cutchogue-ny-2062550"
+      }
+    ],
+    "photos": []
+  }
+]
