@@ -31,6 +31,10 @@
 <div id="main" tabindex="-1">
   <section id="pcard" class="pcard hide" aria-label="Our progress"></section>
   <div id="venuesView">
+    <div class="search">
+      <input id="q" type="search" placeholder="Search venues (name, town, type\u2026)" aria-label="Search venues" autocomplete="off" enterkeyhint="search">
+      <button id="qclear" type="button" class="hide" aria-label="Clear search">&times;</button>
+    </div>
     <nav class="chips" id="chips" aria-label="Filter venues"></nav>
     <div id="list" class="grid"></div>
   </div>

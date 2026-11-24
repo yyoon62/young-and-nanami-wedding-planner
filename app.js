@@ -64,8 +64,15 @@
   }
   function votedCount(p) { return venues.filter(function (v) { return !!get(v.slug, p).vote; }).length; }
   function bothLoveCount() { return venues.filter(function (v) { return agreement(v.slug) === "love"; }).length; }
+  var query = "";           // search text; not saved, cleared on reload
+  function matches(v) {
+    if (!query) return true;
+    var hay = [v.name, v.location, v.area === "NYC" ? "NYC New York" : v.area, v.type, v.note].join(" ").toLowerCase();
+    return query.toLowerCase().split(/\s+/).every(function (t) { return !t || hay.indexOf(t) >= 0; });
+  }
   function show(v, f) {
     f = f || filter;
+    if (!matches(v)) return false;
     if (f === "Boston" || f === "NYC") return v.area === f;
     if (f === "both") return agreement(v.slug) === "love";
     if (f === "todo") return !get(v.slug, who).vote;
@@ -394,7 +401,7 @@
   function renderList(force) {
     var list = $("list");
     var vis = venues.filter(function (v) { return show(v); });
-    var key = [who, filter].concat(vis.map(function (v) { return v.slug; })).join(",");
+    var key = [who, filter, query].concat(vis.map(function (v) { return v.slug; })).join(",");
     if (key === listKey) {
       vis.forEach(function (v) {
         var s = cardSig(v), old = $("v-" + v.slug);
@@ -427,6 +434,11 @@
     } else if (filter === "todo") {
       d.appendChild(el("p", "big", "You've voted on every venue 🎉"));
       d.appendChild(navBtn("Compare your votes", "#compare"));
+    } else if (query) {
+      d.appendChild(el("p", "big", "No venues match \u201c" + query + "\u201d."));
+      var cb = el("button", "btn", "Clear search"); cb.type = "button";
+      cb.addEventListener("click", function () { setQuery(""); $("q").focus(); });
+      d.appendChild(cb);
     } else {
       d.appendChild(el("p", "big", "Nothing here yet."));
       d.appendChild(navBtn("Show all venues", "#all"));
@@ -522,6 +534,13 @@
     var box = $("chips");
     box.classList.toggle("atend", box.scrollLeft + box.clientWidth >= box.scrollWidth - 4);
   }
+  function setQuery(q) {
+    query = q; $("q").value = q; $("qclear").classList.toggle("hide", !q);
+    renderChips(); renderList(true);
+  }
+  $("q").addEventListener("input", function () { setQuery(this.value); });
+  $("q").addEventListener("keydown", function (e) { if (e.key === "Escape" && query) { setQuery(""); } });
+  $("qclear").addEventListener("click", function () { setQuery(""); $("q").focus(); });
   $("chips").addEventListener("scroll", chipsFade, { passive: true });
   window.addEventListener("resize", chipsFade);
 
