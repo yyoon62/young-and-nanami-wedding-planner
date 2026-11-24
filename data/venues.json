@@ -703,5 +703,29 @@
       "photos/bloominghill/05.jpg",
       "photos/bloominghill/06.jpg"
     ]
+  },
+  {
+    "slug": "asawaters",
+    "name": "Asa Waters Mansion",
+    "location": "Millbury, MA",
+    "area": "Boston",
+    "type": "Greek Revival mansion, one event per day",
+    "siteFee": "$2.8-5.5k by season/space/guests; ceremony $250 + $4/chair; 10% admin fee",
+    "estimate": "$45-80k",
+    "note": "Low site fee, private (one event a day); caterer from approved list, and a tent is needed over 50 guests. Near Worcester, ~45 min from Acton. Estimate is rough, not a quote.",
+    "links": [
+      {
+        "label": "Here Comes The Guide",
+        "url": "https://www.herecomestheguide.com/wedding-venues/massachusetts/asa-waters-mansion"
+      }
+    ],
+    "photos": [
+      "photos/asawaters/01.jpg",
+      "photos/asawaters/02.jpg",
+      "photos/asawaters/03.jpg",
+      "photos/asawaters/04.jpg",
+      "photos/asawaters/05.jpg",
+      "photos/asawaters/06.jpg"
+    ]
   }
 ]
