@@ -535,7 +535,7 @@
     box.classList.toggle("atend", box.scrollLeft + box.clientWidth >= box.scrollWidth - 4);
   }
   function setQuery(q) {
-    query = q; $("q").value = q; $("qclear").classList.toggle("hide", !q);
+    query = q; if ($("q").value !== q) $("q").value = q; $("qclear").classList.toggle("hide", !q);
     renderChips(); renderList(true);
   }
   $("q").addEventListener("input", function () { setQuery(this.value); });
