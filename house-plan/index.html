@@ -21,6 +21,8 @@
     --series-1:       #2a78d6;   /* total net worth */
     --series-2:       #eb6834;   /* liquid savings  */
     --series-3:       #1baf7a;   /* home equity     */
+    --series-4:       #7b55c9;   /* monthly take-home */
+    --series-5:       #c93a8e;   /* monthly spending  */
     --good:           #0ca30c;
     --warning:        #fab219;
     --critical:       #d03b3b;
@@ -40,6 +42,8 @@
       --series-1:       #3987e5;
       --series-2:       #d95926;
       --series-3:       #199e70;
+      --series-4:       #9a7ae0;
+      --series-5:       #e0589f;
     }
   }
   * { box-sizing: border-box; }
@@ -156,7 +160,8 @@
   .tablewrap { overflow-x: auto; }
   svg .evt { fill: var(--text-secondary); font-size: 13px; font-weight: 500; stroke: var(--surface-1); stroke-width: 3px; paint-order: stroke; }
   svg .tight { fill: var(--text-primary); font-weight: 650; stroke: var(--surface-1); stroke-width: 3px; paint-order: stroke; }
-  svg .endlabel { fill: var(--text-primary); font-weight: 650; font-size: 13px; }
+  svg .endlabel { fill: var(--text-primary); font-weight: 650; font-size: 13px; stroke: var(--surface-1); stroke-width: 3px; paint-order: stroke; }
+  svg .ax2 { fill: var(--text-muted); }
   svg:focus-visible { outline: 2px solid var(--series-1); outline-offset: 4px; border-radius: 4px; }
   .tooltip { position: absolute; top: 6px; pointer-events: none; min-width: 190px; padding: 8px 10px;
              background: var(--surface-1); border: 1px solid var(--axis); border-radius: 8px;
@@ -240,7 +245,7 @@
         <h2>Net worth over time</h2>
         <div class="seg" id="hz" role="group" aria-label="Time horizon"></div>
       </div>
-      <p class="desc">Hover or use the arrow keys to read any month. Click a legend item to show or hide that line.</p>
+      <p class="desc">Hover or use the arrow keys to read any month. Click a legend item to show or hide that line. Solid lines use the left axis (net worth); dashed lines use the right axis (what comes in and goes out each month, and the tinted gap is what you save).</p>
       <ul class="legend" id="legend"></ul>
       <div class="chart" id="chart">
         <svg id="svg" viewBox="0 0 820 380" role="img" tabindex="0" aria-label="Net worth chart"></svg>
@@ -276,10 +281,10 @@ let HZ = 120;        // chart / summary horizon in months (5, 10, 20 or 30 years
 /* ---------- inputs (placeholders only; nothing is persisted) ---------- */
 /* Essentials first, in the order people think: income, wedding, house, child (time order); assumptions last. */
 const CONFIG = [
-  { group: 'Income & savings', items: [
+  { group: 'Income & spending', items: [
     { id: 'liquid', label: 'Liquid savings today',    min: 0,    max: 2000000, step: 10000, value: 250000, kind: 'money', hint: 'Cash and easy-to-sell savings you could use.' },
-    { id: 'save',   label: 'Monthly savings',         min: 0,    max: 40000,   step: 500,   value: 8000,   kind: 'money', hint: 'What you set aside each month from take-home pay.' },
     { id: 'take',   label: 'Take-home pay / month',   min: 5000, max: 60000,   step: 500,   value: 20000,  kind: 'money', lo: 1, hint: 'After tax, what lands in your account.' },
+    { id: 'live',   label: 'Living expenses / month (not rent)', min: 0, max: 60000, step: 500, value: 9000, kind: 'money', hint: 'Food, transport, bills, fun: everything except rent or the mortgage. What is left of take-home after this, housing and children is your monthly saving.' },
   ]},
   { group: 'Wedding', items: [
     { id: 'wed',  label: 'Wedding budget',     min: 0, max: 400000, step: 5000, value: 80000, kind: 'money' },
@@ -321,9 +326,9 @@ const CONFIG = [
 /* What each section shows on its summary line while collapsed (the one or two facts that matter most). */
 const inText = m => m === 0 ? 'now' : m % 12 === 0 ? 'in ' + m / 12 + (m === 12 ? ' year' : ' years') : m < 12 ? 'in ' + m + (m === 1 ? ' month' : ' months') : 'in ' + (+(m / 12).toFixed(1)) + ' years';
 const durText = d => d % 12 === 0 ? d / 12 + (d === 12 ? ' year' : ' years') : d + (d === 1 ? ' month' : ' months');
-const GROUP_ICONS = { 'Income & savings': '\u{1F4B5}', 'Wedding': '\u{1F470}\u{1F935}', 'House': '\u{1F3E0}', 'Child': '\u{1F476}', 'What if': '\u{1F3B2}', 'Advanced assumptions': '\u2699\uFE0F' };
+const GROUP_ICONS = { 'Income & spending': '\u{1F4B5}', 'Wedding': '\u{1F470}\u{1F935}', 'House': '\u{1F3E0}', 'Child': '\u{1F476}', 'What if': '\u{1F3B2}', 'Advanced assumptions': '\u2699\uFE0F' };
 const GROUP_KEYS = {
-  'Income & savings':     v => 'Saving ' + moneyFull(v.save) + '/mo, ' + money(v.liquid) + ' in cash',
+  'Income & spending':     v => moneyFull(v.take) + '/mo in, saving ' + moneyFull(v.take - v.live - v.rent) + '/mo now, ' + money(v.liquid) + ' in cash',
   'Wedding':              v => money(v.wed) + ' budget, ' + inText(v.wedm),
   'House':                (v, m) => money(v.price) + ' house, ' + moneyFull(m.housingAtBuy) + '/mo, buying ' + inText(v.buym),
   'Child':                v => v.kids === 0 ? 'No children planned' : v.kids === 1 ? moneyFull(v.childc) + '/mo, starting ' + inText(v.childm) : '2 children, first ' + inText(v.childm) + ', ' + moneyFull(v.childc) + '/mo each',
@@ -383,7 +388,7 @@ function compute(v) {
   const upkeep = val => val * v.tax / 1000 / 12 + v.ins + val * v.maint / 1200 + v.util;   // property tax + insurance + upkeep + utilities
   let pmi = 0, priceBuy = 0;                                                              // mortgage insurance applies only under 20% down, until the loan falls to 80%
   let cash = 0, housingAtBuy = 0, priceAtBuy = 0, lowAfter = Infinity, lowMonth = -1, loanAtBuy = 0;   // lowAfter = minimum over the WHOLE horizon
-  const out = { m: [], liquid: [], equity: [], retire: [], total: [] };
+  const out = { m: [], liquid: [], equity: [], retire: [], total: [], take: [], spend: [] };
   for (let m = 0; m <= MAXM; m++) {
     if (m === v.wedm) liquid -= v.wed;
     if (births.includes(m)) liquid -= v.birth * births.filter(b => b === m).length;
@@ -400,11 +405,12 @@ function compute(v) {
     if (m <= HZ && liquid < lowAfter) { lowAfter = liquid; lowMonth = m; }
     out.m.push(m); out.liquid.push(liquid); out.retire.push(retire);
     out.equity.push(value - loan); out.total.push(liquid + retire + value - loan);
+    // monthly flows: take-home (drops during a job loss) vs spending (living + rent or housing + children). Saving is what is left.
+    const inc = v.take - (v.jobon && m >= v.jobm && m < v.jobm + v.jobdur ? v.joblost : 0);
+    const exp = v.live + (bought ? pmt + upkeep(value) + (loan > 0.8 * priceBuy ? pmi : 0) : v.rent) + childCost(m);
+    out.take.push(inc); out.spend.push(exp);
     if (m < MAXM) {
-      liquid = liquid * (1 + r) + v.save;
-      if (bought) liquid -= (pmt + upkeep(value) + (loan > 0.8 * priceBuy ? pmi : 0)) - v.rent;
-      liquid -= childCost(m);
-      if (v.jobon && m >= v.jobm && m < v.jobm + v.jobdur) liquid -= v.joblost;   // income gap: pay stops for a stretch
+      liquid = liquid * (1 + r) + (inc - exp);
       if (bought && loan > 0) { loan -= (pmt - loan * i); if (loan < 0) loan = 0; }
       if (bought) value *= appr;
       retire *= 1 + r;
@@ -412,7 +418,7 @@ function compute(v) {
   }
   // realistic monthly spending once the house and child both apply: living costs, housing change, child cost
   let childPeak = 0; for (let m = 0; m <= HZ; m++) childPeak = Math.max(childPeak, childCost(m));
-  const spend = Math.max(0, Math.max(0, v.take - v.save) + (housingAtBuy - v.rent) + childPeak);
+  const spend = v.live + housingAtBuy + childPeak;
   const events = [{ m: v.wedm, name: 'Wedding', icon: '\u{1F470}\u{1F935}', detail: '\u2212' + money(v.wed) }, { m: v.buym, name: 'House', icon: '\u{1F3E0}', detail: '\u2212' + money(cash) + ' cash' }];
   if (v.jobon) events.push({ m: v.jobm, name: 'Job loss', icon: '\u{1F4BC}', detail: '\u2212' + moneyFull(v.joblost) + '/mo for ' + durText(v.jobdur) });
   births.forEach((b, k) => events.push({ m: b, name: v.kids === 1 ? 'Child' : 'Child ' + (k + 1), icon: '\u{1F476}' + (v.kids === 1 ? '' : k + 1), detail: '\u2212' + moneyFull(v.childc) + '/mo' }));
@@ -464,11 +470,11 @@ const PRESETS = [
 ];
 /* Example profiles: five fictional starting points spanning early-career to high-earner. Pick one, then adjust. */
 const PROFILES = [
-  { name: 'Starter',     v: { liquid:  60000, retire:   80000, save:  2500, take:  9000, rent: 2200, wed:  35000, wedm: 18, price:  550000, buym: 36, kids: 2, childm: 48, gap: 36, childc: 2200 } },
-  { name: 'Building',    v: { liquid: 140000, retire:  180000, save:  5000, take: 14000, rent: 2800, wed:  60000, wedm: 12, price:  750000, buym: 30, kids: 2, childm: 36, gap: 30, childc: 2400 } },
-  { name: 'Established', v: { liquid: 320000, retire:  450000, save:  8000, take: 22000, rent: 3400, wed:  90000, wedm: 12, price: 1000000, buym: 24, kids: 2, childm: 30, gap: 30, childc: 2600 } },
-  { name: 'High saver',  v: { liquid: 600000, retire:  700000, save: 14000, take: 32000, rent: 4000, wed: 120000, wedm: 18, price: 1400000, buym: 18, kids: 2, childm: 24, gap: 24, childc: 2800 } },
-  { name: 'Top earner',  v: { liquid: 900000, retire: 1100000, save: 22000, take: 48000, rent: 5500, wed: 200000, wedm: 12, price: 1900000, buym: 24, kids: 2, childm: 36, gap: 30, childc: 3200 } }
+  { name: 'Starter',     v: { liquid:  60000, retire:   80000, take:  9000, live:  4300, rent: 2200, wed:  35000, wedm: 18, price:  550000, buym: 36, kids: 2, childm: 48, gap: 36, childc: 2200 } },
+  { name: 'Building',    v: { liquid: 140000, retire:  180000, take: 14000, live:  6200, rent: 2800, wed:  60000, wedm: 12, price:  750000, buym: 30, kids: 2, childm: 36, gap: 30, childc: 2400 } },
+  { name: 'Established', v: { liquid: 320000, retire:  450000, take: 22000, live: 10600, rent: 3400, wed:  90000, wedm: 12, price: 1000000, buym: 24, kids: 2, childm: 30, gap: 30, childc: 2600 } },
+  { name: 'High saver',  v: { liquid: 600000, retire:  700000, take: 32000, live: 14000, rent: 4000, wed: 120000, wedm: 18, price: 1400000, buym: 18, kids: 2, childm: 24, gap: 24, childc: 2800 } },
+  { name: 'Top earner',  v: { liquid: 900000, retire: 1100000, take: 48000, live: 20500, rent: 5500, wed: 200000, wedm: 12, price: 1900000, buym: 24, kids: 2, childm: 36, gap: 30, childc: 3200 } }
 ];
 const PROFILE_KEYS = Object.keys(PROFILES[0].v);
 let activeProfile = null; const profileBtns = {};
@@ -559,7 +565,7 @@ function buildControls() {
       row.append(lab, box); if (fmtEl) row.appendChild(fmtEl); row.appendChild(inp); if (hint) row.appendChild(hint);
       d.appendChild(row);
     });
-    if (g.group === 'Income & savings') { const sl = h('div', 'spend'); sl.id = 'spendline'; d.appendChild(sl); }
+    if (g.group === 'Income & spending') { const sl = h('div', 'spend'); sl.id = 'spendline'; d.appendChild(sl); }
     root.appendChild(d);
   });
 
@@ -598,16 +604,20 @@ function layoutChart() {
   const cw = $('chart').clientWidth || 820;
   narrow = cw < 560;
   W = cw; H = narrow ? 330 : 380;
-  M = narrow ? { l: 50, r: 58, t: 24, b: 32 } : { l: 62, r: 78, t: 24, b: 34 };
+  M = narrow ? { l: 50, r: 58, t: 34, b: 32 } : { l: 62, r: 78, t: 36, b: 34 };
   PW = W - M.l - M.r; PH = H - M.t - M.b;
 }
+const FLOWS = [
+  { key: 'take',  name: 'Monthly take-home (right axis)', css: '--series-4' },
+  { key: 'spend', name: 'Monthly spending (right axis)',  css: '--series-5' }
+];
 const SERIES = [
   { key: 'total',  name: 'Total net worth (incl. retirement)', css: '--series-1' },
   { key: 'liquid', name: 'Liquid savings',                     css: '--series-2' },
   { key: 'equity', name: 'Home equity',                        css: '--series-3' }
 ];
 let model = null, sel = null;
-const shown = { total: true, liquid: true, equity: true };   // which lines are visible (legend items toggle these)
+const shown = { total: true, liquid: true, equity: true, take: true, spend: true };   // which lines are visible (legend items toggle these)
 
 function niceTicks(lo, hi) {
   const span = hi - lo || 1, raw = span / 5, p = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -625,6 +635,14 @@ function drawChart() {
   const all = VIS.flatMap(x => model[x.key].slice(0, HZ + 1));
   const { ticks, lo, hi } = niceTicks(Math.min(0, ...all), Math.max(...all));
   const Y = v => M.t + (1 - (v - lo) / (hi - lo)) * PH;
+  // second y-axis (right): monthly take-home and spending
+  const FVIS = FLOWS.filter(x => shown[x.key]);
+  const f2 = niceTicks(0, Math.max(1, ...FVIS.flatMap(x => model[x.key].slice(0, HZ + 1))));
+  const Y2 = v => M.t + (1 - (v - f2.lo) / (f2.hi - f2.lo)) * PH;
+  if (FVIS.length) {
+    f2.ticks.forEach(t => svg.appendChild(s('text', { x: W - M.r + 8, y: Y2(t) + 4, 'text-anchor': 'start', class: 'ax2' }, money(t))));
+    svg.appendChild(s('text', { x: W - M.r + 8, y: M.t - 10, 'text-anchor': 'start', class: 'ax2' }, 'per month'));
+  }
 
   ticks.forEach(t => {
     svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t), stroke: t === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
@@ -650,6 +668,24 @@ function drawChart() {
   VIS.forEach(x => {
     const d = model[x.key].slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
     svg.appendChild(s('path', { d, fill: 'none', stroke: 'var(' + x.css + ')', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+  });
+
+  // monthly flows on the right axis: light fill for the gap (saving = purple tint, shortfall = pink tint), then dashed lines
+  if (FVIS.length === 2) {
+    let run = null;
+    const flush = () => { if (run && run.pts.length > 1) {
+      const top = run.pts.map(q => X(q.m).toFixed(1) + ' ' + Y2(q.a).toFixed(1)), bot = run.pts.slice().reverse().map(q => X(q.m).toFixed(1) + ' ' + Y2(q.b).toFixed(1));
+      svg.appendChild(s('path', { d: 'M' + top.join(' L') + ' L' + bot.join(' L') + ' Z', fill: run.pos ? 'var(--series-4)' : 'var(--series-5)', opacity: 0.10 })); } run = null; };
+    for (let m = 0; m <= HZ; m++) {
+      const a = model.take[m], b = model.spend[m], pos = a >= b;
+      if (!run || run.pos !== pos) { const prev = run && run.pts[run.pts.length - 1]; flush(); run = { pos, pts: [] }; if (prev) run.pts.push({ m: m - 1, a: model.take[m - 1], b: model.spend[m - 1] }); }
+      run.pts.push({ m, a, b });
+    }
+    flush();
+  }
+  FVIS.forEach(x => {
+    const d = model[x.key].slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y2(v).toFixed(1)).join(' ');
+    svg.appendChild(s('path', { d, fill: 'none', stroke: 'var(' + x.css + ')', 'stroke-width': 1.75, 'stroke-dasharray': '6 4', 'stroke-linejoin': 'round' }));
   });
 
   // markers and labels. One shared placer: each label tries a few spots around its marker and takes the first that stays
@@ -682,11 +718,12 @@ function drawChart() {
 
   // end dots with a 2px surface ring; label only the headline series
   VIS.forEach(x => svg.appendChild(s('circle', { cx: X(HZ), cy: Y(model[x.key][HZ]), r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2 })));
-  if (shown.total) svg.appendChild(s('text', { x: X(HZ) + 10, y: Y(model.total[HZ]) + 4, class: 'endlabel' }, money(model.total[HZ])));
+  if (shown.total) svg.appendChild(s('text', { x: X(HZ) - 8, y: Y(model.total[HZ]) - 9, 'text-anchor': 'end', class: 'endlabel' }, money(model.total[HZ])));
 
   // hover layer
   const cross = s('line', { y1: M.t, y2: M.t + PH, stroke: 'var(--text-muted)', 'stroke-width': 1, visibility: 'hidden' });
-  const dots = VIS.map(x => s('circle', { r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2, visibility: 'hidden' }));
+  const HV = VIS.map(x => ({ x, f: Y })).concat(FVIS.map(x => ({ x, f: Y2 })));
+  const dots = HV.map(({ x }) => s('circle', { r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2, visibility: 'hidden' }));
   svg.append(cross, ...dots);
   const hit = s('rect', { x: M.l, y: M.t - 10, width: PW, height: PH + 20, fill: 'transparent' });
   svg.appendChild(hit);
@@ -694,15 +731,18 @@ function drawChart() {
   function show(m) {
     sel = m; const x = X(m);
     cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
-    dots.forEach((d, k) => { d.setAttribute('cx', x); d.setAttribute('cy', Y(model[VIS[k].key][m])); d.setAttribute('visibility', 'visible'); });
+    dots.forEach((d, k) => { d.setAttribute('cx', x); d.setAttribute('cy', HV[k].f(model[HV[k].x.key][m])); d.setAttribute('visibility', 'visible'); });
     const tip = $('tip'); tip.replaceChildren();
     tip.appendChild(h('div', 'when', m === 0 ? 'Today' : 'Year ' + (m / 12).toFixed(1) + ' · month ' + m));
-    VIS.forEach(sr => {
+    VIS.concat(FVIS).forEach(sr => {
       const row = h('div', 'trow'), key = h('span', 'key');
       key.style.borderTopColor = 'var(' + sr.css + ')';
-      row.append(key, h('strong', '', moneyFull(model[sr.key][m])), h('span', 'n', sr.key === 'total' ? 'Total' : sr.name));
+      if (FLOWS.includes(sr)) key.style.borderTopStyle = 'dashed';
+      row.append(key, h('strong', '', moneyFull(model[sr.key][m])), h('span', 'n', sr.key === 'total' ? 'Total' : FLOWS.includes(sr) ? sr.name.replace(' (right axis)', '') + ' / mo' : sr.name));
       tip.appendChild(row);
     });
+    if (FVIS.length === 2) { const net = model.take[m] - model.spend[m], row = h('div', 'trow');
+      row.append(h('span', 'key'), h('strong', '', moneyFull(net)), h('span', 'n', net >= 0 ? 'Left to save / mo' : 'Shortfall / mo')); tip.appendChild(row); }
     const ev = model.events.filter(e => e.m === m).map(e => e.icon + ' ' + e.name + ' ' + e.detail);
     if (shown.liquid && m === model.lowMonth) ev.push('Tightest month');
     if (ev.length) tip.appendChild(h('div', 'when', 'Event: ' + ev.join(', ')));
@@ -729,15 +769,16 @@ function drawChart() {
 
 function drawLegend() {
   const ul = $('legend'); ul.replaceChildren();
-  SERIES.forEach(sr => {
+  SERIES.concat(FLOWS).forEach(sr => {
     const li = h('li'), btn = h('button', 'legbtn'), key = h('span', 'key'); btn.type = 'button';
     key.style.borderTopColor = 'var(' + sr.css + ')';
+    if (FLOWS.includes(sr)) key.style.borderTopStyle = 'dashed';
     btn.setAttribute('aria-pressed', String(shown[sr.key]));
     btn.title = (shown[sr.key] ? 'Hide ' : 'Show ') + sr.name;
     btn.append(key, document.createTextNode(sr.name));
     btn.addEventListener('click', () => {
       const on = SERIES.filter(x => shown[x.key]).length;
-      if (shown[sr.key] && on === 1) return;   // always keep at least one line on screen
+      if (SERIES.includes(sr) && shown[sr.key] && on === 1) return;   // always keep at least one net-worth line on screen
       shown[sr.key] = !shown[sr.key];
       drawLegend(); render();
     });
@@ -748,11 +789,11 @@ function drawLegend() {
 
 function drawTable() {
   const t = $('table'); t.replaceChildren();
-  const head = h('tr'); ['When', 'Total', 'Liquid', 'Home equity', 'Retirement & other'].forEach(c => head.appendChild(h('th', '', c)));
+  const head = h('tr'); ['When', 'Total', 'Liquid', 'Home equity', 'Retirement & other', 'Take-home / mo', 'Spending / mo'].forEach(c => head.appendChild(h('th', '', c)));
   t.appendChild(head);
   for (let yr = 0; yr <= HZ / 12; yr += HZ <= 120 ? 1 : HZ <= 240 ? 2 : 5) {
     const m = yr * 12, tr = h('tr');
-    [yr === 0 ? 'Now' : 'Year ' + yr, moneyFull(model.total[m]), moneyFull(model.liquid[m]), moneyFull(model.equity[m]), moneyFull(model.retire[m])]
+    [yr === 0 ? 'Now' : 'Year ' + yr, moneyFull(model.total[m]), moneyFull(model.liquid[m]), moneyFull(model.equity[m]), moneyFull(model.retire[m]), moneyFull(model.take[m]), moneyFull(model.spend[m])]
       .forEach(c => tr.appendChild(h('td', '', c)));
     t.appendChild(tr);
   }
@@ -786,14 +827,14 @@ function drawSummary(v) {
   const where = early ? 'before the purchase' : 'after buying';
   $('t-low').textContent = moneyFull(low);
   const tightS = ' Tightest month: ' + when + ' (' + where + '), ' + money(low) + '.';
-  const incons = v.save > v.take, heavy = pct > 35;
+  const incons = v.live + v.rent > v.take, heavy = pct > 35;
   let level = 0, parts = [], txt;
   if (low < 0) { level = 2; txt = 'Short: cash runs out';
     parts.push('This does not work yet: cash runs out ' + (early ? 'before the purchase, ' : 'after buying, ') + 'around ' + when + '.'); }
   else if (low < model.reserve) { level = 1; txt = 'Below a 6-month reserve';
     parts.push('This is tight: cash dips below a 6-month reserve (about ' + money(model.reserve) + ').'); }
   if (incons) { level = Math.max(level, 1); if (!txt) txt = 'Check your inputs';
-    parts.push('Your monthly savings (' + moneyFull(v.save) + ') are more than your take-home (' + moneyFull(v.take) + '), so these numbers do not add up. Check them.'); }
+    parts.push('Your living expenses plus rent (' + moneyFull(v.live + v.rent) + ') are more than your take-home (' + moneyFull(v.take) + '), so you would not be saving anything today. Check them.'); }
   if (heavy) { level = Math.max(level, 1); if (!txt) txt = 'Housing is over 35% of take-home';
     parts.push('Housing would take ' + pct.toFixed(0) + '% of take-home, above the usual 35% guide.'); }
   if (!parts.length) { txt = 'Above a 6-month reserve'; parts.push('You can afford this: cash stays above a 6-month reserve.'); }
@@ -802,7 +843,7 @@ function drawSummary(v) {
   const st = $('t-status'); st.replaceChildren();
   st.className = 'status ' + cls;
   st.append(h('span', 'icon', icon), h('span', '', txt));
-  $('t-low-note').textContent = 'Lowest point: ' + when + ' (' + where + '). A 6-month reserve is about ' + moneyFull(model.reserve) + ': take-home minus savings, plus the housing change and child costs.';
+  $('t-low-note').textContent = 'Lowest point: ' + when + ' (' + where + '). A 6-month reserve is about ' + moneyFull(model.reserve) + ': living expenses plus housing and child costs.';
 
   const vb = $('verdict'); vb.replaceChildren(); vb.className = 'verdict ' + cls;
   vb.append(h('span', 'icon', icon), h('span', '', verdict));
@@ -822,9 +863,9 @@ function render() {
   $('hero-label').textContent = 'Net worth in ' + hn + ' years';
   $('sb-label').textContent = 'Net worth in ' + hn + ' yrs';
   $('t-low-label').textContent = 'Lowest liquid cash (next ' + hn + ' yrs)';
-  { const sp = Math.max(0, state.take - state.save), el = $('spendline');
-    if (el) el.textContent = state.save > state.take ? 'Savings are higher than take-home, so these numbers do not fit together.'
-      : 'So you spend about ' + moneyFull(sp) + ' a month, rent included (take-home minus savings).'; }
+  { const sv = state.take - state.live - state.rent, el = $('spendline');
+    if (el) el.textContent = sv < 0 ? 'Living expenses plus rent are higher than take-home, so you would be losing ' + moneyFull(-sv) + ' a month.'
+      : 'Today you save about ' + moneyFull(sv) + ' a month (take-home minus living expenses and rent). It shrinks when the mortgage and children arrive.'; }
   groupKeys.forEach(g => { if (g.fn) g.el.textContent = g.fn(state, model); });
   drawSummary(state); drawChart(); drawTable();
   $('svg').setAttribute('aria-label', 'Net worth chart. Tightest month: ' + yrText(model.lowMonth) + '. Today ' + moneyFull(model.total[0]) + ', in ' + HZ / 12 + ' years ' + moneyFull(model.total[HZ]) + '.');
