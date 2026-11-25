@@ -245,7 +245,7 @@
         <h2>Net worth over time</h2>
         <div class="seg" id="hz" role="group" aria-label="Time horizon"></div>
       </div>
-      <p class="desc">Hover or use the arrow keys to read any month. Click a legend item to show or hide that line. Solid lines use the left axis (net worth); dashed lines use the right axis (what comes in and goes out each month, and the tinted gap is what you save).</p>
+      <p class="desc">Hover or use the arrow keys to read any month. Click a legend item to show or hide that line. Solid lines use the left axis (net worth); the dashed line uses the right axis: what you save each month (take-home minus living expenses, housing and children). It is tinted pink when you would be short.</p>
       <ul class="legend" id="legend"></ul>
       <div class="chart" id="chart">
         <svg id="svg" viewBox="0 0 820 380" role="img" tabindex="0" aria-label="Net worth chart"></svg>
@@ -388,7 +388,7 @@ function compute(v) {
   const upkeep = val => val * v.tax / 1000 / 12 + v.ins + val * v.maint / 1200 + v.util;   // property tax + insurance + upkeep + utilities
   let pmi = 0, priceBuy = 0;                                                              // mortgage insurance applies only under 20% down, until the loan falls to 80%
   let cash = 0, housingAtBuy = 0, priceAtBuy = 0, lowAfter = Infinity, lowMonth = -1, loanAtBuy = 0;   // lowAfter = minimum over the WHOLE horizon
-  const out = { m: [], liquid: [], equity: [], retire: [], total: [], take: [], spend: [] };
+  const out = { m: [], liquid: [], equity: [], retire: [], total: [], take: [], spend: [], save: [] };
   for (let m = 0; m <= MAXM; m++) {
     if (m === v.wedm) liquid -= v.wed;
     if (births.includes(m)) liquid -= v.birth * births.filter(b => b === m).length;
@@ -408,7 +408,7 @@ function compute(v) {
     // monthly flows: take-home (drops during a job loss) vs spending (living + rent or housing + children). Saving is what is left.
     const inc = v.take - (v.jobon && m >= v.jobm && m < v.jobm + v.jobdur ? v.joblost : 0);
     const exp = v.live + (bought ? pmt + upkeep(value) + (loan > 0.8 * priceBuy ? pmi : 0) : v.rent) + childCost(m);
-    out.take.push(inc); out.spend.push(exp);
+    out.take.push(inc); out.spend.push(exp); out.save.push(inc - exp);
     if (m < MAXM) {
       liquid = liquid * (1 + r) + (inc - exp);
       if (bought && loan > 0) { loan -= (pmt - loan * i); if (loan < 0) loan = 0; }
@@ -608,8 +608,7 @@ function layoutChart() {
   PW = W - M.l - M.r; PH = H - M.t - M.b;
 }
 const FLOWS = [
-  { key: 'take',  name: 'Monthly take-home (right axis)', css: '--series-4' },
-  { key: 'spend', name: 'Monthly spending (right axis)',  css: '--series-5' }
+  { key: 'save', name: 'Monthly saving (right axis)', css: '--series-4' }
 ];
 const SERIES = [
   { key: 'total',  name: 'Total net worth (incl. retirement)', css: '--series-1' },
@@ -617,7 +616,7 @@ const SERIES = [
   { key: 'equity', name: 'Home equity',                        css: '--series-3' }
 ];
 let model = null, sel = null;
-const shown = { total: true, liquid: true, equity: true, take: true, spend: true };   // which lines are visible (legend items toggle these)
+const shown = { total: true, liquid: true, equity: true, save: true };   // which lines are visible (legend items toggle these)
 
 function niceTicks(lo, hi) {
   const span = hi - lo || 1, raw = span / 5, p = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -637,7 +636,7 @@ function drawChart() {
   const Y = v => M.t + (1 - (v - lo) / (hi - lo)) * PH;
   // second y-axis (right): monthly take-home and spending
   const FVIS = FLOWS.filter(x => shown[x.key]);
-  const f2 = niceTicks(0, Math.max(1, ...FVIS.flatMap(x => model[x.key].slice(0, HZ + 1))));
+  const fv = FVIS.flatMap(x => model[x.key].slice(0, HZ + 1)), f2 = niceTicks(Math.min(0, ...fv), Math.max(1, ...fv));
   const Y2 = v => M.t + (1 - (v - f2.lo) / (f2.hi - f2.lo)) * PH;
   if (FVIS.length) {
     f2.ticks.forEach(t => svg.appendChild(s('text', { x: W - M.r + 8, y: Y2(t) + 4, 'text-anchor': 'start', class: 'ax2' }, money(t))));
@@ -671,17 +670,19 @@ function drawChart() {
   });
 
   // monthly flows on the right axis: light fill for the gap (saving = purple tint, shortfall = pink tint), then dashed lines
-  if (FVIS.length === 2) {
+  if (FVIS.length) {
     let run = null;
+    const z = Y2(0);
     const flush = () => { if (run && run.pts.length > 1) {
-      const top = run.pts.map(q => X(q.m).toFixed(1) + ' ' + Y2(q.a).toFixed(1)), bot = run.pts.slice().reverse().map(q => X(q.m).toFixed(1) + ' ' + Y2(q.b).toFixed(1));
-      svg.appendChild(s('path', { d: 'M' + top.join(' L') + ' L' + bot.join(' L') + ' Z', fill: run.pos ? 'var(--series-4)' : 'var(--series-5)', opacity: 0.10 })); } run = null; };
+      const top = run.pts.map(q => X(q.m).toFixed(1) + ' ' + Y2(q.v).toFixed(1));
+      svg.appendChild(s('path', { d: 'M' + top.join(' L') + ' L' + X(run.pts[run.pts.length - 1].m).toFixed(1) + ' ' + z.toFixed(1) + ' L' + X(run.pts[0].m).toFixed(1) + ' ' + z.toFixed(1) + ' Z', fill: run.pos ? 'var(--series-4)' : 'var(--series-5)', opacity: 0.12 })); } run = null; };
     for (let m = 0; m <= HZ; m++) {
-      const a = model.take[m], b = model.spend[m], pos = a >= b;
-      if (!run || run.pos !== pos) { const prev = run && run.pts[run.pts.length - 1]; flush(); run = { pos, pts: [] }; if (prev) run.pts.push({ m: m - 1, a: model.take[m - 1], b: model.spend[m - 1] }); }
-      run.pts.push({ m, a, b });
+      const v = model.save[m], pos = v >= 0;
+      if (!run || run.pos !== pos) { const prev = run && run.pts[run.pts.length - 1]; flush(); run = { pos, pts: [] }; if (prev) run.pts.push({ m: m - 1, v: model.save[m - 1] }); }
+      run.pts.push({ m, v });
     }
     flush();
+    if (f2.lo < 0) svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: z, y2: z, stroke: 'var(--series-4)', 'stroke-width': 1, opacity: 0.5 }));
   }
   FVIS.forEach(x => {
     const d = model[x.key].slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y2(v).toFixed(1)).join(' ');
@@ -738,11 +739,9 @@ function drawChart() {
       const row = h('div', 'trow'), key = h('span', 'key');
       key.style.borderTopColor = 'var(' + sr.css + ')';
       if (FLOWS.includes(sr)) key.style.borderTopStyle = 'dashed';
-      row.append(key, h('strong', '', moneyFull(model[sr.key][m])), h('span', 'n', sr.key === 'total' ? 'Total' : FLOWS.includes(sr) ? sr.name.replace(' (right axis)', '') + ' / mo' : sr.name));
+      row.append(key, h('strong', '', moneyFull(model[sr.key][m])), h('span', 'n', sr.key === 'total' ? 'Total' : FLOWS.includes(sr) ? 'Saving / mo' : sr.name));
       tip.appendChild(row);
     });
-    if (FVIS.length === 2) { const net = model.take[m] - model.spend[m], row = h('div', 'trow');
-      row.append(h('span', 'key'), h('strong', '', moneyFull(net)), h('span', 'n', net >= 0 ? 'Left to save / mo' : 'Shortfall / mo')); tip.appendChild(row); }
     const ev = model.events.filter(e => e.m === m).map(e => e.icon + ' ' + e.name + ' ' + e.detail);
     if (shown.liquid && m === model.lowMonth) ev.push('Tightest month');
     if (ev.length) tip.appendChild(h('div', 'when', 'Event: ' + ev.join(', ')));
@@ -789,11 +788,11 @@ function drawLegend() {
 
 function drawTable() {
   const t = $('table'); t.replaceChildren();
-  const head = h('tr'); ['When', 'Total', 'Liquid', 'Home equity', 'Retirement & other', 'Take-home / mo', 'Spending / mo'].forEach(c => head.appendChild(h('th', '', c)));
+  const head = h('tr'); ['When', 'Total', 'Liquid', 'Home equity', 'Retirement & other', 'Saving / mo'].forEach(c => head.appendChild(h('th', '', c)));
   t.appendChild(head);
   for (let yr = 0; yr <= HZ / 12; yr += HZ <= 120 ? 1 : HZ <= 240 ? 2 : 5) {
     const m = yr * 12, tr = h('tr');
-    [yr === 0 ? 'Now' : 'Year ' + yr, moneyFull(model.total[m]), moneyFull(model.liquid[m]), moneyFull(model.equity[m]), moneyFull(model.retire[m]), moneyFull(model.take[m]), moneyFull(model.spend[m])]
+    [yr === 0 ? 'Now' : 'Year ' + yr, moneyFull(model.total[m]), moneyFull(model.liquid[m]), moneyFull(model.equity[m]), moneyFull(model.retire[m]), moneyFull(model.save[m])]
       .forEach(c => tr.appendChild(h('td', '', c)));
     t.appendChild(tr);
   }
