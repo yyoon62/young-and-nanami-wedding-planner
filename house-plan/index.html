@@ -8,6 +8,7 @@
 <style>
   /* Colors follow the dataviz reference palette; swap the custom properties to rebrand. */
   :root { color-scheme: light dark; }
+  html { scroll-padding-top: 76px; }
   body.viz-root {
     --page:           #f9f9f7;
     --surface-1:      #fcfcfb;
@@ -45,42 +46,79 @@
   header { max-width: 1240px; margin: 0 auto; padding: 28px 20px 8px; }
   h1 { margin: 0 0 4px; font-size: 24px; font-weight: 650; }
   .sub { margin: 0; color: var(--text-secondary); max-width: 70ch; }
-  .privacy { margin: 10px 0 0; font-size: 13px; color: var(--text-muted); }
+  footer { max-width: 1240px; margin: 0 auto; padding: 0 20px 32px; }
+  .privacy { margin: 0; font-size: 13px; color: var(--text-muted); }
   .layout { max-width: 1240px; margin: 0 auto; padding: 16px 20px 48px;
             display: grid; grid-template-columns: 340px minmax(0,1fr); gap: 20px; align-items: start; }
-  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: minmax(0,1fr); padding: 12px 14px 40px; }
+    .layout .results { display: contents; }
+    .layout .hero { order: 1; } .layout .controls { order: 2; } .layout .tiles { order: 3; } .layout .chartcard { order: 4; }
+    html { scroll-padding-top: 96px; }
+    .stickybar { height: 0; border: 0; padding: 0; background: none; }
+    .stickybar .sbin { display: none; position: absolute; top: 0; left: 0; right: 0; background: var(--surface-1); border-bottom: 1px solid var(--border); box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .stickybar .sbin.show { display: flex; }
+    header { padding: 18px 14px 6px; }
+  }
 
-  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; }
-  .controls { padding: 4px 16px 12px; }
+  .stickybar { position: sticky; top: 0; z-index: 10; background: var(--surface-1); border-bottom: 1px solid var(--border); }
+  .sbin { display: flex; justify-content: space-between; align-items: center; gap: 2px 12px; flex-wrap: wrap; padding: 6px 20px; max-width: 1240px; margin: 0 auto; }
+  .stickybar .sl { font-size: 12px; color: var(--text-secondary); margin-right: 6px; }
+  .stickybar strong { font-size: 18px; font-weight: 650; }
+  .stickybar .sbd { font-size: 12px; color: var(--text-secondary); margin-left: 8px; }
+  .stickybar .status { margin: 0; }
+  @media (max-width: 900px) { .stickybar .sbin { padding: 6px 14px; } }
+
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; min-width: 0; }
+  .controls { padding: 12px 16px 12px; min-width: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+  .chip { padding: 7px 12px; min-height: 34px; border-radius: 999px; border: 1px solid var(--axis); background: transparent;
+          color: var(--text-primary); cursor: pointer; font: inherit; font-size: 13px; }
+  .chip:hover { background: var(--grid); }
+  .chip:focus-visible, .linkbtn:focus-visible, .num input:focus-visible, summary:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+  .chip[aria-pressed=true] { background: var(--grid); border-color: var(--text-secondary); font-weight: 600; }
+  .resetrow { border-top: 1px solid var(--grid); padding: 14px 0 4px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+  .chip.reset { border-style: dashed; color: var(--text-secondary); }
+  .chip.reset.armed { border-style: solid; border-color: var(--critical); color: var(--text-primary); }
+  .resetmsg { font-size: 13px; color: var(--text-secondary); display: inline-flex; gap: 8px; align-items: center; }
+  .linkbtn { background: none; border: 0; padding: 4px; font: inherit; font-size: 13px; font-weight: 600; color: var(--series-1); text-decoration: underline; cursor: pointer; }
+  .pre { display: inline-block; flex: none; width: 0.9em; text-align: right; }
+  .suf { display: inline-block; flex: none; width: 1.9em; }
+  .row .fmtamt { grid-column: 2; text-align: right; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; margin: 1px 1.9em 0 0; }
   details.group { border-top: 1px solid var(--grid); padding: 10px 0 4px; }
-  details.group:first-of-type { border-top: 0; }
   details.group > summary { cursor: pointer; font-weight: 600; padding: 2px 0 8px; list-style-position: inside; }
-  .row { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; margin: 0 0 12px; }
-  .row label { color: var(--text-secondary); font-size: 13px; }
-  .row output { font-weight: 600; font-size: 13px; }
-  .row input[type=range] { grid-column: 1 / -1; width: 100%; margin: 4px 0 0; accent-color: var(--series-1); }
-  .row .hint { grid-column: 1 / -1; font-size: 12px; color: var(--text-muted); }
-  .reset { margin: 8px 0 4px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--axis);
-           background: transparent; color: var(--text-primary); cursor: pointer; font: inherit; font-size: 13px; }
-  .reset:hover { background: var(--grid); }
+  .row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0 8px; margin: 0 0 14px; align-items: center; }
+  .row label { color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
+  .num { display: inline-flex; align-items: center; gap: 3px; font-size: 13px; color: var(--text-secondary); }
+  .num input { width: 7.6em; max-width: 100%; padding: 4px 6px; font: inherit; font-weight: 600; text-align: right;
+               color: var(--text-primary); background: transparent; border: 1px solid var(--axis); border-radius: 6px; }
+  .row input[type=range] { grid-column: 1 / -1; width: 100%; margin: 6px 0 0; accent-color: var(--series-1); }
+  .row .hint { grid-column: 1 / -1; font-size: 12px; color: var(--text-muted); margin-top: 2px; overflow-wrap: anywhere; }
 
   .results { display: grid; gap: 16px; min-width: 0; }
-  .hero { padding: 20px 22px; }
+  .hero { padding: 18px 22px; }
+  .verdict { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; margin: 0 0 14px; border-radius: 8px;
+             border: 1px solid var(--border); border-left: 5px solid var(--good); font-size: 16px; font-weight: 600; line-height: 1.35; }
+  .verdict.warn { border-left-color: var(--warning); }
+  .verdict.bad  { border-left-color: var(--critical); }
+  .verdict .icon { margin-top: 1px; flex: none; }
   .hero .label { color: var(--text-secondary); font-size: 14px; }
   .hero .value { font-size: 56px; font-weight: 650; line-height: 1.1; margin: 2px 0; }
   .hero .note { color: var(--text-secondary); font-size: 14px; }
+  .delta { font-size: 12px; color: var(--text-secondary); min-height: 0; }
+  .delta:empty { display: none; }
   .tiles { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; }
-  @media (max-width: 700px) { .tiles { grid-template-columns: 1fr; } }
+  @media (max-width: 700px) { .tiles { grid-template-columns: minmax(0,1fr); } .hero .value { font-size: 44px; } .hero { padding: 16px; } }
   .tile { padding: 14px 16px; }
   .tile .label { color: var(--text-secondary); font-size: 13px; }
   .tile .value { font-size: 26px; font-weight: 650; margin: 2px 0; }
   .tile .note { color: var(--text-secondary); font-size: 13px; }
   .status { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; font-weight: 600; margin-top: 2px; }
-  .status .icon { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
-                  font-size: 11px; font-weight: 800; color: #fff; }
-  .status.good .icon { background: var(--good); }
-  .status.warn .icon { background: var(--warning); color: #0b0b0b; }
-  .status.bad  .icon { background: var(--critical); }
+  .icon { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+          font-size: 11px; font-weight: 800; color: #fff; }
+  .good .icon { background: var(--good); }
+  .warn .icon { background: var(--warning); color: #0b0b0b; }
+  .bad  .icon { background: var(--critical); }
 
   .chartcard { padding: 14px 16px 10px; }
   .chartcard h2 { margin: 0; font-size: 16px; font-weight: 650; }
@@ -91,7 +129,11 @@
   .chart { position: relative; }
   svg { display: block; width: 100%; height: auto; overflow: visible; }
   svg text { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--text-muted); }
-  svg .evt { fill: var(--text-secondary); }
+  @media (max-width: 600px) { svg text { font-size: 13px; } svg .endlabel { font-size: 14px; } .chartcard { padding: 12px 10px 8px; } }
+  .ring { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--text-primary); }
+  .tablewrap { overflow-x: auto; }
+  svg .evt { fill: var(--text-secondary); stroke: var(--surface-1); stroke-width: 3px; paint-order: stroke; }
+  svg .tight { fill: var(--text-primary); font-weight: 650; stroke: var(--surface-1); stroke-width: 3px; paint-order: stroke; }
   svg .endlabel { fill: var(--text-primary); font-weight: 650; font-size: 13px; }
   svg:focus-visible { outline: 2px solid var(--series-1); outline-offset: 4px; border-radius: 4px; }
   .tooltip { position: absolute; top: 6px; pointer-events: none; min-width: 190px; padding: 8px 10px;
@@ -103,7 +145,7 @@
   .tooltip .trow span.n { color: var(--text-secondary); text-align: right; }
   details.tableview { margin-top: 8px; border-top: 1px solid var(--grid); padding-top: 8px; }
   details.tableview summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 8px; }
+  table { border-collapse: collapse; width: 100%; min-width: 440px; font-size: 13px; margin-top: 8px; }
   th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
   th:first-child, td:first-child { text-align: left; }
   th { color: var(--text-secondary); font-weight: 600; }
@@ -114,16 +156,24 @@
 <header>
   <h1>House &amp; wedding planner</h1>
   <p class="sub">Move the sliders to see how savings, a wedding, a house purchase and a child change net worth over the next 10 years.</p>
-  <p class="privacy">Everything you enter stays in this browser tab. Nothing is saved, sent anywhere, or put in the address bar. The starting values are generic placeholders.</p>
 </header>
+
+<div class="stickybar" id="sticky" aria-label="Summary">
+  <div class="sbin" id="sbin">
+    <div><span class="sl">Net worth in 10 yrs</span><strong id="sb-value">–</strong><span class="sbd" id="sb-delta"></span></div>
+    <div class="status" id="sb-status"></div>
+  </div>
+</div>
 
 <div class="layout">
   <aside class="card controls" id="controls" aria-label="Assumptions"></aside>
 
   <section class="results">
     <div class="card hero">
+      <div class="verdict" id="verdict" role="status"></div>
       <div class="label">Net worth in 10 years</div>
       <div class="value" id="hero-value">–</div>
+      <div class="delta" id="d-hero"></div>
       <div class="note" id="hero-note"></div>
     </div>
 
@@ -131,16 +181,19 @@
       <div class="card tile">
         <div class="label">Cash needed to buy</div>
         <div class="value" id="t-cash">–</div>
+        <div class="delta" id="d-cash"></div>
         <div class="note" id="t-cash-note"></div>
       </div>
       <div class="card tile">
         <div class="label">Monthly housing cost</div>
         <div class="value" id="t-month">–</div>
+        <div class="delta" id="d-month"></div>
         <div class="note" id="t-month-note"></div>
       </div>
       <div class="card tile">
-        <div class="label">Lowest liquid cash after buying</div>
+        <div class="label">Lowest liquid cash (next 10 yrs)</div>
         <div class="value" id="t-low">–</div>
+        <div class="delta" id="d-low"></div>
         <div class="status" id="t-status"></div>
         <div class="note" id="t-low-note"></div>
       </div>
@@ -156,47 +209,53 @@
       </div>
       <details class="tableview">
         <summary>Table view</summary>
-        <table id="table"></table>
+        <div class="tablewrap"><table id="table"></table></div>
       </details>
       <p class="fine">Simplified model for planning, not advice. Savings grow at the return you set; a house is bought at today's price grown by appreciation; housing cost = mortgage + property tax + insurance + 1% a year maintenance, replacing your current rent. Retirement and other assets grow at the same return with no new contributions.</p>
     </div>
   </section>
 </div>
+<footer><p class="privacy">Everything you enter stays in this browser tab. Nothing is saved, sent anywhere, or put in the address bar. The starting values are generic placeholders.</p></footer>
 
 <script>
 'use strict';
 const MONTHS = 120;
 
 /* ---------- inputs (placeholders only; nothing is persisted) ---------- */
+/* Essentials first, in the order people think: income, wedding, house, child (time order); assumptions last. */
 const CONFIG = [
-  { group: 'Today', items: [
-    { id: 'liquid', label: 'Liquid savings',          min: 0,    max: 2000000, step: 10000, value: 250000, kind: 'money' },
-    { id: 'retire', label: 'Retirement & other',      min: 0,    max: 3000000, step: 10000, value: 300000, kind: 'money' },
-    { id: 'save',   label: 'Monthly savings',         min: 0,    max: 40000,   step: 500,   value: 8000,   kind: 'money' },
-    { id: 'take',   label: 'Take-home pay / month',   min: 5000, max: 60000,   step: 500,   value: 20000,  kind: 'money' },
-    { id: 'rent',   label: 'Current rent / month',    min: 0,    max: 8000,    step: 100,   value: 3000,   kind: 'money' },
-    { id: 'ret',    label: 'Return on savings / yr',  min: 0,    max: 8,       step: 0.5,   value: 4,      kind: 'pct' }
+  { group: 'Income & savings', items: [
+    { id: 'liquid', label: 'Liquid savings today',    min: 0,    max: 2000000, step: 10000, value: 250000, kind: 'money', hint: 'Cash and easy-to-sell savings you could use.' },
+    { id: 'save',   label: 'Monthly savings',         min: 0,    max: 40000,   step: 500,   value: 8000,   kind: 'money', hint: 'What you set aside each month from take-home pay.' },
+    { id: 'take',   label: 'Take-home pay / month',   min: 5000, max: 60000,   step: 500,   value: 20000,  kind: 'money', lo: 1, hint: 'After tax, what lands in your account.' },
+    { id: 'rent',   label: 'Current rent / month',    min: 0,    max: 8000,    step: 100,   value: 3000,   kind: 'money', hint: 'Stops when you buy.' }
   ]},
   { group: 'Wedding', items: [
-    { id: 'wed',  label: 'Wedding budget',   min: 0, max: 400000, step: 5000, value: 80000, kind: 'money' },
+    { id: 'wed',  label: 'Wedding budget',     min: 0, max: 400000, step: 5000, value: 80000, kind: 'money' },
     { id: 'wedm', label: 'Wedding happens in', min: 0, max: MONTHS, step: 1, value: 12, kind: 'months' }
   ]},
   { group: 'House', items: [
-    { id: 'price', label: 'Price (in today\'s dollars)', min: 400000, max: 3000000, step: 25000, value: 1000000, kind: 'money' },
-    { id: 'down',  label: 'Down payment',        min: 3,  max: 40, step: 1,     value: 20,  kind: 'pct0' },
-    { id: 'close', label: 'Closing costs',       min: 2,  max: 5,  step: 0.5,   value: 3,   kind: 'pct' },
-    { id: 'rate',  label: 'Mortgage rate (30-yr)', min: 4, max: 9, step: 0.125, value: 6.5, kind: 'pct3' },
-    { id: 'tax',   label: 'Property tax per $1,000', min: 8, max: 20, step: 0.1, value: 12, kind: 'plain1' },
-    { id: 'ins',   label: 'Insurance / month',   min: 100, max: 600, step: 25,   value: 250, kind: 'money' },
-    { id: 'appr',  label: 'Home appreciation / yr', min: 0, max: 6, step: 0.5,   value: 3,   kind: 'pct' },
-    { id: 'furn',  label: 'Furnishing & early repairs', min: 0, max: 100000, step: 5000, value: 30000, kind: 'money' },
-    { id: 'buym',  label: 'Buy in',              min: 0, max: MONTHS, step: 1,  value: 24,  kind: 'months' }
+    { id: 'price', label: 'House price (today\'s dollars)', min: 400000, max: 3000000, step: 25000, value: 850000, kind: 'money', hint: 'Grows with appreciation until you buy.' },
+    { id: 'buym',  label: 'Buy in',  min: 0, max: MONTHS, step: 1, value: 24, kind: 'months' }
   ]},
   { group: 'Child', items: [
     { id: 'childm', label: 'Child arrives in',    min: 0, max: MONTHS, step: 1, value: 36, kind: 'months' },
-    { id: 'childc', label: 'Cost / month (0 = none)', min: 0, max: 6000, step: 100, value: 2500, kind: 'money' }
+    { id: 'childc', label: 'Cost / month (0 = none)', min: 0, max: 6000, step: 100, value: 2500, kind: 'money', hint: 'Extra monthly spending once the child arrives.' }
+  ]},
+  { group: 'Advanced assumptions', advanced: true, items: [
+    { id: 'down',  label: 'Down payment',          min: 3,  max: 40, step: 1,     value: 20,  kind: 'pct0', hint: 'Share of the price you pay up front.' },
+    { id: 'rate',  label: 'Mortgage rate (30-yr)', min: 4, max: 9, step: 0.125, value: 6.5, kind: 'pct3', hint: 'Yearly interest charged on the loan.' },
+    { id: 'close', label: 'Closing costs',         min: 2,  max: 5,  step: 0.5,   value: 3,   kind: 'pct', hi: 20, hint: 'One-time fees to finish the purchase, as a share of the price.' },
+    { id: 'tax',   label: 'Property tax per $1,000', min: 8, max: 20, step: 0.1, value: 12, kind: 'plain1', hint: 'Yearly tax per $1,000 of home value (12 = 1.2% a year).' },
+    { id: 'ins',   label: 'Insurance / month',     min: 100, max: 600, step: 25,   value: 250, kind: 'money', hint: 'Homeowner\'s insurance, per month.' },
+    { id: 'appr',  label: 'Home appreciation / yr', min: 0, max: 6, step: 0.5,   value: 3,   kind: 'pct', hi: 20, hint: 'How much the home\'s price rises each year, on average.' },
+    { id: 'furn',  label: 'Furnishing & early repairs', min: 0, max: 100000, step: 5000, value: 30000, kind: 'money', hint: 'One-time spend right after you buy.' },
+    { id: 'ret',    label: 'Return on savings / yr', min: 0,   max: 8,       step: 0.5,   value: 4,      kind: 'pct', hint: 'Average yearly growth of your savings and investments.' },
+    { id: 'retire', label: 'Retirement & other',      min: 0,   max: 3000000, step: 10000, value: 300000, kind: 'money', hint: '401(k), IRA and similar accounts. They grow but get no new deposits here.' }
   ]}
 ];
+const HARD = { money: [0, 1e9], pct: [0, 30], pct0: [0, 100], pct3: [0, 30], plain1: [0, 100], months: [0, MONTHS] };
+CONFIG.forEach(g => g.items.forEach(i => { i.lo = i.lo ?? HARD[i.kind][0]; i.hi = i.hi ?? HARD[i.kind][1]; }));
 const DEFAULTS = Object.fromEntries(CONFIG.flatMap(g => g.items.map(i => [i.id, i.value])));
 const state = { ...DEFAULTS };
 
@@ -223,13 +282,22 @@ function fmt(kind, v) {
     case 'months': return monthsText(v);
   }
 }
+const yrText = m => m === 0 ? 'now' : 'Yr ' + (+(m / 12).toFixed(1));
+const monthHelp = m => m === 0 ? 'Right now (month 0)' : '= ' + yrText(m) + ' \u00b7 month ' + m + ' from now';
+function numText(kind, v) {
+  if (kind === 'months') return String(Math.round(v));
+  if (kind === 'pct3') return String(+v.toFixed(3));
+  if (kind === 'money') return String(Math.round(v));
+  return String(+v.toFixed(2));
+}
+const PREFIX = { money: '$', plain1: '$' }, SUFFIX = { pct: '%', pct0: '%', pct3: '%', months: 'mo' };
 
 /* ---------- model ---------- */
 function compute(v) {
   const r = v.ret / 100 / 12, appr = Math.pow(1 + v.appr / 100, 1 / 12);
   const i = v.rate / 1200;
   let liquid = v.liquid, retire = v.retire, value = 0, loan = 0, pmt = 0, bought = false;
-  let cash = 0, housingAtBuy = 0, priceAtBuy = 0, lowAfter = Infinity, loanAtBuy = 0;
+  let cash = 0, housingAtBuy = 0, priceAtBuy = 0, lowAfter = Infinity, lowMonth = -1, loanAtBuy = 0;   // lowAfter = minimum over the WHOLE horizon
   const out = { m: [], liquid: [], equity: [], retire: [], total: [] };
   for (let m = 0; m <= MONTHS; m++) {
     if (m === v.wedm) liquid -= v.wed;
@@ -242,7 +310,7 @@ function compute(v) {
       pmt = i === 0 ? loan / 360 : loan * i / (1 - Math.pow(1 + i, -360));
       housingAtBuy = pmt + value * v.tax / 1000 / 12 + v.ins + value * 0.01 / 12;
     }
-    if (bought) lowAfter = Math.min(lowAfter, liquid);
+    if (liquid < lowAfter) { lowAfter = liquid; lowMonth = m; }
     out.m.push(m); out.liquid.push(liquid); out.retire.push(retire);
     out.equity.push(value - loan); out.total.push(liquid + retire + value - loan);
     if (m < MONTHS) {
@@ -254,10 +322,11 @@ function compute(v) {
       retire *= 1 + r;
     }
   }
-  const spend = Math.max(0, v.take - v.save);
+  // realistic monthly spending once the house and child both apply: living costs, housing change, child cost
+  const spend = Math.max(0, Math.max(0, v.take - v.save) + (housingAtBuy - v.rent) + Math.max(0, v.childc));
   const events = [{ m: v.wedm, name: 'Wedding' }, { m: v.buym, name: 'House' }];
   if (v.childc > 0) events.push({ m: v.childm, name: 'Child' });
-  return { ...out, cash, housingAtBuy, priceAtBuy, loanAtBuy, lowAfter, reserve: 6 * spend, events };
+  return { ...out, cash, housingAtBuy, priceAtBuy, loanAtBuy, lowAfter, lowMonth, reserve: 6 * spend, events };
 }
 
 /* ---------- DOM helpers ---------- */
@@ -278,34 +347,121 @@ function h(tag, cls, text) {
 
 /* ---------- controls ---------- */
 const outputs = {};
+let base = null, lastTouched = null, lastChild = DEFAULTS.childc;   // snapshot for "vs before" deltas
+function metrics() { return { nw: model.total[MONTHS], cash: model.cash, month: model.housingAtBuy, low: model.lowAfter }; }
+function touch(key) { if (lastTouched !== key) { base = metrics(); lastTouched = key; } }
+
+function setValue(id, v, skipNum) {
+  const o = outputs[id], it = o.it;
+  v = Math.min(it.hi, Math.max(it.lo, v));
+  state[id] = v;
+  // widen the slider to fit typed values; shrinks back to the original range when the value fits
+  o.inp.min = Math.min(it.min, Math.floor(v / it.step) * it.step);
+  o.inp.max = Math.max(it.max, Math.ceil(v / it.step) * it.step);
+  o.inp.value = v;
+  if (!skipNum) o.num.value = numText(it.kind, v);
+  if (o.hint && it.kind === 'months') o.hint.textContent = monthHelp(v);
+}
+
+const PRESETS = [
+  { name: 'Buy a year sooner', set: () => ({ buym: state.buym - 12 }) },
+  { name: 'Buy a year later',  set: () => ({ buym: state.buym + 12 }) },
+  { name: 'Bigger wedding',    set: () => ({ wed: state.wed > 0 ? Math.round(state.wed * 1.5 / 5000) * 5000 : 50000 }) },
+  { name: 'No child',          toggle: true, set: () => ({ childc: state.childc > 0 ? 0 : (lastChild || 2500) }) }
+];
+
+let toggleBtn = null;
 function buildControls() {
   const root = $('controls');
+  const chips = h('div', 'chips'); chips.setAttribute('role', 'group'); chips.setAttribute('aria-label', 'Quick scenarios');
+  PRESETS.forEach(p => {
+    const b = h('button', 'chip', p.name); b.type = 'button';
+    if (p.toggle) { b.setAttribute('aria-pressed', 'false'); toggleBtn = b; }
+    b.addEventListener('click', () => {
+      lastTouched = null; touch('preset:' + p.name);
+      const ch = p.set(); for (const k in ch) setValue(k, ch[k]);
+      render();
+    });
+    chips.appendChild(b);
+  });
+  root.appendChild(chips);
+
   CONFIG.forEach(g => {
-    const d = h('details', 'group'); d.open = true;
-    d.appendChild(h('summary', '', g.group));
+    const d = h('details', 'group'); d.open = !g.advanced;
+    d.appendChild(h('summary', '', g.advanced ? g.group + ' (' + g.items.length + ')' : g.group));
     g.items.forEach(it => {
       const row = h('div', 'row');
-      const lab = h('label', '', it.label); lab.htmlFor = 'in-' + it.id;
-      const out = h('output', '', fmt(it.kind, it.value)); out.htmlFor = 'in-' + it.id;
+      const lab = h('label', '', it.label); lab.htmlFor = 'num-' + it.id;
+      const box = h('span', 'num');
+      box.appendChild(h('span', 'pre', PREFIX[it.kind] || ''));
+      const num = h('input'); num.type = 'number'; num.id = 'num-' + it.id; num.inputMode = 'decimal';
+      num.min = it.lo; num.max = it.hi; num.step = it.step; num.value = numText(it.kind, it.value);
+      box.appendChild(num);
+      box.appendChild(h('span', 'suf', SUFFIX[it.kind] || ''));
+      const fmtEl = it.kind === 'money' ? h('div', 'fmtamt') : null;
       const inp = h('input'); inp.type = 'range'; inp.id = 'in-' + it.id;
       inp.min = it.min; inp.max = it.max; inp.step = it.step; inp.value = it.value;
-      inp.addEventListener('input', () => { state[it.id] = parseFloat(inp.value); out.textContent = fmt(it.kind, state[it.id]); render(); });
-      outputs[it.id] = { inp, out, it };
-      row.append(lab, out, inp); d.appendChild(row);
+      inp.setAttribute('aria-label', it.label + ' (slider)');
+      let hint = null;
+      if (it.kind === 'months') hint = h('div', 'hint', monthHelp(it.value));
+      else if (it.hint) hint = h('div', 'hint', it.hint);
+      outputs[it.id] = { inp, num, it, hint, fmtEl };
+      inp.addEventListener('input', () => {
+        touch(it.id); state[it.id] = parseFloat(inp.value);
+        num.value = numText(it.kind, state[it.id]);
+        if (hint && it.kind === 'months') hint.textContent = monthHelp(state[it.id]);
+        render();
+      });
+      num.addEventListener('input', () => {
+        let v = parseFloat(num.value); if (isNaN(v)) return;
+        if (it.kind === 'months') v = Math.round(v);
+        touch(it.id); setValue(it.id, v, true); render();
+      });
+      const norm = () => { num.value = numText(it.kind, state[it.id]); };
+      num.addEventListener('change', norm);
+      num.addEventListener('keydown', e => { if (e.key === 'Enter') norm(); });
+      row.append(lab, box); if (fmtEl) row.appendChild(fmtEl); row.appendChild(inp); if (hint) row.appendChild(hint);
+      d.appendChild(row);
     });
     root.appendChild(d);
   });
-  const reset = h('button', 'reset', 'Reset to placeholders'); reset.type = 'button';
+
+  // Reset lives at the bottom, away from the chips; needs a second click, then offers Undo.
+  const rr = h('div', 'resetrow');
+  const reset = h('button', 'chip reset', 'Reset to placeholders'); reset.type = 'button';
+  const msg = h('span', 'resetmsg'); msg.setAttribute('role', 'status');
+  let armTimer = 0, undoTimer = 0, snapshot = null;
+  const disarm = () => { clearTimeout(armTimer); reset.classList.remove('armed'); reset.textContent = 'Reset to placeholders'; };
   reset.addEventListener('click', () => {
-    for (const k in outputs) { const o = outputs[k]; state[k] = DEFAULTS[k]; o.inp.value = DEFAULTS[k]; o.out.textContent = fmt(o.it.kind, DEFAULTS[k]); }
-    render();
+    if (!reset.classList.contains('armed')) {
+      reset.classList.add('armed'); reset.textContent = 'Click again to reset everything';
+      msg.replaceChildren(); armTimer = setTimeout(disarm, 4000); return;
+    }
+    disarm();
+    snapshot = { ...state };
+    for (const k in outputs) setValue(k, DEFAULTS[k]);
+    base = null; lastTouched = null; render();
+    const undo = h('button', 'linkbtn', 'Undo'); undo.type = 'button';
+    undo.addEventListener('click', () => {
+      for (const k in snapshot) setValue(k, snapshot[k]);
+      base = null; lastTouched = null; clearTimeout(undoTimer); msg.textContent = 'Your values are back.'; render();
+    });
+    msg.replaceChildren(document.createTextNode('Values reset to placeholders.'), undo);
+    clearTimeout(undoTimer); undoTimer = setTimeout(() => { msg.replaceChildren(); snapshot = null; }, 12000);
   });
-  root.appendChild(reset);
+  rr.append(reset, msg);
+  root.appendChild(rr);
 }
 
 /* ---------- chart ---------- */
-const W = 820, H = 380, M = { l: 62, r: 78, t: 50, b: 34 };
-const PW = W - M.l - M.r, PH = H - M.t - M.b;
+let W = 820, H = 380, M = { l: 62, r: 78, t: 50, b: 34 }, PW = 0, PH = 0, narrow = false;
+function layoutChart() {
+  const cw = $('chart').clientWidth || 820;
+  narrow = cw < 560;
+  W = cw; H = narrow ? 330 : 380;
+  M = narrow ? { l: 50, r: 58, t: 50, b: 32 } : { l: 62, r: 78, t: 50, b: 34 };
+  PW = W - M.l - M.r; PH = H - M.t - M.b;
+}
 const SERIES = [
   { key: 'total',  name: 'Total net worth (incl. retirement)', css: '--series-1' },
   { key: 'liquid', name: 'Liquid savings',                     css: '--series-2' },
@@ -323,7 +479,8 @@ function niceTicks(lo, hi) {
 const X = m => M.l + (m / MONTHS) * PW;
 
 function drawChart() {
-  const svg = $('svg'); svg.replaceChildren();
+  layoutChart();
+  const svg = $('svg'); svg.replaceChildren(); svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
   const all = SERIES.flatMap(x => model[x.key]);
   const { ticks, lo, hi } = niceTicks(Math.min(0, ...all), Math.max(...all));
   const Y = v => M.t + (1 - (v - lo) / (hi - lo)) * PH;
@@ -332,15 +489,19 @@ function drawChart() {
     svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t), stroke: t === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
     svg.appendChild(s('text', { x: M.l - 8, y: Y(t) + 4, 'text-anchor': 'end' }, money(t)));
   });
-  for (let yr = 0; yr <= 10; yr++) {
+  for (let yr = 0; yr <= 10; yr += narrow ? 2 : 1) {
     svg.appendChild(s('text', { x: X(yr * 12), y: H - 10, 'text-anchor': 'middle' }, yr === 0 ? 'Now' : 'Yr ' + yr));
   }
 
   // event markers, labels staggered across three rows so they never collide
+  // narrow: short names, 3 rows at 15px; labels are clamped inside the plot so none is clipped
+  const rowH = narrow ? 15 : 14;
   [...model.events].sort((a, b) => a.m - b.m).forEach((e, idx) => {
-    const x = X(e.m), y = 12 + (idx % 3) * 13, right = x > W - M.r - 90;
+    const x = X(e.m), y = 12 + (idx % 3) * rowH;
+    const right = x > W - M.r - (narrow ? 62 : 90);
     svg.appendChild(s('line', { x1: x, x2: x, y1: y + 4, y2: M.t + PH, stroke: 'var(--axis)', 'stroke-width': 1 }));
-    svg.appendChild(s('text', { x: right ? x - 4 : x + 4, y: y + 3, 'text-anchor': right ? 'end' : 'start', class: 'evt' }, e.name + ' · ' + monthsText(e.m)));
+    // halo keeps text legible where it crosses a neighbouring marker line
+    svg.appendChild(s('text', { x: right ? x - 4 : x + 4, y: y + 3, 'text-anchor': right ? 'end' : 'start', class: 'evt' }, narrow ? e.name : e.name + ' · ' + monthsText(e.m)));
   });
 
   // soft wash under total, then 2px lines
@@ -355,6 +516,15 @@ function drawChart() {
   // end dots with a 2px surface ring; label only the headline series
   SERIES.forEach(x => svg.appendChild(s('circle', { cx: X(MONTHS), cy: Y(model[x.key][MONTHS]), r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2 })));
   svg.appendChild(s('text', { x: X(MONTHS) + 10, y: Y(model.total[MONTHS]) + 4, class: 'endlabel' }, money(model.total[MONTHS])));
+
+  // tightest-month marker: ring on the liquid line plus a label
+  if (model.lowMonth >= 0) {
+    const tm = model.lowMonth, tx = X(tm), ty = Y(model.liquid[tm]);
+    svg.appendChild(s('circle', { cx: tx, cy: ty, r: 7, fill: 'none', stroke: 'var(--text-primary)', 'stroke-width': 2 }));
+    const edge = tx < M.l + 40 ? 'start' : tx > W - M.r - 40 ? 'end' : 'middle';
+    const above = ty - 14 > M.t + 8;
+    svg.appendChild(s('text', { x: edge === 'start' ? tx - 6 : edge === 'end' ? tx + 6 : tx, y: above ? ty - 13 : ty + 22, 'text-anchor': edge, class: 'tight' }, 'Tightest month'));
+  }
 
   // hover layer
   const cross = s('line', { y1: M.t, y2: M.t + PH, stroke: 'var(--text-muted)', 'stroke-width': 1, visibility: 'hidden' });
@@ -376,6 +546,7 @@ function drawChart() {
       tip.appendChild(row);
     });
     const ev = model.events.filter(e => e.m === m).map(e => e.name);
+    if (m === model.lowMonth) ev.push('Tightest month');
     if (ev.length) tip.appendChild(h('div', 'when', 'Event: ' + ev.join(', ')));
     tip.style.display = 'block';
     const box = $('chart').getBoundingClientRect(), px = (x / W) * box.width;
@@ -404,6 +575,7 @@ function drawLegend() {
     const li = h('li'), key = h('span', 'key'); key.style.borderTopColor = 'var(' + sr.css + ')';
     li.append(key, document.createTextNode(sr.name)); ul.appendChild(li);
   });
+  const lt = h('li'); lt.append(h('span', 'ring'), document.createTextNode('Tightest month (lowest liquid cash)')); ul.appendChild(lt);
 }
 
 function drawTable() {
@@ -419,37 +591,81 @@ function drawTable() {
 }
 
 /* ---------- summary tiles ---------- */
+function deltaText(d, f) {
+  if (!base || Math.abs(d) < 0.5) return '';
+  const txt = f(Math.abs(d));
+  if (txt === '$0') return '';
+  return (d > 0 ? '\u25b2 +' : '\u25bc \u2212') + txt + ' vs before';
+}
 function drawSummary(v) {
   const start = v.liquid + v.retire;
   $('hero-value').textContent = money(model.total[MONTHS]);
   $('hero-note').textContent = 'Up from ' + money(start) + ' today, including home equity of ' + money(model.equity[MONTHS]) + '.';
+  $('d-hero').textContent = base ? deltaText(model.total[MONTHS] - base.nw, money) : '';
+  $('d-cash').textContent = base ? deltaText(model.cash - base.cash, money) : '';
+  $('d-month').textContent = base ? deltaText(model.housingAtBuy - base.month, money) : '';
+  $('d-low').textContent = base ? deltaText(model.lowAfter - base.low, money) : '';
 
   $('t-cash').textContent = moneyFull(model.cash);
   $('t-cash-note').textContent = 'Down payment + closing + furnishing on a ' + money(model.priceAtBuy) + ' home bought in ' + monthsText(v.buym) + '.';
 
   $('t-month').textContent = moneyFull(model.housingAtBuy);
-  const pct = model.housingAtBuy / v.take * 100;
-  $('t-month-note').textContent = pct.toFixed(0) + '% of take-home; ' + (model.housingAtBuy - v.rent >= 0 ? moneyFull(model.housingAtBuy - v.rent) + ' more' : moneyFull(v.rent - model.housingAtBuy) + ' less') + ' than current rent.';
+  const pct = model.housingAtBuy / Math.max(1, v.take) * 100;
+  $('t-month-note').textContent = v.rate + '% rate, ' + v.down + '% down. ' + pct.toFixed(0) + '% of take-home; ' + (model.housingAtBuy - v.rent >= 0 ? moneyFull(model.housingAtBuy - v.rent) + ' more' : moneyFull(v.rent - model.housingAtBuy) + ' less') + ' than current rent.';
 
-  const low = model.lowAfter;
+  const low = model.lowAfter, when = yrText(model.lowMonth);
+  const early = model.lowMonth < v.buym;
+  const where = early ? 'before the purchase' : 'after buying';
   $('t-low').textContent = moneyFull(low);
+  const tightS = ' Tightest month: ' + when + ' (' + where + '), ' + money(low) + '.';
+  const incons = v.save > v.take, heavy = pct > 35;
+  let level = 0, parts = [], txt;
+  if (low < 0) { level = 2; txt = 'Short: cash runs out';
+    parts.push('This does not work yet: cash runs out ' + (early ? 'before the purchase, ' : 'after buying, ') + 'around ' + when + '.'); }
+  else if (low < model.reserve) { level = 1; txt = 'Below a 6-month reserve';
+    parts.push('This is tight: cash dips below a 6-month reserve (about ' + money(model.reserve) + ').'); }
+  if (incons) { level = Math.max(level, 1); if (!txt) txt = 'Check your inputs';
+    parts.push('Your monthly savings (' + moneyFull(v.save) + ') are more than your take-home (' + moneyFull(v.take) + '), so these numbers do not add up. Check them.'); }
+  if (heavy) { level = Math.max(level, 1); if (!txt) txt = 'Housing is over 35% of take-home';
+    parts.push('Housing would take ' + pct.toFixed(0) + '% of take-home, above the usual 35% guide.'); }
+  if (!parts.length) { txt = 'Above a 6-month reserve'; parts.push('You can afford this: cash stays above a 6-month reserve.'); }
+  const cls = ['good', 'warn', 'bad'][level], icon = ['✓', '!', '✕'][level], word = ['Comfortable', 'Tight', 'Short'][level];
+  const verdict = parts.join(' ') + tightS;
   const st = $('t-status'); st.replaceChildren();
-  let cls, icon, txt;
-  if (low < 0)                     { cls = 'bad';  icon = '✕'; txt = 'Short: cash runs out'; }
-  else if (low < model.reserve)    { cls = 'warn'; icon = '!';      txt = 'Below a 6-month reserve'; }
-  else                             { cls = 'good'; icon = '✓'; txt = 'Above a 6-month reserve'; }
   st.className = 'status ' + cls;
   st.append(h('span', 'icon', icon), h('span', '', txt));
-  $('t-low-note').textContent = '6 months of spending is about ' + moneyFull(model.reserve) + ' (take-home minus savings).';
+  $('t-low-note').textContent = 'Lowest point: ' + when + ' (' + where + '). A 6-month reserve is about ' + moneyFull(model.reserve) + ': take-home minus savings, plus housing cost over rent and child cost.';
+
+  const vb = $('verdict'); vb.replaceChildren(); vb.className = 'verdict ' + cls;
+  vb.append(h('span', 'icon', icon), h('span', '', verdict));
+
+  $('sb-value').textContent = money(model.total[MONTHS]);
+  $('sb-delta').textContent = base ? deltaText(model.total[MONTHS] - base.nw, money) : '';
+  const sb = $('sb-status'); sb.replaceChildren(); sb.className = 'status ' + cls;
+  sb.append(h('span', 'icon', icon), h('span', '', word + ' · lowest cash ' + money(low) + ' (' + when + ')'));
 }
 
 function render() {
+  if (state.childc > 0) lastChild = state.childc;
   model = compute(state);
+  if (toggleBtn) toggleBtn.setAttribute('aria-pressed', String(state.childc === 0));
+  for (const k in outputs) { const o = outputs[k]; if (o.fmtEl) o.fmtEl.textContent = moneyFull(state[k]); }
   drawSummary(state); drawChart(); drawTable();
-  $('svg').setAttribute('aria-label', 'Net worth chart. Today ' + moneyFull(model.total[0]) + ', in 10 years ' + moneyFull(model.total[MONTHS]) + '.');
+  $('svg').setAttribute('aria-label', 'Net worth chart. Tightest month: ' + yrText(model.lowMonth) + '. Today ' + moneyFull(model.total[0]) + ', in 10 years ' + moneyFull(model.total[MONTHS]) + '.');
 }
 
 buildControls(); drawLegend(); render();
+if ('IntersectionObserver' in window) {   // on narrow screens the summary bar appears only once the hero has scrolled away
+  new IntersectionObserver(es => {
+    const e = es[es.length - 1];
+    $('sbin').classList.toggle('show', !e.isIntersecting && e.boundingClientRect.top < 0);
+  }, { rootMargin: '-8px 0px 0px 0px' }).observe(document.querySelector('.hero'));
+} else $('sbin').classList.add('show');
+let rz = 0, lastW = $('chart').clientWidth;
+window.addEventListener('resize', () => {
+  cancelAnimationFrame(rz);
+  rz = requestAnimationFrame(() => { const w = $('chart').clientWidth; if (w !== lastW) { lastW = w; drawChart(); } });
+});
 </script>
 </body>
 </html>
