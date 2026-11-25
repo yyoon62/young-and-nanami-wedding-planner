@@ -154,7 +154,7 @@
   @media (max-width: 600px) { svg text { font-size: 13px; } svg .endlabel { font-size: 14px; } .chartcard { padding: 12px 10px 8px; } }
   .ring { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--text-primary); }
   .tablewrap { overflow-x: auto; }
-  svg .evt { fill: var(--text-secondary); stroke: var(--surface-1); stroke-width: 3px; paint-order: stroke; }
+  svg .evt { fill: var(--text-primary); font-size: 12.5px; font-weight: 600; }
   svg .tight { fill: var(--text-primary); font-weight: 650; stroke: var(--surface-1); stroke-width: 3px; paint-order: stroke; }
   svg .endlabel { fill: var(--text-primary); font-weight: 650; font-size: 13px; }
   svg:focus-visible { outline: 2px solid var(--series-1); outline-offset: 4px; border-radius: 4px; }
@@ -368,8 +368,8 @@ function compute(v) {
   }
   // realistic monthly spending once the house and child both apply: living costs, housing change, child cost
   const spend = Math.max(0, Math.max(0, v.take - v.save) + (housingAtBuy - v.rent) + Math.max(0, v.childc));
-  const events = [{ m: v.wedm, name: 'Wedding' }, { m: v.buym, name: 'House' }];
-  if (v.childc > 0) events.push({ m: v.childm, name: 'Child' });
+  const events = [{ m: v.wedm, name: 'Wedding', detail: '\u2212' + money(v.wed) }, { m: v.buym, name: 'House', detail: '\u2212' + money(cash) + ' cash' }];
+  if (v.childc > 0) events.push({ m: v.childm, name: 'Child', detail: '\u2212' + moneyFull(v.childc) + '/mo' });
   return { ...out, cash, housingAtBuy, priceAtBuy, loanAtBuy, lowAfter, lowMonth, reserve: 6 * spend, events };
 }
 
@@ -548,7 +548,7 @@ function layoutChart() {
   const cw = $('chart').clientWidth || 820;
   narrow = cw < 560;
   W = cw; H = narrow ? 330 : 380;
-  M = narrow ? { l: 50, r: 58, t: 50, b: 32 } : { l: 62, r: 78, t: 50, b: 34 };
+  M = narrow ? { l: 50, r: 58, t: 76, b: 32 } : { l: 62, r: 78, t: 76, b: 34 };
   PW = W - M.l - M.r; PH = H - M.t - M.b;
 }
 const SERIES = [
@@ -585,15 +585,19 @@ function drawChart() {
     svg.appendChild(s('text', { x: X(yr * 12), y: H - 10, 'text-anchor': 'middle' }, yr === 0 ? 'Now' : 'Yr ' + yr));
   }
 
-  // event markers, labels staggered across three rows so they never collide
-  // narrow: short names, 3 rows at 15px; labels are clamped inside the plot so none is clipped
-  const rowH = narrow ? 15 : 14;
-  model.events.filter(e => e.m <= HZ).sort((a, b) => a.m - b.m).forEach((e, idx) => {
-    const x = X(e.m), y = 12 + (idx % 3) * rowH;
-    const right = x > W - M.r - (narrow ? 62 : 90);
-    svg.appendChild(s('line', { x1: x, x2: x, y1: y + 4, y2: M.t + PH, stroke: 'var(--axis)', 'stroke-width': 1 }));
-    // halo keeps text legible where it crosses a neighbouring marker line
-    svg.appendChild(s('text', { x: right ? x - 4 : x + 4, y: y + 3, 'text-anchor': right ? 'end' : 'start', class: 'evt' }, narrow ? e.name : e.name + ' · ' + monthsText(e.m)));
+  // event annotations: a pill label above the plot (what + cost + when), a line down to the axis, and a ring on the top line.
+  // Three rows, one per event, so pills never overlap; narrow screens drop the time (the x-axis shows it).
+  const evs = model.events.filter(e => e.m <= HZ).sort((a, b) => a.m - b.m);
+  const PILL_H = 19, PILL_GAP = 3;
+  evs.forEach((e, idx) => {
+    const x = X(e.m), top = 6 + (idx % 3) * (PILL_H + PILL_GAP);
+    svg.appendChild(s('line', { x1: x, x2: x, y1: top + PILL_H, y2: M.t + PH, stroke: 'var(--axis)', 'stroke-width': 1 }));
+    const label = e.name + ' ' + e.detail + (narrow ? '' : ' \u00b7 ' + yrText(e.m));
+    const t = s('text', { y: top + 13.5, class: 'evt' }, label); svg.appendChild(t);
+    const w = Math.ceil(t.getComputedTextLength()) + 16;
+    const left = Math.max(2, Math.min(x, W - 2 - w));
+    const rect = s('rect', { x: left, y: top, width: w, height: PILL_H, rx: PILL_H / 2, fill: 'var(--surface-1)', stroke: 'var(--text-muted)', 'stroke-width': 1 });
+    svg.insertBefore(rect, t); t.setAttribute('x', left + 8);
   });
 
   // soft wash under total, then 2px lines
@@ -604,6 +608,8 @@ function drawChart() {
     const d = model[x.key].slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
     svg.appendChild(s('path', { d, fill: 'none', stroke: 'var(' + x.css + ')', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
   });
+
+  evs.forEach(e => svg.appendChild(s('circle', { cx: X(e.m), cy: Y(model[VIS[0].key][e.m]), r: 4.5, fill: 'var(--surface-1)', stroke: 'var(--text-secondary)', 'stroke-width': 2 })));
 
   // end dots with a 2px surface ring; label only the headline series
   VIS.forEach(x => svg.appendChild(s('circle', { cx: X(HZ), cy: Y(model[x.key][HZ]), r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2 })));
