@@ -154,7 +154,7 @@
   @media (max-width: 600px) { svg text { font-size: 13px; } svg .endlabel { font-size: 14px; } .chartcard { padding: 12px 10px 8px; } }
   .ring { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--text-primary); }
   .tablewrap { overflow-x: auto; }
-  svg .evt { fill: var(--text-primary); font-size: 12.5px; font-weight: 600; }
+  svg .evt { fill: var(--text-secondary); font-size: 13px; font-weight: 500; stroke: var(--surface-1); stroke-width: 3px; paint-order: stroke; }
   svg .tight { fill: var(--text-primary); font-weight: 650; stroke: var(--surface-1); stroke-width: 3px; paint-order: stroke; }
   svg .endlabel { fill: var(--text-primary); font-weight: 650; font-size: 13px; }
   svg:focus-visible { outline: 2px solid var(--series-1); outline-offset: 4px; border-radius: 4px; }
@@ -548,7 +548,7 @@ function layoutChart() {
   const cw = $('chart').clientWidth || 820;
   narrow = cw < 560;
   W = cw; H = narrow ? 330 : 380;
-  M = narrow ? { l: 50, r: 58, t: 76, b: 32 } : { l: 62, r: 78, t: 76, b: 34 };
+  M = narrow ? { l: 50, r: 58, t: 24, b: 32 } : { l: 62, r: 78, t: 24, b: 34 };
   PW = W - M.l - M.r; PH = H - M.t - M.b;
 }
 const SERIES = [
@@ -585,20 +585,7 @@ function drawChart() {
     svg.appendChild(s('text', { x: X(yr * 12), y: H - 10, 'text-anchor': 'middle' }, yr === 0 ? 'Now' : 'Yr ' + yr));
   }
 
-  // event annotations: a pill label above the plot (what + cost + when), a line down to the axis, and a ring on the top line.
-  // Three rows, one per event, so pills never overlap; narrow screens drop the time (the x-axis shows it).
   const evs = model.events.filter(e => e.m <= HZ).sort((a, b) => a.m - b.m);
-  const PILL_H = 19, PILL_GAP = 3;
-  evs.forEach((e, idx) => {
-    const x = X(e.m), top = 6 + (idx % 3) * (PILL_H + PILL_GAP);
-    svg.appendChild(s('line', { x1: x, x2: x, y1: top + PILL_H, y2: M.t + PH, stroke: 'var(--axis)', 'stroke-width': 1 }));
-    const label = e.name + ' ' + e.detail + (narrow ? '' : ' \u00b7 ' + yrText(e.m));
-    const t = s('text', { y: top + 13.5, class: 'evt' }, label); svg.appendChild(t);
-    const w = Math.ceil(t.getComputedTextLength()) + 16;
-    const left = Math.max(2, Math.min(x, W - 2 - w));
-    const rect = s('rect', { x: left, y: top, width: w, height: PILL_H, rx: PILL_H / 2, fill: 'var(--surface-1)', stroke: 'var(--text-muted)', 'stroke-width': 1 });
-    svg.insertBefore(rect, t); t.setAttribute('x', left + 8);
-  });
 
   // soft wash under total, then 2px lines
   const area = model.total.slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ')
@@ -609,7 +596,22 @@ function drawChart() {
     svg.appendChild(s('path', { d, fill: 'none', stroke: 'var(' + x.css + ')', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
   });
 
-  evs.forEach(e => svg.appendChild(s('circle', { cx: X(e.m), cy: Y(model[VIS[0].key][e.m]), r: 4.5, fill: 'var(--surface-1)', stroke: 'var(--text-secondary)', 'stroke-width': 2 })));
+  // events: a small ring on the top visible line plus a one-word grey label beside it.
+  // Each label tries a few spots around its dot and takes the first that stays inside the plot and clear of earlier labels.
+  const placed = [];
+  evs.forEach(e => {
+    const x = X(e.m), y = Y(model[VIS[0].key][e.m]);
+    svg.appendChild(s('circle', { cx: x, cy: y, r: 4, fill: 'var(--surface-1)', stroke: 'var(--text-secondary)', 'stroke-width': 2 }));
+    const t = s('text', { class: 'evt' }, e.name); svg.appendChild(t);
+    const w = Math.ceil(t.getComputedTextLength());
+    const spots = [[-8, -9, 'end'], [8, 17, 'start'], [8, -9, 'start'], [-8, 17, 'end'], [8, -27, 'start'], [8, 35, 'start']];
+    const box = ([dx, dy, anc]) => { const x0 = anc === 'start' ? x + dx : x + dx - w; return { x0, x1: x0 + w, y0: y + dy - 11, y1: y + dy + 3 }; };
+    const ok = bx => bx.x0 >= M.l - 2 && bx.x1 <= W - 2 && bx.y0 >= 2 && bx.y1 <= M.t + PH + 2
+      && !placed.some(q => bx.x0 < q.x1 + 3 && bx.x1 > q.x0 - 3 && bx.y0 < q.y1 + 1 && bx.y1 > q.y0 - 1);
+    const pick = spots.find(sp => ok(box(sp))) || spots[0];
+    placed.push(box(pick));
+    t.setAttribute('x', x + pick[0]); t.setAttribute('y', y + pick[1]); t.setAttribute('text-anchor', pick[2]);
+  });
 
   // end dots with a 2px surface ring; label only the headline series
   VIS.forEach(x => svg.appendChild(s('circle', { cx: X(HZ), cy: Y(model[x.key][HZ]), r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2 })));
@@ -643,7 +645,7 @@ function drawChart() {
       row.append(key, h('strong', '', moneyFull(model[sr.key][m])), h('span', 'n', sr.key === 'total' ? 'Total' : sr.name));
       tip.appendChild(row);
     });
-    const ev = model.events.filter(e => e.m === m).map(e => e.name);
+    const ev = model.events.filter(e => e.m === m).map(e => e.name + ' ' + e.detail);
     if (shown.liquid && m === model.lowMonth) ev.push('Tightest month');
     if (ev.length) tip.appendChild(h('div', 'when', 'Event: ' + ev.join(', ')));
     tip.style.display = 'block';
