@@ -86,7 +86,14 @@
   .suf { display: inline-block; flex: none; width: 1.9em; }
   .row .fmtamt { grid-column: 2; text-align: right; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; margin: 1px 1.9em 0 0; }
   details.group { border-top: 1px solid var(--grid); padding: 10px 0 4px; }
-  details.group > summary { cursor: pointer; font-weight: 600; padding: 2px 0 8px; list-style-position: inside; }
+  details.group > summary { cursor: pointer; padding: 4px 0 8px; display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; list-style: none; }
+  details.group > summary::-webkit-details-marker { display: none; }
+  details.group > summary::before { content: '\25B8'; display: inline-block; width: .9em; color: var(--text-muted); transition: transform .15s; }
+  details.group[open] > summary::before { transform: rotate(90deg); }
+  details.group > summary .gname { font-weight: 600; }
+  details.group > summary .gkey { margin-left: auto; text-align: right; font-size: 12.5px; font-weight: 500; color: var(--text-secondary); }
+  details.group:not([open]) { padding-bottom: 0; }
+  @media (prefers-reduced-motion: reduce) { details.group > summary::before { transition: none; } }
   .row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0 8px; margin: 0 0 14px; align-items: center; }
   .row label { color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
   .num { display: inline-flex; align-items: center; gap: 3px; font-size: 13px; color: var(--text-secondary); }
@@ -262,6 +269,14 @@ const CONFIG = [
     { id: 'retire', label: 'Retirement & other',      min: 0,   max: 3000000, step: 10000, value: 300000, kind: 'money', hint: '401(k), IRA and similar accounts. They grow but get no new deposits here.' }
   ]}
 ];
+/* What each section shows on its summary line while collapsed (the one or two facts that matter most). */
+const GROUP_KEYS = {
+  'Income & savings':     v => moneyFull(v.save) + '/mo · ' + money(v.liquid) + ' cash',
+  'Wedding':              v => money(v.wed) + ' · ' + yrText(v.wedm),
+  'House':                (v, m) => money(v.price) + ' · ' + moneyFull(m.housingAtBuy) + '/mo · buy ' + yrText(v.buym),
+  'Child':                v => v.childc > 0 ? moneyFull(v.childc) + '/mo from ' + yrText(v.childm) : 'None planned',
+  'Advanced assumptions': v => v.down + '% down · ' + v.rate + '% rate'
+};
 const HARD = { money: [0, 1e9], pct: [0, 30], pct0: [0, 100], pct3: [0, 30], plain1: [0, 100], months: [0, MONTHS] };
 CONFIG.forEach(g => g.items.forEach(i => { i.lo = i.lo ?? HARD[i.kind][0]; i.hi = i.hi ?? HARD[i.kind][1]; }));
 const DEFAULTS = Object.fromEntries(CONFIG.flatMap(g => g.items.map(i => [i.id, i.value])));
@@ -354,7 +369,7 @@ function h(tag, cls, text) {
 }
 
 /* ---------- controls ---------- */
-const outputs = {};
+const outputs = {}, groupKeys = [];
 let base = null, lastTouched = null, lastChild = DEFAULTS.childc;   // snapshot for "vs before" deltas
 function metrics() { return { nw: model.total[MONTHS], cash: model.cash, month: model.housingAtBuy, low: model.lowAfter }; }
 function touch(key) { if (lastTouched !== key) { base = metrics(); lastTouched = key; } }
@@ -395,8 +410,11 @@ function buildControls() {
   root.appendChild(chips);
 
   CONFIG.forEach(g => {
-    const d = h('details', 'group'); d.open = !g.advanced;
-    d.appendChild(h('summary', '', g.advanced ? g.group + ' (' + g.items.length + ')' : g.group));
+    const d = h('details', 'group'); d.open = false;   // collapsed by default; the summary line carries the key facts
+    const sum = h('summary'), keyEl = h('span', 'gkey');
+    sum.append(h('span', 'gname', g.advanced ? 'Advanced (' + g.items.length + ')' : g.group), keyEl);
+    d.appendChild(sum);
+    groupKeys.push({ el: keyEl, fn: GROUP_KEYS[g.group] });
     g.items.forEach(it => {
       const row = h('div', 'row');
       const lab = h('label', '', it.label); lab.htmlFor = 'num-' + it.id;
@@ -658,6 +676,7 @@ function render() {
   model = compute(state);
   if (toggleBtn) toggleBtn.setAttribute('aria-pressed', String(state.childc === 0));
   for (const k in outputs) { const o = outputs[k]; if (o.fmtEl) o.fmtEl.textContent = moneyFull(state[k]); }
+  groupKeys.forEach(g => { if (g.fn) g.el.textContent = g.fn(state, model); });
   drawSummary(state); drawChart(); drawTable();
   $('svg').setAttribute('aria-label', 'Net worth chart. Tightest month: ' + yrText(model.lowMonth) + '. Today ' + moneyFull(model.total[0]) + ', in 10 years ' + moneyFull(model.total[MONTHS]) + '.');
 }
