@@ -167,6 +167,7 @@
   .tooltip .trow span.n { color: var(--text-secondary); text-align: right; }
   details.tableview { margin-top: 8px; border-top: 1px solid var(--grid); padding-top: 8px; }
   details.tableview summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+  .spend { font-size: 12px; color: var(--text-secondary); margin: -4px 0 12px; }
   .srcs { margin: 8px 0 4px; padding-left: 18px; font-size: 13px; color: var(--text-secondary); }
   .srcs li { margin: 0 0 6px; }
   .srcs a { color: var(--series-1); }
@@ -277,7 +278,6 @@ const CONFIG = [
     { id: 'liquid', label: 'Liquid savings today',    min: 0,    max: 2000000, step: 10000, value: 250000, kind: 'money', hint: 'Cash and easy-to-sell savings you could use.' },
     { id: 'save',   label: 'Monthly savings',         min: 0,    max: 40000,   step: 500,   value: 8000,   kind: 'money', hint: 'What you set aside each month from take-home pay.' },
     { id: 'take',   label: 'Take-home pay / month',   min: 5000, max: 60000,   step: 500,   value: 20000,  kind: 'money', lo: 1, hint: 'After tax, what lands in your account.' },
-    { id: 'rent',   label: 'Current rent / month',    min: 0,    max: 8000,    step: 100,   value: 3000,   kind: 'money', hint: 'Stops when you buy.' }
   ]},
   { group: 'Wedding', items: [
     { id: 'wed',  label: 'Wedding budget',     min: 0, max: 400000, step: 5000, value: 80000, kind: 'money' },
@@ -285,7 +285,8 @@ const CONFIG = [
   ]},
   { group: 'House', items: [
     { id: 'price', label: 'House price (today\'s dollars)', min: 400000, max: 3000000, step: 25000, value: 750000, kind: 'money', hint: 'Grows with appreciation until you buy.' },
-    { id: 'buym',  label: 'Buy in',  min: 0, max: INMAX, step: 1, value: 24, kind: 'months' }
+    { id: 'buym',  label: 'Buy in',  min: 0, max: INMAX, step: 1, value: 24, kind: 'months' },
+    { id: 'rent',  label: 'Rent you pay today / month', min: 0, max: 8000, step: 100, value: 3000, kind: 'money', hint: 'Stops when you buy; the new housing cost replaces it.' }
   ]},
   { group: 'Child', items: [
     { id: 'kids',   label: 'Number of children',  min: 0, max: 2, step: 1, value: 2, kind: 'count', hint: 'The second child follows the gap below.' },
@@ -541,6 +542,7 @@ function buildControls() {
       row.append(lab, box); if (fmtEl) row.appendChild(fmtEl); row.appendChild(inp); if (hint) row.appendChild(hint);
       d.appendChild(row);
     });
+    if (g.group === 'Income & savings') { const sl = h('div', 'spend'); sl.id = 'spendline'; d.appendChild(sl); }
     root.appendChild(d);
   });
 
@@ -795,6 +797,9 @@ function render() {
   $('hero-label').textContent = 'Net worth in ' + hn + ' years';
   $('sb-label').textContent = 'Net worth in ' + hn + ' yrs';
   $('t-low-label').textContent = 'Lowest liquid cash (next ' + hn + ' yrs)';
+  { const sp = Math.max(0, state.take - state.save), el = $('spendline');
+    if (el) el.textContent = state.save > state.take ? 'Savings are higher than take-home, so these numbers do not fit together.'
+      : 'So you spend about ' + moneyFull(sp) + ' a month, rent included (take-home minus savings).'; }
   groupKeys.forEach(g => { if (g.fn) g.el.textContent = g.fn(state, model); });
   drawSummary(state); drawChart(); drawTable();
   $('svg').setAttribute('aria-label', 'Net worth chart. Tightest month: ' + yrText(model.lowMonth) + '. Today ' + moneyFull(model.total[0]) + ', in ' + HZ / 12 + ' years ' + moneyFull(model.total[HZ]) + '.');
