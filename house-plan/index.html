@@ -91,8 +91,8 @@
   details.group > summary::before { content: '\25B8'; display: inline-block; width: .9em; font-size: 15px; color: var(--text-secondary); transition: transform .15s; }
   details.group[open] > summary::before { transform: rotate(90deg); }
   details.group > summary .gname { font-weight: 650; font-size: 16px; }
-  /* key facts sit on their own line under the title: larger, full-contrast ink, hidden once the section is open */
-  details.group > summary .gkey { flex-basis: 100%; margin: 1px 0 0 calc(.9em + 6px); text-align: left; font-size: 15px; font-weight: 500; line-height: 1.35; color: var(--text-primary); }
+  /* key facts sit on their own line under the title in soft grey, hidden once the section is open */
+  details.group > summary .gkey { flex-basis: 100%; margin: 1px 0 0 calc(.9em + 6px); text-align: left; font-size: 15px; font-weight: 500; line-height: 1.35; color: var(--text-muted); }
   details.group[open] > summary .gkey { display: none; }
   details.group:not([open]) { padding-bottom: 0; }
   @media (prefers-reduced-motion: reduce) { details.group > summary::before { transition: none; } }
@@ -285,11 +285,11 @@ const CONFIG = [
 /* What each section shows on its summary line while collapsed (the one or two facts that matter most). */
 const inText = m => m === 0 ? 'now' : m % 12 === 0 ? 'in ' + m / 12 + (m === 12 ? ' year' : ' years') : m < 12 ? 'in ' + m + (m === 1 ? ' month' : ' months') : 'in ' + (+(m / 12).toFixed(1)) + ' years';
 const GROUP_KEYS = {
-  'Income & savings':     v => 'Saving ' + moneyFull(v.save) + '/mo \u00b7 ' + money(v.liquid) + ' cash now',
-  'Wedding':              v => money(v.wed) + ' budget \u00b7 ' + inText(v.wedm),
-  'House':                (v, m) => money(v.price) + ' house \u00b7 costs ' + moneyFull(m.housingAtBuy) + '/mo \u00b7 buying ' + inText(v.buym),
-  'Child':                v => v.childc > 0 ? moneyFull(v.childc) + '/mo extra \u00b7 starting ' + inText(v.childm) : 'No child planned',
-  'Advanced assumptions': v => v.down + '% down \u00b7 ' + v.rate + '% mortgage rate'
+  'Income & savings':     v => 'Saving ' + moneyFull(v.save) + '/mo, ' + money(v.liquid) + ' in cash',
+  'Wedding':              v => money(v.wed) + ' budget, ' + inText(v.wedm),
+  'House':                (v, m) => money(v.price) + ' house, ' + moneyFull(m.housingAtBuy) + '/mo, buying ' + inText(v.buym),
+  'Child':                v => v.childc > 0 ? moneyFull(v.childc) + '/mo, starting ' + inText(v.childm) : 'No child planned',
+  'Advanced assumptions': v => v.down + '% down, ' + v.rate + '% rate'
 };
 const HARD = { money: [0, 1e9], pct: [0, 30], pct0: [0, 100], pct3: [0, 30], plain1: [0, 100], months: [0, INMAX] };
 CONFIG.forEach(g => g.items.forEach(i => { i.lo = i.lo ?? HARD[i.kind][0]; i.hi = i.hi ?? HARD[i.kind][1]; }));
