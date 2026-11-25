@@ -167,6 +167,9 @@
   .tooltip .trow span.n { color: var(--text-secondary); text-align: right; }
   details.tableview { margin-top: 8px; border-top: 1px solid var(--grid); padding-top: 8px; }
   details.tableview summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+  .srcs { margin: 8px 0 4px; padding-left: 18px; font-size: 13px; color: var(--text-secondary); }
+  .srcs li { margin: 0 0 6px; }
+  .srcs a { color: var(--series-1); }
   table { border-collapse: collapse; width: 100%; min-width: 440px; font-size: 13px; margin-top: 8px; }
   th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
   th:first-child, td:first-child { text-align: left; }
@@ -244,7 +247,18 @@
         <summary>Table view</summary>
         <div class="tablewrap"><table id="table"></table></div>
       </details>
-      <p class="fine">Simplified model for planning, not advice. Savings grow at the return you set; a house is bought at today's price grown by appreciation; housing cost = mortgage + property tax + insurance + 1% a year maintenance, replacing your current rent. Retirement and other assets grow at the same return with no new contributions.</p>
+      <details class="tableview">
+        <summary>Where the defaults come from</summary>
+        <ul class="srcs">
+          <li><b>Mortgage rate 7.25%:</b> the 30-year average was 7.28% on Nov 19, 2026 (<a href="https://www.freddiemac.com/pmms" target="_blank" rel="noopener noreferrer">Freddie Mac</a>).</li>
+          <li><b>Child, first 5 years, $2,800/mo:</b> Boston-area infant care runs about $2,000 to $2,800 a month (<a href="https://daycarecalc.com/city-costs/boston-ma" target="_blank" rel="noopener noreferrer">DaycareCalc</a>, <a href="https://blog.wonderschool.com/family-resources/how-much-does-daycare-cost-in-massachusetts-in-2026" target="_blank" rel="noopener noreferrer">Wonderschool</a>). LendingTree puts all-in costs for a small child in Massachusetts near $34,000 a year, mostly day care (<a href="https://www.lendingtree.com/debt-consolidation/raising-a-child-study/" target="_blank" rel="noopener noreferrer">LendingTree</a>), which leaves roughly $600 a month for everything else.</li>
+          <li><b>Closing costs 2.5%:</b> Massachusetts estimates range from about 1.3% to 2.4% (<a href="https://www.rocketmortgage.com/learn/closing-costs-massachusetts" target="_blank" rel="noopener noreferrer">Rocket Mortgage</a>, <a href="https://www.bankrate.com/real-estate/closing-costs-in-massachusetts" target="_blank" rel="noopener noreferrer">Bankrate</a>).</li>
+          <li><b>Insurance $400/mo:</b> state averages are only about $1,600 to $2,100 a year for $250K to $400K of cover, but a $1M-dwelling policy was quoted near $480 a month (<a href="https://www.moneygeek.com/insurance/homeowners/average-cost-home-insurance-massachusetts" target="_blank" rel="noopener noreferrer">MoneyGeek</a>).</li>
+          <li><b>Paid leave:</b> Massachusetts pays up to 12 weeks for bonding, capped at $1,230.39 a week in 2026 (<a href="https://www.mass.gov/info-details/paid-family-and-medical-leave-benefits" target="_blank" rel="noopener noreferrer">Mass.gov</a>), so higher earners lose pay unless an employer tops it up.</li>
+          <li><b>Our own estimates, not sourced:</b> child costs from age 5 to 18, extra utilities, upkeep, the one-time cost per child, property tax near $12 per $1,000, and 3% yearly home appreciation. Mortgage insurance (0.5% of the loan a year) is added automatically when you put down less than 20%.</li>
+        </ul>
+      </details>
+      <p class="fine">Simplified model for planning, not advice. Savings grow at the return you set; a house is bought at today's price grown by appreciation; housing cost = mortgage + property tax + insurance + upkeep + extra utilities (plus mortgage insurance under 20% down), replacing your current rent. Each child costs the full amount to age 5, then a lower amount to age 18. Retirement and other assets grow at the same return with no new contributions.</p>
     </div>
   </section>
 </div>
@@ -270,20 +284,26 @@ const CONFIG = [
     { id: 'wedm', label: 'Wedding happens in', min: 0, max: INMAX, step: 1, value: 12, kind: 'months' }
   ]},
   { group: 'House', items: [
-    { id: 'price', label: 'House price (today\'s dollars)', min: 400000, max: 3000000, step: 25000, value: 850000, kind: 'money', hint: 'Grows with appreciation until you buy.' },
+    { id: 'price', label: 'House price (today\'s dollars)', min: 400000, max: 3000000, step: 25000, value: 750000, kind: 'money', hint: 'Grows with appreciation until you buy.' },
     { id: 'buym',  label: 'Buy in',  min: 0, max: INMAX, step: 1, value: 24, kind: 'months' }
   ]},
   { group: 'Child', items: [
-    { id: 'childm', label: 'Child arrives in',    min: 0, max: INMAX, step: 1, value: 36, kind: 'months' },
-    { id: 'childc', label: 'Cost / month (0 = none)', min: 0, max: 6000, step: 100, value: 2500, kind: 'money', hint: 'Extra monthly spending once the child arrives.' }
+    { id: 'kids',   label: 'Number of children',  min: 0, max: 2, step: 1, value: 2, kind: 'count', hint: 'The second child follows the gap below.' },
+    { id: 'childm', label: 'First child arrives in', min: 0, max: INMAX, step: 1, value: 36, kind: 'months' },
+    { id: 'gap',    label: 'Second child comes after', min: 6, max: 60, step: 1, value: 30, kind: 'months', help: g => '= ' + (+(g / 12).toFixed(1)) + ' years after the first' },
+    { id: 'childc', label: 'Cost / month per child (to age 5)', min: 0, max: 6000, step: 100, value: 2800, kind: 'money', hint: 'Boston-area infant care runs about $2,000 to $2,800 a month, plus roughly $600 for food, diapers, health and clothes.' }
   ]},
   { group: 'Advanced assumptions', advanced: true, items: [
     { id: 'down',  label: 'Down payment',          min: 3,  max: 40, step: 1,     value: 20,  kind: 'pct0', hint: 'Share of the price you pay up front.' },
-    { id: 'rate',  label: 'Mortgage rate (30-yr)', min: 4, max: 9, step: 0.125, value: 6.5, kind: 'pct3', hint: 'Yearly interest charged on the loan.' },
-    { id: 'close', label: 'Closing costs',         min: 2,  max: 5,  step: 0.5,   value: 3,   kind: 'pct', hi: 20, hint: 'One-time fees to finish the purchase, as a share of the price.' },
+    { id: 'rate',  label: 'Mortgage rate (30-yr)', min: 4, max: 9, step: 0.125, value: 7.25, kind: 'pct3', hint: 'Yearly interest on the loan. The 30-year average was about 7.3% in mid-November 2026.' },
+    { id: 'close', label: 'Closing costs',         min: 1,  max: 5,  step: 0.5,   value: 2.5, kind: 'pct', hi: 20, hint: 'Lender, attorney, title and inspection fees, as a share of the price. Massachusetts estimates run about 1.3% to 2.4%.' },
     { id: 'tax',   label: 'Property tax per $1,000', min: 8, max: 20, step: 0.1, value: 12, kind: 'plain1', hint: 'Yearly tax per $1,000 of home value (12 = 1.2% a year).' },
-    { id: 'ins',   label: 'Insurance / month',     min: 100, max: 600, step: 25,   value: 250, kind: 'money', hint: 'Homeowner\'s insurance, per month.' },
+    { id: 'ins',   label: 'Insurance / month',     min: 100, max: 600, step: 25,   value: 400, kind: 'money', hint: 'Homeowner\'s insurance, per month. Pricey homes cost far more than state averages, and rates jumped in 2026.' },
+    { id: 'maint', label: 'Upkeep / yr (share of value)', min: 0.5, max: 3, step: 0.25, value: 1, kind: 'pct', hint: 'Repairs and maintenance. Rules of thumb run 1% to 2% of the home\'s value a year.' },
+    { id: 'util',  label: 'Extra utilities vs renting / mo', min: 0, max: 1500, step: 25, value: 350, kind: 'money', hint: 'Heat, electric, water, sewer and snow removal beyond what you pay as a renter. Our estimate.' },
     { id: 'appr',  label: 'Home appreciation / yr', min: 0, max: 6, step: 0.5,   value: 3,   kind: 'pct', hi: 20, hint: 'How much the home\'s price rises each year, on average.' },
+    { id: 'childc2', label: 'Cost / month per child (ages 5 to 18)', min: 0, max: 5000, step: 100, value: 1500, kind: 'money', hint: 'After-school and summer care, activities, food, clothes and health. Our estimate.' },
+    { id: 'birth', label: 'One-time cost per child', min: 0, max: 100000, step: 1000, value: 15000, kind: 'money', hint: 'Birth out-of-pocket, gear and any pay gap during leave. Massachusetts paid leave covers up to 12 weeks, capped near $1,230 a week in 2026.' },
     { id: 'furn',  label: 'Furnishing & early repairs', min: 0, max: 100000, step: 5000, value: 30000, kind: 'money', hint: 'One-time spend right after you buy.' },
     { id: 'ret',    label: 'Return on savings / yr', min: 0,   max: 8,       step: 0.5,   value: 4,      kind: 'pct', hint: 'One steady yearly rate for savings and retirement. Real markets swing up and down.' },
     { id: 'retire', label: 'Retirement & other',      min: 0,   max: 3000000, step: 10000, value: 300000, kind: 'money', hint: '401(k), IRA and similar accounts. They grow but get no new deposits here.' }
@@ -295,10 +315,10 @@ const GROUP_KEYS = {
   'Income & savings':     v => 'Saving ' + moneyFull(v.save) + '/mo, ' + money(v.liquid) + ' in cash',
   'Wedding':              v => money(v.wed) + ' budget, ' + inText(v.wedm),
   'House':                (v, m) => money(v.price) + ' house, ' + moneyFull(m.housingAtBuy) + '/mo, buying ' + inText(v.buym),
-  'Child':                v => v.childc > 0 ? moneyFull(v.childc) + '/mo, starting ' + inText(v.childm) : 'No child planned',
+  'Child':                v => v.kids === 0 ? 'No children planned' : v.kids === 1 ? moneyFull(v.childc) + '/mo, starting ' + inText(v.childm) : '2 children, first ' + inText(v.childm) + ', ' + moneyFull(v.childc) + '/mo each',
   'Advanced assumptions': v => v.down + '% down, ' + v.rate + '% rate'
 };
-const HARD = { money: [0, 1e9], pct: [0, 30], pct0: [0, 100], pct3: [0, 30], plain1: [0, 100], months: [0, INMAX] };
+const HARD = { money: [0, 1e9], pct: [0, 30], pct0: [0, 100], pct3: [0, 30], plain1: [0, 100], months: [0, INMAX], count: [0, 2] };
 CONFIG.forEach(g => g.items.forEach(i => { i.lo = i.lo ?? HARD[i.kind][0]; i.hi = i.hi ?? HARD[i.kind][1]; }));
 const DEFAULTS = Object.fromEntries(CONFIG.flatMap(g => g.items.map(i => [i.id, i.value])));
 const state = { ...DEFAULTS };
@@ -324,12 +344,14 @@ function fmt(kind, v) {
     case 'pct3':   return v.toFixed(3) + '%';
     case 'plain1': return '$' + v.toFixed(1);
     case 'months': return monthsText(v);
+    case 'count':  return v + (v === 1 ? ' child' : ' children');
   }
 }
 const yrText = m => m === 0 ? 'now' : 'Yr ' + (+(m / 12).toFixed(1));
 const monthHelp = m => m === 0 ? 'Right now (month 0)' : '= ' + yrText(m) + ' \u00b7 month ' + m + ' from now';
+const helpFor = (it, v) => it.help ? it.help(v) : monthHelp(v);
 function numText(kind, v) {
-  if (kind === 'months') return String(Math.round(v));
+  if (kind === 'months' || kind === 'count') return String(Math.round(v));
   if (kind === 'pct3') return String(+v.toFixed(3));
   if (kind === 'money') return String(Math.round(v));
   return String(+v.toFixed(2));
@@ -341,10 +363,17 @@ function compute(v) {
   const r = v.ret / 100 / 12, appr = Math.pow(1 + v.appr / 100, 1 / 12);
   const i = v.rate / 1200;
   let liquid = v.liquid, retire = v.retire, value = 0, loan = 0, pmt = 0, bought = false;
+  const births = v.kids >= 1 ? [v.childm] : [];
+  if (v.kids >= 2) births.push(v.childm + v.gap);
+  // per-child monthly cost: full cost to age 5 (childcare years), a lower cost from 5 to 18, nothing after
+  const childCost = m => births.reduce((sum, b) => { const a = m - b; return sum + (a < 0 ? 0 : a < 60 ? v.childc : a < 216 ? v.childc2 : 0); }, 0);
+  const upkeep = val => val * v.tax / 1000 / 12 + v.ins + val * v.maint / 1200 + v.util;   // property tax + insurance + upkeep + utilities
+  let pmi = 0, priceBuy = 0;                                                              // mortgage insurance applies only under 20% down, until the loan falls to 80%
   let cash = 0, housingAtBuy = 0, priceAtBuy = 0, lowAfter = Infinity, lowMonth = -1, loanAtBuy = 0;   // lowAfter = minimum over the WHOLE horizon
   const out = { m: [], liquid: [], equity: [], retire: [], total: [] };
   for (let m = 0; m <= MAXM; m++) {
     if (m === v.wedm) liquid -= v.wed;
+    if (births.includes(m)) liquid -= v.birth * births.filter(b => b === m).length;
     if (m === v.buym) {
       priceAtBuy = v.price * Math.pow(1 + v.appr / 100, m / 12);
       const down = priceAtBuy * v.down / 100, closing = priceAtBuy * v.close / 100;
@@ -352,24 +381,26 @@ function compute(v) {
       liquid -= cash;
       value = priceAtBuy; loan = priceAtBuy - down; loanAtBuy = loan; bought = true;
       pmt = i === 0 ? loan / 360 : loan * i / (1 - Math.pow(1 + i, -360));
-      housingAtBuy = pmt + value * v.tax / 1000 / 12 + v.ins + value * 0.01 / 12;
+      priceBuy = priceAtBuy; pmi = v.down < 20 ? loan * 0.005 / 12 : 0;
+      housingAtBuy = pmt + upkeep(value) + pmi;
     }
     if (m <= HZ && liquid < lowAfter) { lowAfter = liquid; lowMonth = m; }
     out.m.push(m); out.liquid.push(liquid); out.retire.push(retire);
     out.equity.push(value - loan); out.total.push(liquid + retire + value - loan);
     if (m < MAXM) {
       liquid = liquid * (1 + r) + v.save;
-      if (bought) liquid -= (pmt + value * v.tax / 1000 / 12 + v.ins + value * 0.01 / 12) - v.rent;
-      if (v.childc > 0 && m >= v.childm) liquid -= v.childc;
+      if (bought) liquid -= (pmt + upkeep(value) + (loan > 0.8 * priceBuy ? pmi : 0)) - v.rent;
+      liquid -= childCost(m);
       if (bought && loan > 0) { loan -= (pmt - loan * i); if (loan < 0) loan = 0; }
       if (bought) value *= appr;
       retire *= 1 + r;
     }
   }
   // realistic monthly spending once the house and child both apply: living costs, housing change, child cost
-  const spend = Math.max(0, Math.max(0, v.take - v.save) + (housingAtBuy - v.rent) + Math.max(0, v.childc));
+  let childPeak = 0; for (let m = 0; m <= HZ; m++) childPeak = Math.max(childPeak, childCost(m));
+  const spend = Math.max(0, Math.max(0, v.take - v.save) + (housingAtBuy - v.rent) + childPeak);
   const events = [{ m: v.wedm, name: 'Wedding', detail: '\u2212' + money(v.wed) }, { m: v.buym, name: 'House', detail: '\u2212' + money(cash) + ' cash' }];
-  if (v.childc > 0) events.push({ m: v.childm, name: 'Child', detail: '\u2212' + moneyFull(v.childc) + '/mo' });
+  births.forEach((b, k) => events.push({ m: b, name: v.kids === 1 ? 'Child' : 'Child ' + (k + 1), detail: '\u2212' + moneyFull(v.childc) + '/mo' }));
   return { ...out, cash, housingAtBuy, priceAtBuy, loanAtBuy, lowAfter, lowMonth, reserve: 6 * spend, events };
 }
 
@@ -404,7 +435,7 @@ function setValue(id, v, skipNum) {
   o.inp.max = Math.max(it.max, Math.ceil(v / it.step) * it.step);
   o.inp.value = v;
   if (!skipNum) o.num.value = numText(it.kind, v);
-  if (o.hint && it.kind === 'months') o.hint.textContent = monthHelp(v);
+  if (o.hint && it.kind === 'months') o.hint.textContent = helpFor(it, v);
 }
 
 /* Scenario chips are true toggles: clicking turns one on (remembering the values it changed), clicking again restores them.
@@ -413,15 +444,15 @@ const PRESETS = [
   { name: 'Buy a year sooner', group: 'buy', keys: ['buym'], set: () => ({ buym: Math.max(0, state.buym - 12) }) },
   { name: 'Buy a year later',  group: 'buy', keys: ['buym'], set: () => ({ buym: Math.min(INMAX, state.buym + 12) }) },
   { name: 'Bigger wedding',    keys: ['wed'],   set: () => ({ wed: state.wed > 0 ? Math.round(state.wed * 1.5 / 5000) * 5000 : 50000 }) },
-  { name: 'No child',          keys: ['childc'], set: () => ({ childc: 0 }) }
+  { name: 'No children',       keys: ['kids'],   set: () => ({ kids: 0 }) }
 ];
 /* Example profiles: five fictional starting points spanning early-career to high-earner. Pick one, then adjust. */
 const PROFILES = [
-  { name: 'Starter',     v: { liquid:  60000, retire:   80000, save:  2500, take:  9000, rent: 2200, wed:  35000, wedm: 18, price:  550000, buym: 36, childm: 48, childc: 1600 } },
-  { name: 'Building',    v: { liquid: 140000, retire:  180000, save:  5000, take: 14000, rent: 2800, wed:  60000, wedm: 12, price:  750000, buym: 30, childm: 36, childc: 2000 } },
-  { name: 'Established', v: { liquid: 320000, retire:  450000, save:  8000, take: 22000, rent: 3400, wed:  90000, wedm: 12, price: 1000000, buym: 24, childm: 30, childc: 2400 } },
-  { name: 'High saver',  v: { liquid: 600000, retire:  700000, save: 14000, take: 32000, rent: 4000, wed: 120000, wedm: 18, price: 1400000, buym: 18, childm: 24, childc: 3000 } },
-  { name: 'Top earner',  v: { liquid: 900000, retire: 1100000, save: 22000, take: 48000, rent: 5500, wed: 200000, wedm: 12, price: 1900000, buym: 24, childm: 36, childc: 3500 } }
+  { name: 'Starter',     v: { liquid:  60000, retire:   80000, save:  2500, take:  9000, rent: 2200, wed:  35000, wedm: 18, price:  550000, buym: 36, kids: 2, childm: 48, gap: 36, childc: 2200 } },
+  { name: 'Building',    v: { liquid: 140000, retire:  180000, save:  5000, take: 14000, rent: 2800, wed:  60000, wedm: 12, price:  750000, buym: 30, kids: 2, childm: 36, gap: 30, childc: 2400 } },
+  { name: 'Established', v: { liquid: 320000, retire:  450000, save:  8000, take: 22000, rent: 3400, wed:  90000, wedm: 12, price: 1000000, buym: 24, kids: 2, childm: 30, gap: 30, childc: 2600 } },
+  { name: 'High saver',  v: { liquid: 600000, retire:  700000, save: 14000, take: 32000, rent: 4000, wed: 120000, wedm: 18, price: 1400000, buym: 18, kids: 2, childm: 24, gap: 24, childc: 2800 } },
+  { name: 'Top earner',  v: { liquid: 900000, retire: 1100000, save: 22000, take: 48000, rent: 5500, wed: 200000, wedm: 12, price: 1900000, buym: 24, kids: 2, childm: 36, gap: 30, childc: 3200 } }
 ];
 const PROFILE_KEYS = Object.keys(PROFILES[0].v);
 let activeProfile = null; const profileBtns = {};
@@ -490,18 +521,18 @@ function buildControls() {
       inp.min = it.min; inp.max = it.max; inp.step = it.step; inp.value = it.value;
       inp.setAttribute('aria-label', it.label + ' (slider)');
       let hint = null;
-      if (it.kind === 'months') hint = h('div', 'hint', monthHelp(it.value));
+      if (it.kind === 'months') hint = h('div', 'hint', helpFor(it, it.value));
       else if (it.hint) hint = h('div', 'hint', it.hint);
       outputs[it.id] = { inp, num, it, hint, fmtEl };
       inp.addEventListener('input', () => {
         touch(it.id); dropPresetsFor(it.id); state[it.id] = parseFloat(inp.value);
         num.value = numText(it.kind, state[it.id]);
-        if (hint && it.kind === 'months') hint.textContent = monthHelp(state[it.id]);
+        if (hint && it.kind === 'months') hint.textContent = helpFor(it, state[it.id]);
         render();
       });
       num.addEventListener('input', () => {
         let v = parseFloat(num.value); if (isNaN(v)) return;
-        if (it.kind === 'months') v = Math.round(v);
+        if (it.kind === 'months' || it.kind === 'count') v = Math.round(v);
         touch(it.id); dropPresetsFor(it.id); setValue(it.id, v, true); render();
       });
       const norm = () => { num.value = numText(it.kind, state[it.id]); };
@@ -721,7 +752,7 @@ function drawSummary(v) {
 
   $('t-month').textContent = moneyFull(model.housingAtBuy);
   const pct = model.housingAtBuy / Math.max(1, v.take) * 100;
-  $('t-month-note').textContent = v.rate + '% rate, ' + v.down + '% down. ' + pct.toFixed(0) + '% of take-home; ' + (model.housingAtBuy - v.rent >= 0 ? moneyFull(model.housingAtBuy - v.rent) + ' more' : moneyFull(v.rent - model.housingAtBuy) + ' less') + ' than current rent.';
+  $('t-month-note').textContent = v.rate + '% rate, ' + v.down + '% down. ' + pct.toFixed(0) + '% of take-home; ' + (model.housingAtBuy - v.rent >= 0 ? moneyFull(model.housingAtBuy - v.rent) + ' more' : moneyFull(v.rent - model.housingAtBuy) + ' less') + ' than current rent. Includes tax, insurance, upkeep and utilities.';
 
   const low = model.lowAfter, when = yrText(model.lowMonth);
   const early = model.lowMonth < v.buym;
@@ -744,7 +775,7 @@ function drawSummary(v) {
   const st = $('t-status'); st.replaceChildren();
   st.className = 'status ' + cls;
   st.append(h('span', 'icon', icon), h('span', '', txt));
-  $('t-low-note').textContent = 'Lowest point: ' + when + ' (' + where + '). A 6-month reserve is about ' + moneyFull(model.reserve) + ': take-home minus savings, plus housing cost over rent and child cost.';
+  $('t-low-note').textContent = 'Lowest point: ' + when + ' (' + where + '). A 6-month reserve is about ' + moneyFull(model.reserve) + ': take-home minus savings, plus the housing change and child costs.';
 
   const vb = $('verdict'); vb.replaceChildren(); vb.className = 'verdict ' + cls;
   vb.append(h('span', 'icon', icon), h('span', '', verdict));
