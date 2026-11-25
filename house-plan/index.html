@@ -167,6 +167,8 @@
   .tooltip .trow span.n { color: var(--text-secondary); text-align: right; }
   details.tableview { margin-top: 8px; border-top: 1px solid var(--grid); padding-top: 8px; }
   details.tableview summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+  .row.tg .num { display: none; }
+  .row.tg .fmtamt { grid-column: 2; grid-row: 1; margin: 0; font-size: 13px; font-weight: 700; color: var(--text-primary); }
   .spend { font-size: 12px; color: var(--text-secondary); margin: -4px 0 12px; }
   .srcs { margin: 8px 0 4px; padding-left: 18px; font-size: 13px; color: var(--text-secondary); }
   .srcs li { margin: 0 0 6px; }
@@ -294,6 +296,12 @@ const CONFIG = [
     { id: 'gap',    label: 'Second child comes after', min: 6, max: 60, step: 1, value: 30, kind: 'months', help: g => '= ' + (+(g / 12).toFixed(1)) + ' years after the first' },
     { id: 'childc', label: 'Cost / month per child (to age 5)', min: 0, max: 6000, step: 100, value: 2800, kind: 'money', hint: 'Boston-area infant care runs about $2,000 to $2,800 a month, plus roughly $600 for food, diapers, health and clothes.' }
   ]},
+  { group: 'What if', items: [
+    { id: 'jobon',   label: 'Spouse loses a job', min: 0, max: 1, step: 1, value: 0, kind: 'toggle' },
+    { id: 'joblost', label: 'Take-home lost / month', min: 0, max: 30000, step: 500, value: 8000, kind: 'money', hint: 'Pay that stops while the job is gone. Lower it if you would get unemployment or severance.' },
+    { id: 'jobm',    label: 'Job loss starts in', min: 0, max: INMAX, step: 1, value: 30, kind: 'months' },
+    { id: 'jobdur',  label: 'Lasts', min: 1, max: 60, step: 1, value: 24, kind: 'months', help: d => '= ' + durText(d) + ' without that income' }
+  ]},
   { group: 'Advanced assumptions', advanced: true, items: [
     { id: 'down',  label: 'Down payment',          min: 3,  max: 40, step: 1,     value: 20,  kind: 'pct0', hint: 'Share of the price you pay up front.' },
     { id: 'rate',  label: 'Mortgage rate (30-yr)', min: 4, max: 9, step: 0.125, value: 7.25, kind: 'pct3', hint: 'Yearly interest on the loan. The 30-year average was about 7.3% in mid-November 2026.' },
@@ -312,14 +320,16 @@ const CONFIG = [
 ];
 /* What each section shows on its summary line while collapsed (the one or two facts that matter most). */
 const inText = m => m === 0 ? 'now' : m % 12 === 0 ? 'in ' + m / 12 + (m === 12 ? ' year' : ' years') : m < 12 ? 'in ' + m + (m === 1 ? ' month' : ' months') : 'in ' + (+(m / 12).toFixed(1)) + ' years';
+const durText = d => d % 12 === 0 ? d / 12 + (d === 12 ? ' year' : ' years') : d + (d === 1 ? ' month' : ' months');
 const GROUP_KEYS = {
   'Income & savings':     v => 'Saving ' + moneyFull(v.save) + '/mo, ' + money(v.liquid) + ' in cash',
   'Wedding':              v => money(v.wed) + ' budget, ' + inText(v.wedm),
   'House':                (v, m) => money(v.price) + ' house, ' + moneyFull(m.housingAtBuy) + '/mo, buying ' + inText(v.buym),
   'Child':                v => v.kids === 0 ? 'No children planned' : v.kids === 1 ? moneyFull(v.childc) + '/mo, starting ' + inText(v.childm) : '2 children, first ' + inText(v.childm) + ', ' + moneyFull(v.childc) + '/mo each',
+  'What if':              v => v.jobon ? 'Job loss ' + inText(v.jobm) + ', lasts ' + durText(v.jobdur) : 'No scenario on',
   'Advanced assumptions': v => v.down + '% down, ' + v.rate + '% rate'
 };
-const HARD = { money: [0, 1e9], pct: [0, 30], pct0: [0, 100], pct3: [0, 30], plain1: [0, 100], months: [0, INMAX], count: [0, 2] };
+const HARD = { money: [0, 1e9], pct: [0, 30], pct0: [0, 100], pct3: [0, 30], plain1: [0, 100], months: [0, INMAX], count: [0, 2], toggle: [0, 1] };
 CONFIG.forEach(g => g.items.forEach(i => { i.lo = i.lo ?? HARD[i.kind][0]; i.hi = i.hi ?? HARD[i.kind][1]; }));
 const DEFAULTS = Object.fromEntries(CONFIG.flatMap(g => g.items.map(i => [i.id, i.value])));
 const state = { ...DEFAULTS };
@@ -346,13 +356,14 @@ function fmt(kind, v) {
     case 'plain1': return '$' + v.toFixed(1);
     case 'months': return monthsText(v);
     case 'count':  return v + (v === 1 ? ' child' : ' children');
+    case 'toggle': return v ? 'On' : 'Off';
   }
 }
 const yrText = m => m === 0 ? 'now' : 'Yr ' + (+(m / 12).toFixed(1));
 const monthHelp = m => m === 0 ? 'Right now (month 0)' : '= ' + yrText(m) + ' \u00b7 month ' + m + ' from now';
 const helpFor = (it, v) => it.help ? it.help(v) : monthHelp(v);
 function numText(kind, v) {
-  if (kind === 'months' || kind === 'count') return String(Math.round(v));
+  if (kind === 'months' || kind === 'count' || kind === 'toggle') return String(Math.round(v));
   if (kind === 'pct3') return String(+v.toFixed(3));
   if (kind === 'money') return String(Math.round(v));
   return String(+v.toFixed(2));
@@ -392,6 +403,7 @@ function compute(v) {
       liquid = liquid * (1 + r) + v.save;
       if (bought) liquid -= (pmt + upkeep(value) + (loan > 0.8 * priceBuy ? pmi : 0)) - v.rent;
       liquid -= childCost(m);
+      if (v.jobon && m >= v.jobm && m < v.jobm + v.jobdur) liquid -= v.joblost;   // income gap: pay stops for a stretch
       if (bought && loan > 0) { loan -= (pmt - loan * i); if (loan < 0) loan = 0; }
       if (bought) value *= appr;
       retire *= 1 + r;
@@ -401,6 +413,7 @@ function compute(v) {
   let childPeak = 0; for (let m = 0; m <= HZ; m++) childPeak = Math.max(childPeak, childCost(m));
   const spend = Math.max(0, Math.max(0, v.take - v.save) + (housingAtBuy - v.rent) + childPeak);
   const events = [{ m: v.wedm, name: 'Wedding', detail: '\u2212' + money(v.wed) }, { m: v.buym, name: 'House', detail: '\u2212' + money(cash) + ' cash' }];
+  if (v.jobon) events.push({ m: v.jobm, name: 'Job loss', detail: '\u2212' + moneyFull(v.joblost) + '/mo for ' + durText(v.jobdur) });
   births.forEach((b, k) => events.push({ m: b, name: v.kids === 1 ? 'Child' : 'Child ' + (k + 1), detail: '\u2212' + moneyFull(v.childc) + '/mo' }));
   return { ...out, cash, housingAtBuy, priceAtBuy, loanAtBuy, lowAfter, lowMonth, reserve: 6 * spend, events };
 }
@@ -445,7 +458,8 @@ const PRESETS = [
   { name: 'Buy a year sooner', group: 'buy', keys: ['buym'], set: () => ({ buym: Math.max(0, state.buym - 12) }) },
   { name: 'Buy a year later',  group: 'buy', keys: ['buym'], set: () => ({ buym: Math.min(INMAX, state.buym + 12) }) },
   { name: 'Bigger wedding',    keys: ['wed'],   set: () => ({ wed: state.wed > 0 ? Math.round(state.wed * 1.5 / 5000) * 5000 : 50000 }) },
-  { name: 'No children',       keys: ['kids'],   set: () => ({ kids: 0 }) }
+  { name: 'No children',       keys: ['kids'],   set: () => ({ kids: 0 }) },
+  { name: 'Spouse job loss',   keys: ['jobon'],  set: () => ({ jobon: 1 }) }
 ];
 /* Example profiles: five fictional starting points spanning early-career to high-earner. Pick one, then adjust. */
 const PROFILES = [
@@ -483,6 +497,7 @@ function buildControls() {
     const b = h('button', 'chip', pf.name); b.type = 'button'; b.setAttribute('aria-pressed', 'false'); profileBtns[pf.name] = b;
     b.addEventListener('click', () => {
       dropAllPresets(); base = null; lastTouched = null;   // a new starting point: no "vs before" comparison
+      setValue('jobon', 0);   // a new starting point has no job-loss scenario
       for (const k in pf.v) setValue(k, pf.v[k]);
       activeProfile = pf.name; render();
     });
@@ -517,7 +532,8 @@ function buildControls() {
       num.min = it.lo; num.max = it.hi; num.step = it.step; num.value = numText(it.kind, it.value);
       box.appendChild(num);
       box.appendChild(h('span', 'suf', SUFFIX[it.kind] || ''));
-      const fmtEl = it.kind === 'money' ? h('div', 'fmtamt') : null;
+      const fmtEl = (it.kind === 'money' || it.kind === 'toggle') ? h('div', 'fmtamt') : null;
+      if (it.kind === 'toggle') row.classList.add('tg');
       const inp = h('input'); inp.type = 'range'; inp.id = 'in-' + it.id;
       inp.min = it.min; inp.max = it.max; inp.step = it.step; inp.value = it.value;
       inp.setAttribute('aria-label', it.label + ' (slider)');
@@ -533,7 +549,7 @@ function buildControls() {
       });
       num.addEventListener('input', () => {
         let v = parseFloat(num.value); if (isNaN(v)) return;
-        if (it.kind === 'months' || it.kind === 'count') v = Math.round(v);
+        if (it.kind === 'months' || it.kind === 'count' || it.kind === 'toggle') v = Math.round(v);
         touch(it.id); dropPresetsFor(it.id); setValue(it.id, v, true); render();
       });
       const norm = () => { num.value = numText(it.kind, state[it.id]); };
@@ -620,6 +636,12 @@ function drawChart() {
 
   const evs = model.events.filter(e => e.m <= HZ).sort((a, b) => a.m - b.m);
 
+  // job-loss window: a quiet band behind the lines
+  if (state.jobon && state.jobm < HZ) {
+    const x0 = X(state.jobm), x1 = X(Math.min(state.jobm + state.jobdur, HZ));
+    svg.appendChild(s('rect', { x: x0, y: M.t, width: Math.max(1, x1 - x0), height: PH, fill: 'var(--grid)', opacity: 0.55 }));
+  }
+
   // soft wash under total, then 2px lines
   const area = model.total.slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ')
              + ' L' + X(HZ) + ' ' + Y(Math.max(0, lo)) + ' L' + X(0) + ' ' + Y(Math.max(0, lo)) + ' Z';
@@ -629,35 +651,37 @@ function drawChart() {
     svg.appendChild(s('path', { d, fill: 'none', stroke: 'var(' + x.css + ')', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
   });
 
-  // events: a small ring on the top visible line plus a one-word grey label beside it.
-  // Each label tries a few spots around its dot and takes the first that stays inside the plot and clear of earlier labels.
+  // markers and labels. One shared placer: each label tries a few spots around its marker and takes the first that stays
+  // inside the plot and clear of every earlier label and marker, so nothing hides anything else.
   const placed = [];
-  evs.forEach(e => {
-    const x = X(e.m), y = Y(model[VIS[0].key][e.m]);
-    svg.appendChild(s('circle', { cx: x, cy: y, r: 4, fill: 'var(--surface-1)', stroke: 'var(--text-secondary)', 'stroke-width': 2 }));
-    const t = s('text', { class: 'evt' }, e.name); svg.appendChild(t);
-    const w = Math.ceil(t.getComputedTextLength());
-    const spots = [[-8, -9, 'end'], [8, 17, 'start'], [8, -9, 'start'], [-8, 17, 'end'], [8, -27, 'start'], [8, 35, 'start']];
+  const place = (txt, cls, x, y, r) => {
+    const t = s('text', { class: cls }, txt); svg.appendChild(t);
+    const w = Math.ceil(t.getComputedTextLength()), a = r + 4, up = -(r + 5), dn = r + 13;
+    const spots = [[-a, up, 'end'], [a, dn, 'start'], [a, up, 'start'], [-a, dn, 'end'], [a, up - 18, 'start'], [a, dn + 18, 'start']];
     const box = ([dx, dy, anc]) => { const x0 = anc === 'start' ? x + dx : x + dx - w; return { x0, x1: x0 + w, y0: y + dy - 11, y1: y + dy + 3 }; };
     const ok = bx => bx.x0 >= M.l - 2 && bx.x1 <= W - 2 && bx.y0 >= 2 && bx.y1 <= M.t + PH + 2
       && !placed.some(q => bx.x0 < q.x1 + 3 && bx.x1 > q.x0 - 3 && bx.y0 < q.y1 + 1 && bx.y1 > q.y0 - 1);
     const pick = spots.find(sp => ok(box(sp))) || spots[0];
-    placed.push(box(pick));
+    placed.push(box(pick), { x0: x - r - 1, x1: x + r + 1, y0: y - r - 1, y1: y + r + 1 });
     t.setAttribute('x', x + pick[0]); t.setAttribute('y', y + pick[1]); t.setAttribute('text-anchor', pick[2]);
+  };
+
+  // lowest-cash marker: ring on the liquid line plus a short label
+  if (model.lowMonth >= 0 && shown.liquid) {
+    const tx = X(model.lowMonth), ty = Y(model.liquid[model.lowMonth]);
+    svg.appendChild(s('circle', { cx: tx, cy: ty, r: 7, fill: 'none', stroke: 'var(--text-primary)', 'stroke-width': 2 }));
+    place('Low cash', 'tight', tx, ty, 7);
+  }
+  // events: a small ring on the top visible line plus a one-word grey label
+  evs.forEach(e => {
+    const x = X(e.m), y = Y(model[VIS[0].key][e.m]);
+    svg.appendChild(s('circle', { cx: x, cy: y, r: 4, fill: 'var(--surface-1)', stroke: 'var(--text-secondary)', 'stroke-width': 2 }));
+    place(e.name, 'evt', x, y, 4);
   });
 
   // end dots with a 2px surface ring; label only the headline series
   VIS.forEach(x => svg.appendChild(s('circle', { cx: X(HZ), cy: Y(model[x.key][HZ]), r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2 })));
   if (shown.total) svg.appendChild(s('text', { x: X(HZ) + 10, y: Y(model.total[HZ]) + 4, class: 'endlabel' }, money(model.total[HZ])));
-
-  // tightest-month marker: ring on the liquid line plus a label
-  if (model.lowMonth >= 0 && shown.liquid) {
-    const tm = model.lowMonth, tx = X(tm), ty = Y(model.liquid[tm]);
-    svg.appendChild(s('circle', { cx: tx, cy: ty, r: 7, fill: 'none', stroke: 'var(--text-primary)', 'stroke-width': 2 }));
-    const edge = tx < M.l + 40 ? 'start' : tx > W - M.r - 40 ? 'end' : 'middle';
-    const above = ty - 14 > M.t + 8;
-    svg.appendChild(s('text', { x: edge === 'start' ? tx - 6 : edge === 'end' ? tx + 6 : tx, y: above ? ty - 13 : ty + 22, 'text-anchor': edge, class: 'tight' }, 'Tightest month'));
-  }
 
   // hover layer
   const cross = s('line', { y1: M.t, y2: M.t + PH, stroke: 'var(--text-muted)', 'stroke-width': 1, visibility: 'hidden' });
@@ -792,7 +816,7 @@ function render() {
   model = compute(state);
   PRESETS.forEach(p => presetBtns[p.name].setAttribute('aria-pressed', String(!!activePreset[p.name])));
   PROFILES.forEach(pf => profileBtns[pf.name].setAttribute('aria-pressed', String(activeProfile === pf.name)));
-  for (const k in outputs) { const o = outputs[k]; if (o.fmtEl) o.fmtEl.textContent = moneyFull(state[k]); }
+  for (const k in outputs) { const o = outputs[k]; if (o.fmtEl) o.fmtEl.textContent = o.it.kind === 'toggle' ? (state[k] ? 'On' : 'Off') : moneyFull(state[k]); }
   const hn = HZ / 12;
   $('hero-label').textContent = 'Net worth in ' + hn + ' years';
   $('sb-label').textContent = 'Net worth in ' + hn + ' yrs';
