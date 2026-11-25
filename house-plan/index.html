@@ -153,6 +153,7 @@
   .legbtn[aria-pressed="false"] .key { opacity: .35; }
   .key { display: inline-block; width: 16px; height: 0; border-top: 2px solid; border-radius: 2px; }
   .chart { position: relative; }
+  .chartcard h2.subhead { margin-top: 18px; }
   svg { display: block; width: 100%; height: auto; overflow: visible; }
   svg text { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--text-muted); }
   @media (max-width: 600px) { svg text { font-size: 13px; } svg .endlabel { font-size: 14px; } .chartcard { padding: 12px 10px 8px; } }
@@ -245,11 +246,17 @@
         <h2>Net worth over time</h2>
         <div class="seg" id="hz" role="group" aria-label="Time horizon"></div>
       </div>
-      <p class="desc">Hover or use the arrow keys to read any month. Click a legend item to show or hide that line. Solid lines use the left axis (net worth); the dashed line uses the right axis: what you save each month (take-home minus living expenses, housing and children). It is tinted pink when you would be short.</p>
+      <p class="desc">Hover or use the arrow keys to read any month. Click a legend item to show or hide that line. The chart below shows how much you save each month.</p>
       <ul class="legend" id="legend"></ul>
       <div class="chart" id="chart">
         <svg id="svg" viewBox="0 0 820 380" role="img" tabindex="0" aria-label="Net worth chart"></svg>
         <div class="tooltip" id="tip" role="status"></div>
+      </div>
+      <h2 class="subhead">Monthly saving</h2>
+      <p class="desc">What is left each month after living expenses, housing and children. Purple means you are saving; pink means you would be short. It follows the job-loss scenario, and it is on the same time axis as the chart above.</p>
+      <div class="chart" id="chart2">
+        <svg id="svg2" viewBox="0 0 820 200" role="img" tabindex="0" aria-label="Monthly saving chart"></svg>
+        <div class="tooltip" id="tip2" role="status"></div>
       </div>
       <details class="tableview">
         <summary>Table view</summary>
@@ -259,14 +266,14 @@
         <summary>Where the defaults come from</summary>
         <ul class="srcs">
           <li><b>Mortgage rate 7.25%:</b> the 30-year average was 7.28% on Nov 19, 2026 (<a href="https://www.freddiemac.com/pmms" target="_blank" rel="noopener noreferrer">Freddie Mac</a>).</li>
-          <li><b>Child, first 5 years, $2,800/mo:</b> Boston-area infant care runs about $2,000 to $2,800 a month (<a href="https://daycarecalc.com/city-costs/boston-ma" target="_blank" rel="noopener noreferrer">DaycareCalc</a>, <a href="https://blog.wonderschool.com/family-resources/how-much-does-daycare-cost-in-massachusetts-in-2026" target="_blank" rel="noopener noreferrer">Wonderschool</a>). LendingTree puts all-in costs for a small child in Massachusetts near $34,000 a year, mostly day care (<a href="https://www.lendingtree.com/debt-consolidation/raising-a-child-study/" target="_blank" rel="noopener noreferrer">LendingTree</a>), which leaves roughly $600 a month for everything else.</li>
+          <li><b>Child, by age:</b> Massachusetts childcare runs about $2,200 to $2,800 a month for infants, $1,800 to $2,400 for toddlers, $1,400 to $2,000 for preschool and about $1,400 for school-age care (<a href="https://blog.wonderschool.com/family-resources/how-much-does-daycare-cost-in-massachusetts-in-2026" target="_blank" rel="noopener noreferrer">Wonderschool</a>, <a href="https://daycarecalc.com/state-costs/massachusetts" target="_blank" rel="noopener noreferrer">DaycareCalc</a>). Costs do not simply fall with age: USDA found total spending per child roughly flat, about $12,350 to $13,900 a year in 2015 dollars, a little lower for ages 0 to 2 and higher for teens (<a href="https://fns-prod.azureedge.us/sites/default/files/crc2015_March2017.pdf" target="_blank" rel="noopener noreferrer">USDA</a>). LendingTree puts the Massachusetts 18-year total near $274,000 to $282,000, with about $34,000 a year for a small child, mostly day care (<a href="https://www.lendingtree.com/debt-consolidation/raising-a-child-study/" target="_blank" rel="noopener noreferrer">LendingTree</a>). Our defaults add up to about $366,000 per child over 18 years (plus the one-time cost), above those averages because the Boston area and a higher income cost more.</li>
           <li><b>Closing costs 2.5%:</b> Massachusetts estimates range from about 1.3% to 2.4% (<a href="https://www.rocketmortgage.com/learn/closing-costs-massachusetts" target="_blank" rel="noopener noreferrer">Rocket Mortgage</a>, <a href="https://www.bankrate.com/real-estate/closing-costs-in-massachusetts" target="_blank" rel="noopener noreferrer">Bankrate</a>).</li>
           <li><b>Insurance $400/mo:</b> state averages are only about $1,600 to $2,100 a year for $250K to $400K of cover, but a $1M-dwelling policy was quoted near $480 a month (<a href="https://www.moneygeek.com/insurance/homeowners/average-cost-home-insurance-massachusetts" target="_blank" rel="noopener noreferrer">MoneyGeek</a>).</li>
           <li><b>Paid leave:</b> Massachusetts pays up to 12 weeks for bonding, capped at $1,230.39 a week in 2026 (<a href="https://www.mass.gov/info-details/paid-family-and-medical-leave-benefits" target="_blank" rel="noopener noreferrer">Mass.gov</a>), so higher earners lose pay unless an employer tops it up.</li>
-          <li><b>Our own estimates, not sourced:</b> child costs from age 5 to 18, extra utilities, upkeep, the one-time cost per child, property tax near $12 per $1,000, and 3% yearly home appreciation. Mortgage insurance (0.5% of the loan a year) is added automatically when you put down less than 20%.</li>
+          <li><b>Our own estimates, not sourced:</b> the split of child costs from age 3 to 18, extra utilities, upkeep, the one-time cost per child, property tax near $12 per $1,000, and 3% yearly home appreciation. Mortgage insurance (0.5% of the loan a year) is added automatically when you put down less than 20%.</li>
         </ul>
       </details>
-      <p class="fine">Simplified model for planning, not advice. Savings grow at the return you set; a house is bought at today's price grown by appreciation; housing cost = mortgage + property tax + insurance + upkeep + extra utilities (plus mortgage insurance under 20% down), replacing your current rent. Each child costs the full amount to age 5, then a lower amount to age 18. Retirement and other assets grow at the same return with no new contributions.</p>
+      <p class="fine">Simplified model for planning, not advice. Savings grow at the return you set; a house is bought at today's price grown by appreciation; housing cost = mortgage + property tax + insurance + upkeep + extra utilities (plus mortgage insurance under 20% down), replacing your current rent. Each child costs a set amount per month at each age band (0 to 2, 3 to 4, 5 to 12, 13 to 18). Retirement and other assets grow at the same return with no new contributions.</p>
     </div>
   </section>
 </div>
@@ -299,7 +306,10 @@ const CONFIG = [
     { id: 'kids',   label: 'Number of children',  min: 0, max: 2, step: 1, value: 2, kind: 'count', hint: 'The second child follows the gap below.' },
     { id: 'childm', label: 'First child arrives in', min: 0, max: INMAX, step: 1, value: 36, kind: 'months' },
     { id: 'gap',    label: 'Second child comes after', min: 6, max: 60, step: 1, value: 30, kind: 'months', help: g => '= ' + (+(g / 12).toFixed(1)) + ' years after the first' },
-    { id: 'childc', label: 'Cost / month per child (to age 5)', min: 0, max: 6000, step: 100, value: 2800, kind: 'money', hint: 'Boston-area infant care runs about $2,000 to $2,800 a month, plus roughly $600 for food, diapers, health and clothes.' }
+    { id: 'childc',  label: 'Cost / month per child, ages 0 to 2',  min: 0, max: 6000, step: 100, value: 2800, kind: 'money', hint: 'Infant and toddler care in the Boston area runs about $2,200 to $2,800 a month, plus roughly $600 for food, diapers, health and clothes.' },
+    { id: 'childc3', label: 'Cost / month per child, ages 3 to 4',  min: 0, max: 6000, step: 100, value: 2300, kind: 'money', hint: 'Preschool runs about $1,400 to $2,000 a month in Massachusetts, plus about $650 for everything else.' },
+    { id: 'childc2', label: 'Cost / month per child, ages 5 to 12', min: 0, max: 5000, step: 100, value: 1500, kind: 'money', hint: 'After-school and summer care (about $700) plus about $800 for food, clothes, activities and health. Our estimate.' },
+    { id: 'childc4', label: 'Cost / month per child, ages 13 to 18', min: 0, max: 5000, step: 100, value: 1100, kind: 'money', hint: 'No childcare, but food, clothes, activities and transport cost more. Our estimate.' }
   ]},
   { group: 'What if', items: [
     { id: 'jobon',   label: 'Spouse loses a job', min: 0, max: 1, step: 1, value: 0, kind: 'toggle' },
@@ -316,7 +326,6 @@ const CONFIG = [
     { id: 'maint', label: 'Upkeep / yr (share of value)', min: 0.5, max: 3, step: 0.25, value: 1, kind: 'pct', hint: 'Repairs and maintenance. Rules of thumb run 1% to 2% of the home\'s value a year.' },
     { id: 'util',  label: 'Extra utilities vs renting / mo', min: 0, max: 1500, step: 25, value: 350, kind: 'money', hint: 'Heat, electric, water, sewer and snow removal beyond what you pay as a renter. Our estimate.' },
     { id: 'appr',  label: 'Home appreciation / yr', min: 0, max: 6, step: 0.5,   value: 3,   kind: 'pct', hi: 20, hint: 'How much the home\'s price rises each year, on average.' },
-    { id: 'childc2', label: 'Cost / month per child (ages 5 to 18)', min: 0, max: 5000, step: 100, value: 1500, kind: 'money', hint: 'After-school and summer care, activities, food, clothes and health. Our estimate.' },
     { id: 'birth', label: 'One-time cost per child', min: 0, max: 100000, step: 1000, value: 15000, kind: 'money', hint: 'Birth out-of-pocket, gear and any pay gap during leave. Massachusetts paid leave covers up to 12 weeks, capped near $1,230 a week in 2026.' },
     { id: 'furn',  label: 'Furnishing & early repairs', min: 0, max: 100000, step: 5000, value: 30000, kind: 'money', hint: 'One-time spend right after you buy.' },
     { id: 'ret',    label: 'Return on savings / yr', min: 0,   max: 8,       step: 0.5,   value: 4,      kind: 'pct', hint: 'One steady yearly rate for savings and retirement. Real markets swing up and down.' },
@@ -383,8 +392,8 @@ function compute(v) {
   let liquid = v.liquid, retire = v.retire, value = 0, loan = 0, pmt = 0, bought = false;
   const births = v.kids >= 1 ? [v.childm] : [];
   if (v.kids >= 2) births.push(v.childm + v.gap);
-  // per-child monthly cost: full cost to age 5 (childcare years), a lower cost from 5 to 18, nothing after
-  const childCost = m => births.reduce((sum, b) => { const a = m - b; return sum + (a < 0 ? 0 : a < 60 ? v.childc : a < 216 ? v.childc2 : 0); }, 0);
+  // per-child monthly cost by age: 0-2 infant care, 3-4 preschool, 5-12 school age, 13-18 teen, nothing after
+  const childCost = m => births.reduce((sum, b) => { const a = m - b; return sum + (a < 0 ? 0 : a < 36 ? v.childc : a < 60 ? v.childc3 : a < 156 ? v.childc2 : a < 216 ? v.childc4 : 0); }, 0);
   const upkeep = val => val * v.tax / 1000 / 12 + v.ins + val * v.maint / 1200 + v.util;   // property tax + insurance + upkeep + utilities
   let pmi = 0, priceBuy = 0;                                                              // mortgage insurance applies only under 20% down, until the loan falls to 80%
   let cash = 0, housingAtBuy = 0, priceAtBuy = 0, lowAfter = Infinity, lowMonth = -1, loanAtBuy = 0;   // lowAfter = minimum over the WHOLE horizon
@@ -469,12 +478,13 @@ const PRESETS = [
   { name: 'Spouse job loss',   keys: ['jobon'],  set: () => ({ jobon: 1 }) }
 ];
 /* Example profiles: five fictional starting points spanning early-career to high-earner. Pick one, then adjust. */
+const kidStages = c => ({ childc: c, childc3: Math.round(c * 0.82 / 100) * 100, childc2: Math.round(c * 0.54 / 100) * 100, childc4: Math.round(c * 0.39 / 100) * 100 });   // later stages scale with the first
 const PROFILES = [
-  { name: 'Starter',     v: { liquid:  60000, retire:   80000, take:  9000, live:  4300, rent: 2200, wed:  35000, wedm: 18, price:  550000, buym: 36, kids: 2, childm: 48, gap: 36, childc: 2200 } },
-  { name: 'Building',    v: { liquid: 140000, retire:  180000, take: 14000, live:  6200, rent: 2800, wed:  60000, wedm: 12, price:  750000, buym: 30, kids: 2, childm: 36, gap: 30, childc: 2400 } },
-  { name: 'Established', v: { liquid: 320000, retire:  450000, take: 22000, live: 10600, rent: 3400, wed:  90000, wedm: 12, price: 1000000, buym: 24, kids: 2, childm: 30, gap: 30, childc: 2600 } },
-  { name: 'High saver',  v: { liquid: 600000, retire:  700000, take: 32000, live: 14000, rent: 4000, wed: 120000, wedm: 18, price: 1400000, buym: 18, kids: 2, childm: 24, gap: 24, childc: 2800 } },
-  { name: 'Top earner',  v: { liquid: 900000, retire: 1100000, take: 48000, live: 20500, rent: 5500, wed: 200000, wedm: 12, price: 1900000, buym: 24, kids: 2, childm: 36, gap: 30, childc: 3200 } }
+  { name: 'Starter',     v: { liquid:  60000, retire:   80000, take:  9000, live:  4300, rent: 2200, wed:  35000, wedm: 18, price:  550000, buym: 36, kids: 2, childm: 48, gap: 36, ...kidStages(2200) } },
+  { name: 'Building',    v: { liquid: 140000, retire:  180000, take: 14000, live:  6200, rent: 2800, wed:  60000, wedm: 12, price:  750000, buym: 30, kids: 2, childm: 36, gap: 30, ...kidStages(2400) } },
+  { name: 'Established', v: { liquid: 320000, retire:  450000, take: 22000, live: 10600, rent: 3400, wed:  90000, wedm: 12, price: 1000000, buym: 24, kids: 2, childm: 30, gap: 30, ...kidStages(2600) } },
+  { name: 'High saver',  v: { liquid: 600000, retire:  700000, take: 32000, live: 14000, rent: 4000, wed: 120000, wedm: 18, price: 1400000, buym: 18, kids: 2, childm: 24, gap: 24, ...kidStages(2800) } },
+  { name: 'Top earner',  v: { liquid: 900000, retire: 1100000, take: 48000, live: 20500, rent: 5500, wed: 200000, wedm: 12, price: 1900000, buym: 24, kids: 2, childm: 36, gap: 30, ...kidStages(3200) } }
 ];
 const PROFILE_KEYS = Object.keys(PROFILES[0].v);
 let activeProfile = null; const profileBtns = {};
@@ -604,19 +614,18 @@ function layoutChart() {
   const cw = $('chart').clientWidth || 820;
   narrow = cw < 560;
   W = cw; H = narrow ? 330 : 380;
-  M = narrow ? { l: 50, r: 58, t: 34, b: 32 } : { l: 62, r: 78, t: 36, b: 34 };
+  M = narrow ? { l: 50, r: 16, t: 24, b: 32 } : { l: 62, r: 26, t: 24, b: 34 };
   PW = W - M.l - M.r; PH = H - M.t - M.b;
 }
-const FLOWS = [
-  { key: 'save', name: 'Monthly saving (right axis)', css: '--series-4' }
-];
 const SERIES = [
   { key: 'total',  name: 'Total net worth (incl. retirement)', css: '--series-1' },
   { key: 'liquid', name: 'Liquid savings',                     css: '--series-2' },
   { key: 'equity', name: 'Home equity',                        css: '--series-3' }
 ];
-let model = null, sel = null;
-const shown = { total: true, liquid: true, equity: true, save: true };   // which lines are visible (legend items toggle these)
+let model = null, sel = null, hov1 = null, hov2 = null;
+const hoverAll = m => { if (hov1) hov1.show(m); if (hov2) hov2.show(m); };
+const hideAll = () => { if (hov1) hov1.hide(); if (hov2) hov2.hide(); };
+const shown = { total: true, liquid: true, equity: true };   // which lines are visible (legend items toggle these)
 
 function niceTicks(lo, hi) {
   const span = hi - lo || 1, raw = span / 5, p = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -634,15 +643,6 @@ function drawChart() {
   const all = VIS.flatMap(x => model[x.key].slice(0, HZ + 1));
   const { ticks, lo, hi } = niceTicks(Math.min(0, ...all), Math.max(...all));
   const Y = v => M.t + (1 - (v - lo) / (hi - lo)) * PH;
-  // second y-axis (right): monthly take-home and spending
-  const FVIS = FLOWS.filter(x => shown[x.key]);
-  const fv = FVIS.flatMap(x => model[x.key].slice(0, HZ + 1)), f2 = niceTicks(Math.min(0, ...fv), Math.max(1, ...fv));
-  const Y2 = v => M.t + (1 - (v - f2.lo) / (f2.hi - f2.lo)) * PH;
-  if (FVIS.length) {
-    f2.ticks.forEach(t => svg.appendChild(s('text', { x: W - M.r + 8, y: Y2(t) + 4, 'text-anchor': 'start', class: 'ax2' }, money(t))));
-    svg.appendChild(s('text', { x: W - M.r + 8, y: M.t - 10, 'text-anchor': 'start', class: 'ax2' }, 'per month'));
-  }
-
   ticks.forEach(t => {
     svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t), stroke: t === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
     svg.appendChild(s('text', { x: M.l - 8, y: Y(t) + 4, 'text-anchor': 'end' }, money(t)));
@@ -667,26 +667,6 @@ function drawChart() {
   VIS.forEach(x => {
     const d = model[x.key].slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
     svg.appendChild(s('path', { d, fill: 'none', stroke: 'var(' + x.css + ')', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
-  });
-
-  // monthly flows on the right axis: light fill for the gap (saving = purple tint, shortfall = pink tint), then dashed lines
-  if (FVIS.length) {
-    let run = null;
-    const z = Y2(0);
-    const flush = () => { if (run && run.pts.length > 1) {
-      const top = run.pts.map(q => X(q.m).toFixed(1) + ' ' + Y2(q.v).toFixed(1));
-      svg.appendChild(s('path', { d: 'M' + top.join(' L') + ' L' + X(run.pts[run.pts.length - 1].m).toFixed(1) + ' ' + z.toFixed(1) + ' L' + X(run.pts[0].m).toFixed(1) + ' ' + z.toFixed(1) + ' Z', fill: run.pos ? 'var(--series-4)' : 'var(--series-5)', opacity: 0.12 })); } run = null; };
-    for (let m = 0; m <= HZ; m++) {
-      const v = model.save[m], pos = v >= 0;
-      if (!run || run.pos !== pos) { const prev = run && run.pts[run.pts.length - 1]; flush(); run = { pos, pts: [] }; if (prev) run.pts.push({ m: m - 1, v: model.save[m - 1] }); }
-      run.pts.push({ m, v });
-    }
-    flush();
-    if (f2.lo < 0) svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: z, y2: z, stroke: 'var(--series-4)', 'stroke-width': 1, opacity: 0.5 }));
-  }
-  FVIS.forEach(x => {
-    const d = model[x.key].slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y2(v).toFixed(1)).join(' ');
-    svg.appendChild(s('path', { d, fill: 'none', stroke: 'var(' + x.css + ')', 'stroke-width': 1.75, 'stroke-dasharray': '6 4', 'stroke-linejoin': 'round' }));
   });
 
   // markers and labels. One shared placer: each label tries a few spots around its marker and takes the first that stays
@@ -723,7 +703,7 @@ function drawChart() {
 
   // hover layer
   const cross = s('line', { y1: M.t, y2: M.t + PH, stroke: 'var(--text-muted)', 'stroke-width': 1, visibility: 'hidden' });
-  const HV = VIS.map(x => ({ x, f: Y })).concat(FVIS.map(x => ({ x, f: Y2 })));
+  const HV = VIS.map(x => ({ x, f: Y }));
   const dots = HV.map(({ x }) => s('circle', { r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2, visibility: 'hidden' }));
   svg.append(cross, ...dots);
   const hit = s('rect', { x: M.l, y: M.t - 10, width: PW, height: PH + 20, fill: 'transparent' });
@@ -735,11 +715,10 @@ function drawChart() {
     dots.forEach((d, k) => { d.setAttribute('cx', x); d.setAttribute('cy', HV[k].f(model[HV[k].x.key][m])); d.setAttribute('visibility', 'visible'); });
     const tip = $('tip'); tip.replaceChildren();
     tip.appendChild(h('div', 'when', m === 0 ? 'Today' : 'Year ' + (m / 12).toFixed(1) + ' · month ' + m));
-    VIS.concat(FVIS).forEach(sr => {
+    VIS.forEach(sr => {
       const row = h('div', 'trow'), key = h('span', 'key');
       key.style.borderTopColor = 'var(' + sr.css + ')';
-      if (FLOWS.includes(sr)) key.style.borderTopStyle = 'dashed';
-      row.append(key, h('strong', '', moneyFull(model[sr.key][m])), h('span', 'n', sr.key === 'total' ? 'Total' : FLOWS.includes(sr) ? 'Saving / mo' : sr.name));
+      row.append(key, h('strong', '', moneyFull(model[sr.key][m])), h('span', 'n', sr.key === 'total' ? 'Total' : sr.name));
       tip.appendChild(row);
     });
     const ev = model.events.filter(e => e.m === m).map(e => e.icon + ' ' + e.name + ' ' + e.detail);
@@ -752,32 +731,108 @@ function drawChart() {
   function hide() { sel = null; cross.setAttribute('visibility', 'hidden'); dots.forEach(d => d.setAttribute('visibility', 'hidden')); $('tip').style.display = 'none'; }
   hit.addEventListener('pointermove', ev => {
     const b = svg.getBoundingClientRect(), x = (ev.clientX - b.left) * (W / b.width);
-    show(Math.max(0, Math.min(HZ, Math.round((x - M.l) / PW * HZ))));
+    hoverAll(Math.max(0, Math.min(HZ, Math.round((x - M.l) / PW * HZ))));
   });
-  hit.addEventListener('pointerleave', hide);
+  hit.addEventListener('pointerleave', hideAll);
   svg.onkeydown = ev => {
     const step = ev.shiftKey ? 12 : 1; let m = sel === null ? HZ : sel;
     if (ev.key === 'ArrowLeft') m -= step; else if (ev.key === 'ArrowRight') m += step;
-    else if (ev.key === 'Home') m = 0; else if (ev.key === 'End') m = HZ; else if (ev.key === 'Escape') { hide(); return; } else return;
-    ev.preventDefault(); show(Math.max(0, Math.min(HZ, m)));
+    else if (ev.key === 'Home') m = 0; else if (ev.key === 'End') m = HZ; else if (ev.key === 'Escape') { hideAll(); return; } else return;
+    ev.preventDefault(); hoverAll(Math.max(0, Math.min(HZ, m)));
   };
-  svg.onfocus = () => { if (sel === null) show(0); };
-  svg.onblur = hide;
-  if (sel !== null) show(Math.min(sel, HZ));
+  svg.onfocus = () => { if (sel === null) hoverAll(0); };
+  svg.onblur = hideAll;
+  hov1 = { show, hide };
 }
+
+/* second chart: monthly saving (take-home minus living expenses, housing and children), same time axis as the net-worth chart */
+function drawSavings() {
+  const svg = $('svg2'); svg.replaceChildren();
+  const H2 = narrow ? 180 : 200, T = 36, B = 28, PH2 = H2 - T - B;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H2);
+  const vals = model.save.slice(0, HZ + 1);
+  const { ticks, lo, hi } = niceTicks(Math.min(0, ...vals), Math.max(1, ...vals));
+  const Y = v => T + (1 - (v - lo) / (hi - lo)) * PH2;
+  ticks.forEach(t => {
+    svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t), stroke: t === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
+    svg.appendChild(s('text', { x: M.l - 8, y: Y(t) + 4, 'text-anchor': 'end' }, money(t)));
+  });
+  const ys = HZ <= 120 ? (narrow ? 2 : 1) : HZ <= 240 ? (narrow ? 5 : 2) : (narrow ? 10 : 5);
+  for (let yr = 0; yr <= HZ / 12; yr += ys) svg.appendChild(s('text', { x: X(yr * 12), y: H2 - 8, 'text-anchor': 'middle' }, yr === 0 ? 'Now' : 'Yr ' + yr));
+  if (state.jobon && state.jobm < HZ) {
+    const x0 = X(state.jobm), x1 = X(Math.min(state.jobm + state.jobdur, HZ));
+    svg.appendChild(s('rect', { x: x0, y: T, width: Math.max(1, x1 - x0), height: PH2, fill: 'var(--grid)', opacity: 0.55 }));
+  }
+  // tint: purple while saving, pink while short
+  const z = Y(0); let run = null;
+  const flush = () => { if (run && run.pts.length > 1) {
+    const top = run.pts.map(q => X(q.m).toFixed(1) + ' ' + Y(q.v).toFixed(1));
+    svg.appendChild(s('path', { d: 'M' + top.join(' L') + ' L' + X(run.pts[run.pts.length - 1].m).toFixed(1) + ' ' + z.toFixed(1) + ' L' + X(run.pts[0].m).toFixed(1) + ' ' + z.toFixed(1) + ' Z', fill: run.pos ? 'var(--series-4)' : 'var(--series-5)', opacity: 0.16 })); } run = null; };
+  for (let m = 0; m <= HZ; m++) {
+    const v = model.save[m], pos = v >= 0;
+    if (!run || run.pos !== pos) { const prev = run && run.pts[run.pts.length - 1]; flush(); run = { pos, pts: [] }; if (prev) run.pts.push({ m: m - 1, v: model.save[m - 1] }); }
+    run.pts.push({ m, v });
+  }
+  flush();
+  svg.appendChild(s('path', { d: vals.map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' '), fill: 'none', stroke: 'var(--series-4)', 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+  // events: faint guide line and emoji along the top (second row when two events sit close together)
+  let lastX = -99, lastRow = 1;
+  model.events.filter(e => e.m <= HZ).sort((a, b) => a.m - b.m).forEach(e => {
+    const x = X(e.m), row = x - lastX < 24 ? 1 - lastRow : 0; lastX = x; lastRow = row;
+    svg.appendChild(s('line', { x1: x, x2: x, y1: 18 + row * 14, y2: T + PH2, stroke: 'var(--text-muted)', 'stroke-width': 1, 'stroke-dasharray': '2 3', opacity: 0.5 }));
+    svg.appendChild(s('text', { x, y: 14 + row * 14, 'text-anchor': 'middle', class: 'evt' }, e.icon));
+  });
+  // hover
+  const cross = s('line', { y1: T, y2: T + PH2, stroke: 'var(--text-muted)', 'stroke-width': 1, visibility: 'hidden' });
+  const dot = s('circle', { r: 4, fill: 'var(--series-4)', stroke: 'var(--surface-1)', 'stroke-width': 2, visibility: 'hidden' });
+  const hit = s('rect', { x: M.l, y: T - 10, width: PW, height: PH2 + 20, fill: 'transparent' });
+  svg.append(cross, dot, hit);
+  function show(m) {
+    const x = X(m);
+    cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
+    dot.setAttribute('cx', x); dot.setAttribute('cy', Y(model.save[m])); dot.setAttribute('visibility', 'visible');
+    const tip = $('tip2'); tip.replaceChildren();
+    tip.appendChild(h('div', 'when', m === 0 ? 'Today' : 'Year ' + (m / 12).toFixed(1) + ' · month ' + m));
+    [['Take-home', model.take[m], null], ['Spending', model.spend[m], null], [model.save[m] >= 0 ? 'Left to save' : 'Shortfall', model.save[m], '--series-4']].forEach(([name, val, css]) => {
+      const row = h('div', 'trow'), key = h('span', 'key');
+      if (css) key.style.borderTopColor = 'var(' + css + ')'; else key.style.borderTopWidth = '0';
+      row.append(key, h('strong', '', moneyFull(val)), h('span', 'n', name + ' / mo')); tip.appendChild(row);
+    });
+    const ev = model.events.filter(e => e.m === m).map(e => e.icon + ' ' + e.name + ' ' + e.detail);
+    if (ev.length) tip.appendChild(h('div', 'when', 'Event: ' + ev.join(', ')));
+    tip.style.display = 'block';
+    const box = $('chart2').getBoundingClientRect(), px = (x / W) * box.width;
+    tip.style.left = (px + 14 + tip.offsetWidth > box.width ? px - 14 - tip.offsetWidth : px + 14) + 'px';
+  }
+  function hide() { cross.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); $('tip2').style.display = 'none'; }
+  hit.addEventListener('pointermove', ev => {
+    const b = svg.getBoundingClientRect(), x = (ev.clientX - b.left) * (W / b.width);
+    hoverAll(Math.max(0, Math.min(HZ, Math.round((x - M.l) / PW * HZ))));
+  });
+  hit.addEventListener('pointerleave', hideAll);
+  svg.onkeydown = ev => {
+    const step = ev.shiftKey ? 12 : 1; let m = sel === null ? HZ : sel;
+    if (ev.key === 'ArrowLeft') m -= step; else if (ev.key === 'ArrowRight') m += step;
+    else if (ev.key === 'Home') m = 0; else if (ev.key === 'End') m = HZ; else if (ev.key === 'Escape') { hideAll(); return; } else return;
+    ev.preventDefault(); hoverAll(Math.max(0, Math.min(HZ, m)));
+  };
+  svg.onfocus = () => { if (sel === null) hoverAll(0); };
+  svg.onblur = hideAll;
+  hov2 = { show, hide };
+}
+function redrawCharts() { drawChart(); drawSavings(); if (sel !== null) hoverAll(Math.min(sel, HZ)); }
 
 function drawLegend() {
   const ul = $('legend'); ul.replaceChildren();
-  SERIES.concat(FLOWS).forEach(sr => {
+  SERIES.forEach(sr => {
     const li = h('li'), btn = h('button', 'legbtn'), key = h('span', 'key'); btn.type = 'button';
     key.style.borderTopColor = 'var(' + sr.css + ')';
-    if (FLOWS.includes(sr)) key.style.borderTopStyle = 'dashed';
     btn.setAttribute('aria-pressed', String(shown[sr.key]));
     btn.title = (shown[sr.key] ? 'Hide ' : 'Show ') + sr.name;
     btn.append(key, document.createTextNode(sr.name));
     btn.addEventListener('click', () => {
       const on = SERIES.filter(x => shown[x.key]).length;
-      if (SERIES.includes(sr) && shown[sr.key] && on === 1) return;   // always keep at least one net-worth line on screen
+      if (shown[sr.key] && on === 1) return;   // always keep at least one net-worth line on screen
       shown[sr.key] = !shown[sr.key];
       drawLegend(); render();
     });
@@ -866,7 +921,7 @@ function render() {
     if (el) el.textContent = sv < 0 ? 'Living expenses plus rent are higher than take-home, so you would be losing ' + moneyFull(-sv) + ' a month.'
       : 'Today you save about ' + moneyFull(sv) + ' a month (take-home minus living expenses and rent). It shrinks when the mortgage and children arrive.'; }
   groupKeys.forEach(g => { if (g.fn) g.el.textContent = g.fn(state, model); });
-  drawSummary(state); drawChart(); drawTable();
+  drawSummary(state); redrawCharts(); drawTable();
   $('svg').setAttribute('aria-label', 'Net worth chart. Tightest month: ' + yrText(model.lowMonth) + '. Today ' + moneyFull(model.total[0]) + ', in ' + HZ / 12 + ' years ' + moneyFull(model.total[HZ]) + '.');
 }
 
@@ -894,7 +949,7 @@ if ('IntersectionObserver' in window) {   // on narrow screens the summary bar a
 let rz = 0, lastW = $('chart').clientWidth;
 window.addEventListener('resize', () => {
   cancelAnimationFrame(rz);
-  rz = requestAnimationFrame(() => { const w = $('chart').clientWidth; if (w !== lastW) { lastW = w; drawChart(); } });
+  rz = requestAnimationFrame(() => { const w = $('chart').clientWidth; if (w !== lastW) { lastW = w; redrawCharts(); } });
 });
 </script>
 </body>
