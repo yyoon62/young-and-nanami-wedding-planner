@@ -140,6 +140,12 @@
   .chartcard .desc { margin: 2px 0 8px; color: var(--text-secondary); font-size: 13px; }
   .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 6px; padding: 0; list-style: none; font-size: 13px; color: var(--text-secondary); }
   .legend li { display: inline-flex; align-items: center; gap: 6px; }
+  .legend li.dim { opacity: .4; }
+  .legbtn { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+  .legbtn:hover { background: var(--grid); }
+  .legbtn:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+  .legbtn[aria-pressed="false"] { color: var(--text-muted); text-decoration: line-through; }
+  .legbtn[aria-pressed="false"] .key { opacity: .35; }
   .key { display: inline-block; width: 16px; height: 0; border-top: 2px solid; border-radius: 2px; }
   .chart { position: relative; }
   svg { display: block; width: 100%; height: auto; overflow: visible; }
@@ -227,7 +233,7 @@
         <h2>Net worth over time</h2>
         <div class="seg" id="hz" role="group" aria-label="Time horizon"></div>
       </div>
-      <p class="desc">Hover or use the arrow keys to read any month. Vertical lines mark your events.</p>
+      <p class="desc">Hover or use the arrow keys to read any month. Click a legend item to show or hide that line.</p>
       <ul class="legend" id="legend"></ul>
       <div class="chart" id="chart">
         <svg id="svg" viewBox="0 0 820 380" role="img" tabindex="0" aria-label="Net worth chart"></svg>
@@ -278,7 +284,7 @@ const CONFIG = [
     { id: 'ins',   label: 'Insurance / month',     min: 100, max: 600, step: 25,   value: 250, kind: 'money', hint: 'Homeowner\'s insurance, per month.' },
     { id: 'appr',  label: 'Home appreciation / yr', min: 0, max: 6, step: 0.5,   value: 3,   kind: 'pct', hi: 20, hint: 'How much the home\'s price rises each year, on average.' },
     { id: 'furn',  label: 'Furnishing & early repairs', min: 0, max: 100000, step: 5000, value: 30000, kind: 'money', hint: 'One-time spend right after you buy.' },
-    { id: 'ret',    label: 'Return on savings / yr', min: 0,   max: 8,       step: 0.5,   value: 4,      kind: 'pct', hint: 'Average yearly growth of your savings and investments.' },
+    { id: 'ret',    label: 'Return on savings / yr', min: 0,   max: 8,       step: 0.5,   value: 4,      kind: 'pct', hint: 'One steady yearly rate for savings and retirement. Real markets swing up and down.' },
     { id: 'retire', label: 'Retirement & other',      min: 0,   max: 3000000, step: 10000, value: 300000, kind: 'money', hint: '401(k), IRA and similar accounts. They grow but get no new deposits here.' }
   ]}
 ];
@@ -525,6 +531,7 @@ const SERIES = [
   { key: 'equity', name: 'Home equity',                        css: '--series-3' }
 ];
 let model = null, sel = null;
+const shown = { total: true, liquid: true, equity: true };   // which lines are visible (legend items toggle these)
 
 function niceTicks(lo, hi) {
   const span = hi - lo || 1, raw = span / 5, p = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -538,7 +545,8 @@ const X = m => M.l + (m / HZ) * PW;
 function drawChart() {
   layoutChart();
   const svg = $('svg'); svg.replaceChildren(); svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-  const all = SERIES.flatMap(x => model[x.key].slice(0, HZ + 1));
+  const VIS = SERIES.filter(x => shown[x.key]);
+  const all = VIS.flatMap(x => model[x.key].slice(0, HZ + 1));
   const { ticks, lo, hi } = niceTicks(Math.min(0, ...all), Math.max(...all));
   const Y = v => M.t + (1 - (v - lo) / (hi - lo)) * PH;
 
@@ -565,18 +573,18 @@ function drawChart() {
   // soft wash under total, then 2px lines
   const area = model.total.slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ')
              + ' L' + X(HZ) + ' ' + Y(Math.max(0, lo)) + ' L' + X(0) + ' ' + Y(Math.max(0, lo)) + ' Z';
-  svg.appendChild(s('path', { d: area, fill: 'var(--series-1)', opacity: 0.10 }));
-  SERIES.forEach(x => {
+  if (shown.total) svg.appendChild(s('path', { d: area, fill: 'var(--series-1)', opacity: 0.10 }));
+  VIS.forEach(x => {
     const d = model[x.key].slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
     svg.appendChild(s('path', { d, fill: 'none', stroke: 'var(' + x.css + ')', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
   });
 
   // end dots with a 2px surface ring; label only the headline series
-  SERIES.forEach(x => svg.appendChild(s('circle', { cx: X(HZ), cy: Y(model[x.key][HZ]), r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2 })));
-  svg.appendChild(s('text', { x: X(HZ) + 10, y: Y(model.total[HZ]) + 4, class: 'endlabel' }, money(model.total[HZ])));
+  VIS.forEach(x => svg.appendChild(s('circle', { cx: X(HZ), cy: Y(model[x.key][HZ]), r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2 })));
+  if (shown.total) svg.appendChild(s('text', { x: X(HZ) + 10, y: Y(model.total[HZ]) + 4, class: 'endlabel' }, money(model.total[HZ])));
 
   // tightest-month marker: ring on the liquid line plus a label
-  if (model.lowMonth >= 0) {
+  if (model.lowMonth >= 0 && shown.liquid) {
     const tm = model.lowMonth, tx = X(tm), ty = Y(model.liquid[tm]);
     svg.appendChild(s('circle', { cx: tx, cy: ty, r: 7, fill: 'none', stroke: 'var(--text-primary)', 'stroke-width': 2 }));
     const edge = tx < M.l + 40 ? 'start' : tx > W - M.r - 40 ? 'end' : 'middle';
@@ -586,7 +594,7 @@ function drawChart() {
 
   // hover layer
   const cross = s('line', { y1: M.t, y2: M.t + PH, stroke: 'var(--text-muted)', 'stroke-width': 1, visibility: 'hidden' });
-  const dots = SERIES.map(x => s('circle', { r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2, visibility: 'hidden' }));
+  const dots = VIS.map(x => s('circle', { r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2, visibility: 'hidden' }));
   svg.append(cross, ...dots);
   const hit = s('rect', { x: M.l, y: M.t - 10, width: PW, height: PH + 20, fill: 'transparent' });
   svg.appendChild(hit);
@@ -594,17 +602,17 @@ function drawChart() {
   function show(m) {
     sel = m; const x = X(m);
     cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
-    dots.forEach((d, k) => { d.setAttribute('cx', x); d.setAttribute('cy', Y(model[SERIES[k].key][m])); d.setAttribute('visibility', 'visible'); });
+    dots.forEach((d, k) => { d.setAttribute('cx', x); d.setAttribute('cy', Y(model[VIS[k].key][m])); d.setAttribute('visibility', 'visible'); });
     const tip = $('tip'); tip.replaceChildren();
     tip.appendChild(h('div', 'when', m === 0 ? 'Today' : 'Year ' + (m / 12).toFixed(1) + ' · month ' + m));
-    SERIES.forEach(sr => {
+    VIS.forEach(sr => {
       const row = h('div', 'trow'), key = h('span', 'key');
       key.style.borderTopColor = 'var(' + sr.css + ')';
       row.append(key, h('strong', '', moneyFull(model[sr.key][m])), h('span', 'n', sr.key === 'total' ? 'Total' : sr.name));
       tip.appendChild(row);
     });
     const ev = model.events.filter(e => e.m === m).map(e => e.name);
-    if (m === model.lowMonth) ev.push('Tightest month');
+    if (shown.liquid && m === model.lowMonth) ev.push('Tightest month');
     if (ev.length) tip.appendChild(h('div', 'when', 'Event: ' + ev.join(', ')));
     tip.style.display = 'block';
     const box = $('chart').getBoundingClientRect(), px = (x / W) * box.width;
@@ -630,10 +638,20 @@ function drawChart() {
 function drawLegend() {
   const ul = $('legend'); ul.replaceChildren();
   SERIES.forEach(sr => {
-    const li = h('li'), key = h('span', 'key'); key.style.borderTopColor = 'var(' + sr.css + ')';
-    li.append(key, document.createTextNode(sr.name)); ul.appendChild(li);
+    const li = h('li'), btn = h('button', 'legbtn'), key = h('span', 'key'); btn.type = 'button';
+    key.style.borderTopColor = 'var(' + sr.css + ')';
+    btn.setAttribute('aria-pressed', String(shown[sr.key]));
+    btn.title = (shown[sr.key] ? 'Hide ' : 'Show ') + sr.name;
+    btn.append(key, document.createTextNode(sr.name));
+    btn.addEventListener('click', () => {
+      const on = SERIES.filter(x => shown[x.key]).length;
+      if (shown[sr.key] && on === 1) return;   // always keep at least one line on screen
+      shown[sr.key] = !shown[sr.key];
+      drawLegend(); render();
+    });
+    li.appendChild(btn); ul.appendChild(li);
   });
-  const lt = h('li'); lt.append(h('span', 'ring'), document.createTextNode('Tightest month (lowest liquid cash)')); ul.appendChild(lt);
+  const lt = h('li', shown.liquid ? '' : 'dim'); lt.append(h('span', 'ring'), document.createTextNode('Tightest month (lowest liquid cash)')); ul.appendChild(lt);
 }
 
 function drawTable() {
