@@ -321,7 +321,7 @@ const CONFIG = [
 /* What each section shows on its summary line while collapsed (the one or two facts that matter most). */
 const inText = m => m === 0 ? 'now' : m % 12 === 0 ? 'in ' + m / 12 + (m === 12 ? ' year' : ' years') : m < 12 ? 'in ' + m + (m === 1 ? ' month' : ' months') : 'in ' + (+(m / 12).toFixed(1)) + ' years';
 const durText = d => d % 12 === 0 ? d / 12 + (d === 12 ? ' year' : ' years') : d + (d === 1 ? ' month' : ' months');
-const GROUP_ICONS = { 'Income & savings': '\u{1F4B5}', 'Wedding': '\u{1F492}', 'House': '\u{1F3E0}', 'Child': '\u{1F476}', 'What if': '\u{1F3B2}', 'Advanced assumptions': '\u2699\uFE0F' };
+const GROUP_ICONS = { 'Income & savings': '\u{1F4B5}', 'Wedding': '\u{1F470}\u{1F935}', 'House': '\u{1F3E0}', 'Child': '\u{1F476}', 'What if': '\u{1F3B2}', 'Advanced assumptions': '\u2699\uFE0F' };
 const GROUP_KEYS = {
   'Income & savings':     v => 'Saving ' + moneyFull(v.save) + '/mo, ' + money(v.liquid) + ' in cash',
   'Wedding':              v => money(v.wed) + ' budget, ' + inText(v.wedm),
@@ -413,7 +413,7 @@ function compute(v) {
   // realistic monthly spending once the house and child both apply: living costs, housing change, child cost
   let childPeak = 0; for (let m = 0; m <= HZ; m++) childPeak = Math.max(childPeak, childCost(m));
   const spend = Math.max(0, Math.max(0, v.take - v.save) + (housingAtBuy - v.rent) + childPeak);
-  const events = [{ m: v.wedm, name: 'Wedding', icon: '\u{1F492}', detail: '\u2212' + money(v.wed) }, { m: v.buym, name: 'House', icon: '\u{1F3E0}', detail: '\u2212' + money(cash) + ' cash' }];
+  const events = [{ m: v.wedm, name: 'Wedding', icon: '\u{1F470}\u{1F935}', detail: '\u2212' + money(v.wed) }, { m: v.buym, name: 'House', icon: '\u{1F3E0}', detail: '\u2212' + money(cash) + ' cash' }];
   if (v.jobon) events.push({ m: v.jobm, name: 'Job loss', icon: '\u{1F4BC}', detail: '\u2212' + moneyFull(v.joblost) + '/mo for ' + durText(v.jobdur) });
   births.forEach((b, k) => events.push({ m: b, name: v.kids === 1 ? 'Child' : 'Child ' + (k + 1), icon: '\u{1F476}' + (v.kids === 1 ? '' : k + 1), detail: '\u2212' + moneyFull(v.childc) + '/mo' }));
   return { ...out, cash, housingAtBuy, priceAtBuy, loanAtBuy, lowAfter, lowMonth, reserve: 6 * spend, events };
