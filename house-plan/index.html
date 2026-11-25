@@ -78,6 +78,7 @@
   .chip:focus-visible, .linkbtn:focus-visible, .num input:focus-visible, summary:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
   .chip[aria-pressed=true] { background: var(--grid); border-color: var(--text-secondary); font-weight: 600; }
   .resetrow { border-top: 1px solid var(--grid); padding: 14px 0 4px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+  .plabel { font-size: 12px; font-weight: 600; color: var(--text-muted); margin: 0 0 6px; }
   .chip.reset { border-style: dashed; color: var(--text-secondary); }
   .chip.reset.armed { border-style: solid; border-color: var(--critical); color: var(--text-primary); }
   .resetmsg { font-size: 13px; color: var(--text-secondary); display: inline-flex; gap: 8px; align-items: center; }
@@ -414,6 +415,16 @@ const PRESETS = [
   { name: 'Bigger wedding',    keys: ['wed'],   set: () => ({ wed: state.wed > 0 ? Math.round(state.wed * 1.5 / 5000) * 5000 : 50000 }) },
   { name: 'No child',          keys: ['childc'], set: () => ({ childc: 0 }) }
 ];
+/* Example profiles: five fictional starting points spanning early-career to high-earner. Pick one, then adjust. */
+const PROFILES = [
+  { name: 'Starter',     v: { liquid:  60000, retire:   80000, save:  2500, take:  9000, rent: 2200, wed:  35000, wedm: 18, price:  550000, buym: 36, childm: 48, childc: 1600 } },
+  { name: 'Building',    v: { liquid: 140000, retire:  180000, save:  5000, take: 14000, rent: 2800, wed:  60000, wedm: 12, price:  750000, buym: 30, childm: 36, childc: 2000 } },
+  { name: 'Established', v: { liquid: 320000, retire:  450000, save:  8000, take: 22000, rent: 3400, wed:  90000, wedm: 12, price: 1000000, buym: 24, childm: 30, childc: 2400 } },
+  { name: 'High saver',  v: { liquid: 600000, retire:  700000, save: 14000, take: 32000, rent: 4000, wed: 120000, wedm: 18, price: 1400000, buym: 18, childm: 24, childc: 3000 } },
+  { name: 'Top earner',  v: { liquid: 900000, retire: 1100000, save: 22000, take: 48000, rent: 5500, wed: 200000, wedm: 12, price: 1900000, buym: 24, childm: 36, childc: 3500 } }
+];
+const PROFILE_KEYS = Object.keys(PROFILES[0].v);
+let activeProfile = null; const profileBtns = {};
 const activePreset = {}, presetBtns = {};   // activePreset[name] = { before: { key: value } } while the chip is on
 function presetOff(p) {
   const a = activePreset[p.name]; if (!a) return;
@@ -426,11 +437,26 @@ function presetOn(p) {
   const ch = p.set(); for (const k in ch) setValue(k, ch[k]);
   activePreset[p.name] = { before };
 }
-function dropPresetsFor(key) { PRESETS.forEach(p => { if (activePreset[p.name] && p.keys.includes(key)) delete activePreset[p.name]; }); }
-function dropAllPresets() { for (const k in activePreset) delete activePreset[k]; }
+function dropPresetsFor(key) {
+  PRESETS.forEach(p => { if (activePreset[p.name] && p.keys.includes(key)) delete activePreset[p.name]; });
+  if (activeProfile && PROFILE_KEYS.includes(key)) activeProfile = null;   // you edited a profile value, so it no longer matches
+}
+function dropAllPresets() { for (const k in activePreset) delete activePreset[k]; activeProfile = null; }
 
 function buildControls() {
   const root = $('controls');
+  const plab = h('div', 'plabel', 'Start from an example'), prow = h('div', 'chips');
+  prow.setAttribute('role', 'group'); prow.setAttribute('aria-label', 'Example profiles');
+  PROFILES.forEach(pf => {
+    const b = h('button', 'chip', pf.name); b.type = 'button'; b.setAttribute('aria-pressed', 'false'); profileBtns[pf.name] = b;
+    b.addEventListener('click', () => {
+      dropAllPresets(); base = null; lastTouched = null;   // a new starting point: no "vs before" comparison
+      for (const k in pf.v) setValue(k, pf.v[k]);
+      activeProfile = pf.name; render();
+    });
+    prow.appendChild(b);
+  });
+  root.append(plab, prow);
   const chips = h('div', 'chips'); chips.setAttribute('role', 'group'); chips.setAttribute('aria-label', 'Quick scenarios');
   PRESETS.forEach(p => {
     const b = h('button', 'chip', p.name); b.type = 'button';
@@ -724,6 +750,7 @@ function drawSummary(v) {
 function render() {
   model = compute(state);
   PRESETS.forEach(p => presetBtns[p.name].setAttribute('aria-pressed', String(!!activePreset[p.name])));
+  PROFILES.forEach(pf => profileBtns[pf.name].setAttribute('aria-pressed', String(activeProfile === pf.name)));
   for (const k in outputs) { const o = outputs[k]; if (o.fmtEl) o.fmtEl.textContent = moneyFull(state[k]); }
   const hn = HZ / 12;
   $('hero-label').textContent = 'Net worth in ' + hn + ' years';
