@@ -129,6 +129,12 @@
 
   .chartcard { padding: 14px 16px 10px; }
   .chartcard h2 { margin: 0; font-size: 16px; font-weight: 650; }
+  .charthead { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; }
+  .seg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--axis); border-radius: 999px; }
+  .seg button { min-height: 28px; padding: 0 12px; border: 0; border-radius: 999px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+  .seg button:hover { background: var(--grid); }
+  .seg button[aria-pressed="true"] { background: var(--grid); color: var(--text-primary); font-weight: 700; box-shadow: inset 0 0 0 1px var(--axis); }
+  .seg button:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
   .chartcard .desc { margin: 2px 0 8px; color: var(--text-secondary); font-size: 13px; }
   .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 6px; padding: 0; list-style: none; font-size: 13px; color: var(--text-secondary); }
   .legend li { display: inline-flex; align-items: center; gap: 6px; }
@@ -170,12 +176,12 @@
 </nav>
 <header>
   <h1>House &amp; wedding planner</h1>
-  <p class="sub">Move the sliders to see how savings, a wedding, a house purchase and a child change net worth over the next 10 years.</p>
+  <p class="sub">Move the sliders to see how savings, a wedding, a house purchase and a child change your net worth over time.</p>
 </header>
 
 <div class="stickybar" id="sticky" aria-label="Summary">
   <div class="sbin" id="sbin">
-    <div><span class="sl">Net worth in 10 yrs</span><strong id="sb-value">–</strong><span class="sbd" id="sb-delta"></span></div>
+    <div><span class="sl" id="sb-label">Net worth in 10 yrs</span><strong id="sb-value">–</strong><span class="sbd" id="sb-delta"></span></div>
     <div class="status" id="sb-status"></div>
   </div>
 </div>
@@ -186,7 +192,7 @@
   <section class="results">
     <div class="card hero">
       <div class="verdict" id="verdict" role="status"></div>
-      <div class="label">Net worth in 10 years</div>
+      <div class="label" id="hero-label">Net worth in 10 years</div>
       <div class="value" id="hero-value">–</div>
       <div class="delta" id="d-hero"></div>
       <div class="note" id="hero-note"></div>
@@ -206,7 +212,7 @@
         <div class="note" id="t-month-note"></div>
       </div>
       <div class="card tile">
-        <div class="label">Lowest liquid cash (next 10 yrs)</div>
+        <div class="label" id="t-low-label">Lowest liquid cash (next 10 yrs)</div>
         <div class="value" id="t-low">–</div>
         <div class="delta" id="d-low"></div>
         <div class="status" id="t-status"></div>
@@ -215,7 +221,10 @@
     </div>
 
     <div class="card chartcard">
-      <h2>Net worth over time</h2>
+      <div class="charthead">
+        <h2>Net worth over time</h2>
+        <div class="seg" id="hz" role="group" aria-label="Time horizon"></div>
+      </div>
       <p class="desc">Hover or use the arrow keys to read any month. Vertical lines mark your events.</p>
       <ul class="legend" id="legend"></ul>
       <div class="chart" id="chart">
@@ -234,7 +243,9 @@
 
 <script>
 'use strict';
-const MONTHS = 120;
+const INMAX = 120;   // latest month an event (wedding, purchase, child) can be set
+const MAXM = 360;    // model length = longest chart horizon (30 years)
+let HZ = 120;        // chart / summary horizon in months (5, 10, 20 or 30 years)
 
 /* ---------- inputs (placeholders only; nothing is persisted) ---------- */
 /* Essentials first, in the order people think: income, wedding, house, child (time order); assumptions last. */
@@ -247,14 +258,14 @@ const CONFIG = [
   ]},
   { group: 'Wedding', items: [
     { id: 'wed',  label: 'Wedding budget',     min: 0, max: 400000, step: 5000, value: 80000, kind: 'money' },
-    { id: 'wedm', label: 'Wedding happens in', min: 0, max: MONTHS, step: 1, value: 12, kind: 'months' }
+    { id: 'wedm', label: 'Wedding happens in', min: 0, max: INMAX, step: 1, value: 12, kind: 'months' }
   ]},
   { group: 'House', items: [
     { id: 'price', label: 'House price (today\'s dollars)', min: 400000, max: 3000000, step: 25000, value: 850000, kind: 'money', hint: 'Grows with appreciation until you buy.' },
-    { id: 'buym',  label: 'Buy in',  min: 0, max: MONTHS, step: 1, value: 24, kind: 'months' }
+    { id: 'buym',  label: 'Buy in',  min: 0, max: INMAX, step: 1, value: 24, kind: 'months' }
   ]},
   { group: 'Child', items: [
-    { id: 'childm', label: 'Child arrives in',    min: 0, max: MONTHS, step: 1, value: 36, kind: 'months' },
+    { id: 'childm', label: 'Child arrives in',    min: 0, max: INMAX, step: 1, value: 36, kind: 'months' },
     { id: 'childc', label: 'Cost / month (0 = none)', min: 0, max: 6000, step: 100, value: 2500, kind: 'money', hint: 'Extra monthly spending once the child arrives.' }
   ]},
   { group: 'Advanced assumptions', advanced: true, items: [
@@ -277,7 +288,7 @@ const GROUP_KEYS = {
   'Child':                v => v.childc > 0 ? moneyFull(v.childc) + '/mo from ' + yrText(v.childm) : 'None planned',
   'Advanced assumptions': v => v.down + '% down · ' + v.rate + '% rate'
 };
-const HARD = { money: [0, 1e9], pct: [0, 30], pct0: [0, 100], pct3: [0, 30], plain1: [0, 100], months: [0, MONTHS] };
+const HARD = { money: [0, 1e9], pct: [0, 30], pct0: [0, 100], pct3: [0, 30], plain1: [0, 100], months: [0, INMAX] };
 CONFIG.forEach(g => g.items.forEach(i => { i.lo = i.lo ?? HARD[i.kind][0]; i.hi = i.hi ?? HARD[i.kind][1]; }));
 const DEFAULTS = Object.fromEntries(CONFIG.flatMap(g => g.items.map(i => [i.id, i.value])));
 const state = { ...DEFAULTS };
@@ -322,7 +333,7 @@ function compute(v) {
   let liquid = v.liquid, retire = v.retire, value = 0, loan = 0, pmt = 0, bought = false;
   let cash = 0, housingAtBuy = 0, priceAtBuy = 0, lowAfter = Infinity, lowMonth = -1, loanAtBuy = 0;   // lowAfter = minimum over the WHOLE horizon
   const out = { m: [], liquid: [], equity: [], retire: [], total: [] };
-  for (let m = 0; m <= MONTHS; m++) {
+  for (let m = 0; m <= MAXM; m++) {
     if (m === v.wedm) liquid -= v.wed;
     if (m === v.buym) {
       priceAtBuy = v.price * Math.pow(1 + v.appr / 100, m / 12);
@@ -333,10 +344,10 @@ function compute(v) {
       pmt = i === 0 ? loan / 360 : loan * i / (1 - Math.pow(1 + i, -360));
       housingAtBuy = pmt + value * v.tax / 1000 / 12 + v.ins + value * 0.01 / 12;
     }
-    if (liquid < lowAfter) { lowAfter = liquid; lowMonth = m; }
+    if (m <= HZ && liquid < lowAfter) { lowAfter = liquid; lowMonth = m; }
     out.m.push(m); out.liquid.push(liquid); out.retire.push(retire);
     out.equity.push(value - loan); out.total.push(liquid + retire + value - loan);
-    if (m < MONTHS) {
+    if (m < MAXM) {
       liquid = liquid * (1 + r) + v.save;
       if (bought) liquid -= (pmt + value * v.tax / 1000 / 12 + v.ins + value * 0.01 / 12) - v.rent;
       if (v.childc > 0 && m >= v.childm) liquid -= v.childc;
@@ -370,8 +381,8 @@ function h(tag, cls, text) {
 
 /* ---------- controls ---------- */
 const outputs = {}, groupKeys = [];
-let base = null, lastTouched = null, lastChild = DEFAULTS.childc;   // snapshot for "vs before" deltas
-function metrics() { return { nw: model.total[MONTHS], cash: model.cash, month: model.housingAtBuy, low: model.lowAfter }; }
+let base = null, lastTouched = null;   // snapshot for "vs before" deltas
+function metrics() { return { nw: model.total[HZ], cash: model.cash, month: model.housingAtBuy, low: model.lowAfter }; }
 function touch(key) { if (lastTouched !== key) { base = metrics(); lastTouched = key; } }
 
 function setValue(id, v, skipNum) {
@@ -386,23 +397,38 @@ function setValue(id, v, skipNum) {
   if (o.hint && it.kind === 'months') o.hint.textContent = monthHelp(v);
 }
 
+/* Scenario chips are true toggles: clicking turns one on (remembering the values it changed), clicking again restores them.
+   'Sooner' and 'later' share a group, so turning one on first turns the other off. Editing a value a chip changed turns that chip off. */
 const PRESETS = [
-  { name: 'Buy a year sooner', set: () => ({ buym: state.buym - 12 }) },
-  { name: 'Buy a year later',  set: () => ({ buym: state.buym + 12 }) },
-  { name: 'Bigger wedding',    set: () => ({ wed: state.wed > 0 ? Math.round(state.wed * 1.5 / 5000) * 5000 : 50000 }) },
-  { name: 'No child',          toggle: true, set: () => ({ childc: state.childc > 0 ? 0 : (lastChild || 2500) }) }
+  { name: 'Buy a year sooner', group: 'buy', keys: ['buym'], set: () => ({ buym: Math.max(0, state.buym - 12) }) },
+  { name: 'Buy a year later',  group: 'buy', keys: ['buym'], set: () => ({ buym: Math.min(INMAX, state.buym + 12) }) },
+  { name: 'Bigger wedding',    keys: ['wed'],   set: () => ({ wed: state.wed > 0 ? Math.round(state.wed * 1.5 / 5000) * 5000 : 50000 }) },
+  { name: 'No child',          keys: ['childc'], set: () => ({ childc: 0 }) }
 ];
+const activePreset = {}, presetBtns = {};   // activePreset[name] = { before: { key: value } } while the chip is on
+function presetOff(p) {
+  const a = activePreset[p.name]; if (!a) return;
+  for (const k in a.before) setValue(k, a.before[k]);
+  delete activePreset[p.name];
+}
+function presetOn(p) {
+  if (p.group) PRESETS.forEach(q => { if (q !== p && q.group === p.group) presetOff(q); });
+  const before = {}; p.keys.forEach(k => { before[k] = state[k]; });
+  const ch = p.set(); for (const k in ch) setValue(k, ch[k]);
+  activePreset[p.name] = { before };
+}
+function dropPresetsFor(key) { PRESETS.forEach(p => { if (activePreset[p.name] && p.keys.includes(key)) delete activePreset[p.name]; }); }
+function dropAllPresets() { for (const k in activePreset) delete activePreset[k]; }
 
-let toggleBtn = null;
 function buildControls() {
   const root = $('controls');
   const chips = h('div', 'chips'); chips.setAttribute('role', 'group'); chips.setAttribute('aria-label', 'Quick scenarios');
   PRESETS.forEach(p => {
     const b = h('button', 'chip', p.name); b.type = 'button';
-    if (p.toggle) { b.setAttribute('aria-pressed', 'false'); toggleBtn = b; }
+    b.setAttribute('aria-pressed', 'false'); presetBtns[p.name] = b;
     b.addEventListener('click', () => {
       lastTouched = null; touch('preset:' + p.name);
-      const ch = p.set(); for (const k in ch) setValue(k, ch[k]);
+      if (activePreset[p.name]) presetOff(p); else presetOn(p);
       render();
     });
     chips.appendChild(b);
@@ -433,7 +459,7 @@ function buildControls() {
       else if (it.hint) hint = h('div', 'hint', it.hint);
       outputs[it.id] = { inp, num, it, hint, fmtEl };
       inp.addEventListener('input', () => {
-        touch(it.id); state[it.id] = parseFloat(inp.value);
+        touch(it.id); dropPresetsFor(it.id); state[it.id] = parseFloat(inp.value);
         num.value = numText(it.kind, state[it.id]);
         if (hint && it.kind === 'months') hint.textContent = monthHelp(state[it.id]);
         render();
@@ -441,7 +467,7 @@ function buildControls() {
       num.addEventListener('input', () => {
         let v = parseFloat(num.value); if (isNaN(v)) return;
         if (it.kind === 'months') v = Math.round(v);
-        touch(it.id); setValue(it.id, v, true); render();
+        touch(it.id); dropPresetsFor(it.id); setValue(it.id, v, true); render();
       });
       const norm = () => { num.value = numText(it.kind, state[it.id]); };
       num.addEventListener('change', norm);
@@ -465,10 +491,12 @@ function buildControls() {
     }
     disarm();
     snapshot = { ...state };
+    dropAllPresets();
     for (const k in outputs) setValue(k, DEFAULTS[k]);
     base = null; lastTouched = null; render();
     const undo = h('button', 'linkbtn', 'Undo'); undo.type = 'button';
     undo.addEventListener('click', () => {
+      dropAllPresets();
       for (const k in snapshot) setValue(k, snapshot[k]);
       base = null; lastTouched = null; clearTimeout(undoTimer); msg.textContent = 'Your values are back.'; render();
     });
@@ -502,12 +530,12 @@ function niceTicks(lo, hi) {
   do { t.push(y); y += step; } while (t[t.length - 1] < hi - step * 0.001);
   return { ticks: t, lo: t[0], hi: t[t.length - 1] };
 }
-const X = m => M.l + (m / MONTHS) * PW;
+const X = m => M.l + (m / HZ) * PW;
 
 function drawChart() {
   layoutChart();
   const svg = $('svg'); svg.replaceChildren(); svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-  const all = SERIES.flatMap(x => model[x.key]);
+  const all = SERIES.flatMap(x => model[x.key].slice(0, HZ + 1));
   const { ticks, lo, hi } = niceTicks(Math.min(0, ...all), Math.max(...all));
   const Y = v => M.t + (1 - (v - lo) / (hi - lo)) * PH;
 
@@ -515,14 +543,15 @@ function drawChart() {
     svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t), stroke: t === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
     svg.appendChild(s('text', { x: M.l - 8, y: Y(t) + 4, 'text-anchor': 'end' }, money(t)));
   });
-  for (let yr = 0; yr <= 10; yr += narrow ? 2 : 1) {
+  const ys = HZ <= 120 ? (narrow ? 2 : 1) : HZ <= 240 ? (narrow ? 5 : 2) : (narrow ? 10 : 5);
+  for (let yr = 0; yr <= HZ / 12; yr += ys) {
     svg.appendChild(s('text', { x: X(yr * 12), y: H - 10, 'text-anchor': 'middle' }, yr === 0 ? 'Now' : 'Yr ' + yr));
   }
 
   // event markers, labels staggered across three rows so they never collide
   // narrow: short names, 3 rows at 15px; labels are clamped inside the plot so none is clipped
   const rowH = narrow ? 15 : 14;
-  [...model.events].sort((a, b) => a.m - b.m).forEach((e, idx) => {
+  model.events.filter(e => e.m <= HZ).sort((a, b) => a.m - b.m).forEach((e, idx) => {
     const x = X(e.m), y = 12 + (idx % 3) * rowH;
     const right = x > W - M.r - (narrow ? 62 : 90);
     svg.appendChild(s('line', { x1: x, x2: x, y1: y + 4, y2: M.t + PH, stroke: 'var(--axis)', 'stroke-width': 1 }));
@@ -531,17 +560,17 @@ function drawChart() {
   });
 
   // soft wash under total, then 2px lines
-  const area = model.total.map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ')
-             + ' L' + X(MONTHS) + ' ' + Y(Math.max(0, lo)) + ' L' + X(0) + ' ' + Y(Math.max(0, lo)) + ' Z';
+  const area = model.total.slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ')
+             + ' L' + X(HZ) + ' ' + Y(Math.max(0, lo)) + ' L' + X(0) + ' ' + Y(Math.max(0, lo)) + ' Z';
   svg.appendChild(s('path', { d: area, fill: 'var(--series-1)', opacity: 0.10 }));
   SERIES.forEach(x => {
-    const d = model[x.key].map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
+    const d = model[x.key].slice(0, HZ + 1).map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
     svg.appendChild(s('path', { d, fill: 'none', stroke: 'var(' + x.css + ')', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
   });
 
   // end dots with a 2px surface ring; label only the headline series
-  SERIES.forEach(x => svg.appendChild(s('circle', { cx: X(MONTHS), cy: Y(model[x.key][MONTHS]), r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2 })));
-  svg.appendChild(s('text', { x: X(MONTHS) + 10, y: Y(model.total[MONTHS]) + 4, class: 'endlabel' }, money(model.total[MONTHS])));
+  SERIES.forEach(x => svg.appendChild(s('circle', { cx: X(HZ), cy: Y(model[x.key][HZ]), r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2 })));
+  svg.appendChild(s('text', { x: X(HZ) + 10, y: Y(model.total[HZ]) + 4, class: 'endlabel' }, money(model.total[HZ])));
 
   // tightest-month marker: ring on the liquid line plus a label
   if (model.lowMonth >= 0) {
@@ -581,18 +610,18 @@ function drawChart() {
   function hide() { sel = null; cross.setAttribute('visibility', 'hidden'); dots.forEach(d => d.setAttribute('visibility', 'hidden')); $('tip').style.display = 'none'; }
   hit.addEventListener('pointermove', ev => {
     const b = svg.getBoundingClientRect(), x = (ev.clientX - b.left) * (W / b.width);
-    show(Math.max(0, Math.min(MONTHS, Math.round((x - M.l) / PW * MONTHS))));
+    show(Math.max(0, Math.min(HZ, Math.round((x - M.l) / PW * HZ))));
   });
   hit.addEventListener('pointerleave', hide);
   svg.onkeydown = ev => {
-    const step = ev.shiftKey ? 12 : 1; let m = sel === null ? MONTHS : sel;
+    const step = ev.shiftKey ? 12 : 1; let m = sel === null ? HZ : sel;
     if (ev.key === 'ArrowLeft') m -= step; else if (ev.key === 'ArrowRight') m += step;
-    else if (ev.key === 'Home') m = 0; else if (ev.key === 'End') m = MONTHS; else if (ev.key === 'Escape') { hide(); return; } else return;
-    ev.preventDefault(); show(Math.max(0, Math.min(MONTHS, m)));
+    else if (ev.key === 'Home') m = 0; else if (ev.key === 'End') m = HZ; else if (ev.key === 'Escape') { hide(); return; } else return;
+    ev.preventDefault(); show(Math.max(0, Math.min(HZ, m)));
   };
   svg.onfocus = () => { if (sel === null) show(0); };
   svg.onblur = hide;
-  if (sel !== null) show(sel);
+  if (sel !== null) show(Math.min(sel, HZ));
 }
 
 function drawLegend() {
@@ -608,7 +637,7 @@ function drawTable() {
   const t = $('table'); t.replaceChildren();
   const head = h('tr'); ['When', 'Total', 'Liquid', 'Home equity', 'Retirement & other'].forEach(c => head.appendChild(h('th', '', c)));
   t.appendChild(head);
-  for (let yr = 0; yr <= 10; yr++) {
+  for (let yr = 0; yr <= HZ / 12; yr += HZ <= 120 ? 1 : HZ <= 240 ? 2 : 5) {
     const m = yr * 12, tr = h('tr');
     [yr === 0 ? 'Now' : 'Year ' + yr, moneyFull(model.total[m]), moneyFull(model.liquid[m]), moneyFull(model.equity[m]), moneyFull(model.retire[m])]
       .forEach(c => tr.appendChild(h('td', '', c)));
@@ -625,9 +654,9 @@ function deltaText(d, f) {
 }
 function drawSummary(v) {
   const start = v.liquid + v.retire;
-  $('hero-value').textContent = money(model.total[MONTHS]);
-  $('hero-note').textContent = 'Up from ' + money(start) + ' today, including home equity of ' + money(model.equity[MONTHS]) + '.';
-  $('d-hero').textContent = base ? deltaText(model.total[MONTHS] - base.nw, money) : '';
+  $('hero-value').textContent = money(model.total[HZ]);
+  $('hero-note').textContent = 'Up from ' + money(start) + ' today, including home equity of ' + money(model.equity[HZ]) + '.';
+  $('d-hero').textContent = base ? deltaText(model.total[HZ] - base.nw, money) : '';
   $('d-cash').textContent = base ? deltaText(model.cash - base.cash, money) : '';
   $('d-month').textContent = base ? deltaText(model.housingAtBuy - base.month, money) : '';
   $('d-low').textContent = base ? deltaText(model.lowAfter - base.low, money) : '';
@@ -665,23 +694,40 @@ function drawSummary(v) {
   const vb = $('verdict'); vb.replaceChildren(); vb.className = 'verdict ' + cls;
   vb.append(h('span', 'icon', icon), h('span', '', verdict));
 
-  $('sb-value').textContent = money(model.total[MONTHS]);
-  $('sb-delta').textContent = base ? deltaText(model.total[MONTHS] - base.nw, money) : '';
+  $('sb-value').textContent = money(model.total[HZ]);
+  $('sb-delta').textContent = base ? deltaText(model.total[HZ] - base.nw, money) : '';
   const sb = $('sb-status'); sb.replaceChildren(); sb.className = 'status ' + cls;
   sb.append(h('span', 'icon', icon), h('span', '', word + ' · lowest cash ' + money(low) + ' (' + when + ')'));
 }
 
 function render() {
-  if (state.childc > 0) lastChild = state.childc;
   model = compute(state);
-  if (toggleBtn) toggleBtn.setAttribute('aria-pressed', String(state.childc === 0));
+  PRESETS.forEach(p => presetBtns[p.name].setAttribute('aria-pressed', String(!!activePreset[p.name])));
   for (const k in outputs) { const o = outputs[k]; if (o.fmtEl) o.fmtEl.textContent = moneyFull(state[k]); }
+  const hn = HZ / 12;
+  $('hero-label').textContent = 'Net worth in ' + hn + ' years';
+  $('sb-label').textContent = 'Net worth in ' + hn + ' yrs';
+  $('t-low-label').textContent = 'Lowest liquid cash (next ' + hn + ' yrs)';
   groupKeys.forEach(g => { if (g.fn) g.el.textContent = g.fn(state, model); });
   drawSummary(state); drawChart(); drawTable();
-  $('svg').setAttribute('aria-label', 'Net worth chart. Tightest month: ' + yrText(model.lowMonth) + '. Today ' + moneyFull(model.total[0]) + ', in 10 years ' + moneyFull(model.total[MONTHS]) + '.');
+  $('svg').setAttribute('aria-label', 'Net worth chart. Tightest month: ' + yrText(model.lowMonth) + '. Today ' + moneyFull(model.total[0]) + ', in ' + HZ / 12 + ' years ' + moneyFull(model.total[HZ]) + '.');
 }
 
-buildControls(); drawLegend(); render();
+function buildHorizon() {
+  const box = $('hz');
+  [5, 10, 20, 30].forEach(yrs => {
+    const b = h('button', '', yrs + ' yrs'); b.type = 'button';
+    b.setAttribute('aria-pressed', String(yrs * 12 === HZ));
+    b.addEventListener('click', () => {
+      HZ = yrs * 12; sel = null;
+      box.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      base = null; lastTouched = null;   // "vs before" deltas restart for the new window
+      render();
+    });
+    box.appendChild(b);
+  });
+}
+buildControls(); buildHorizon(); drawLegend(); render();
 if ('IntersectionObserver' in window) {   // on narrow screens the summary bar appears only once the hero has scrolled away
   new IntersectionObserver(es => {
     const e = es[es.length - 1];
