@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>House &amp; wedding planner</title>
+<style>
+  /* Colors follow the dataviz reference palette; swap the custom properties to rebrand. */
+  :root { color-scheme: light dark; }
+  body.viz-root {
+    --page:           #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #6f6d68;
+    --grid:           #e1e0d9;
+    --axis:           #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;   /* total net worth */
+    --series-2:       #eb6834;   /* liquid savings  */
+    --series-3:       #1baf7a;   /* home equity     */
+    --good:           #0ca30c;
+    --warning:        #fab219;
+    --critical:       #d03b3b;
+    margin: 0; background: var(--page); color: var(--text-primary);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    body.viz-root {
+      --page:           #0d0d0d;
+      --surface-1:      #1a1a19;
+      --text-primary:   #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #a09e97;
+      --grid:           #2c2c2a;
+      --axis:           #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --series-3:       #199e70;
+    }
+  }
+  * { box-sizing: border-box; }
+  header { max-width: 1240px; margin: 0 auto; padding: 28px 20px 8px; }
+  h1 { margin: 0 0 4px; font-size: 24px; font-weight: 650; }
+  .sub { margin: 0; color: var(--text-secondary); max-width: 70ch; }
+  .privacy { margin: 10px 0 0; font-size: 13px; color: var(--text-muted); }
+  .layout { max-width: 1240px; margin: 0 auto; padding: 16px 20px 48px;
+            display: grid; grid-template-columns: 340px minmax(0,1fr); gap: 20px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; }
+  .controls { padding: 4px 16px 12px; }
+  details.group { border-top: 1px solid var(--grid); padding: 10px 0 4px; }
+  details.group:first-of-type { border-top: 0; }
+  details.group > summary { cursor: pointer; font-weight: 600; padding: 2px 0 8px; list-style-position: inside; }
+  .row { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; margin: 0 0 12px; }
+  .row label { color: var(--text-secondary); font-size: 13px; }
+  .row output { font-weight: 600; font-size: 13px; }
+  .row input[type=range] { grid-column: 1 / -1; width: 100%; margin: 4px 0 0; accent-color: var(--series-1); }
+  .row .hint { grid-column: 1 / -1; font-size: 12px; color: var(--text-muted); }
+  .reset { margin: 8px 0 4px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--axis);
+           background: transparent; color: var(--text-primary); cursor: pointer; font: inherit; font-size: 13px; }
+  .reset:hover { background: var(--grid); }
+
+  .results { display: grid; gap: 16px; min-width: 0; }
+  .hero { padding: 20px 22px; }
+  .hero .label { color: var(--text-secondary); font-size: 14px; }
+  .hero .value { font-size: 56px; font-weight: 650; line-height: 1.1; margin: 2px 0; }
+  .hero .note { color: var(--text-secondary); font-size: 14px; }
+  .tiles { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; }
+  @media (max-width: 700px) { .tiles { grid-template-columns: 1fr; } }
+  .tile { padding: 14px 16px; }
+  .tile .label { color: var(--text-secondary); font-size: 13px; }
+  .tile .value { font-size: 26px; font-weight: 650; margin: 2px 0; }
+  .tile .note { color: var(--text-secondary); font-size: 13px; }
+  .status { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; font-weight: 600; margin-top: 2px; }
+  .status .icon { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+                  font-size: 11px; font-weight: 800; color: #fff; }
+  .status.good .icon { background: var(--good); }
+  .status.warn .icon { background: var(--warning); color: #0b0b0b; }
+  .status.bad  .icon { background: var(--critical); }
+
+  .chartcard { padding: 14px 16px 10px; }
+  .chartcard h2 { margin: 0; font-size: 16px; font-weight: 650; }
+  .chartcard .desc { margin: 2px 0 8px; color: var(--text-secondary); font-size: 13px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 6px; padding: 0; list-style: none; font-size: 13px; color: var(--text-secondary); }
+  .legend li { display: inline-flex; align-items: center; gap: 6px; }
+  .key { display: inline-block; width: 16px; height: 0; border-top: 2px solid; border-radius: 2px; }
+  .chart { position: relative; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  svg text { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--text-muted); }
+  svg .evt { fill: var(--text-secondary); }
+  svg .endlabel { fill: var(--text-primary); font-weight: 650; font-size: 13px; }
+  svg:focus-visible { outline: 2px solid var(--series-1); outline-offset: 4px; border-radius: 4px; }
+  .tooltip { position: absolute; top: 6px; pointer-events: none; min-width: 190px; padding: 8px 10px;
+             background: var(--surface-1); border: 1px solid var(--axis); border-radius: 8px;
+             box-shadow: 0 4px 14px rgba(0,0,0,0.12); font-size: 13px; display: none; z-index: 2; }
+  .tooltip .when { color: var(--text-secondary); margin-bottom: 4px; }
+  .tooltip .trow { display: grid; grid-template-columns: 16px auto 1fr; gap: 6px; align-items: center; padding: 1px 0; }
+  .tooltip .trow strong { font-weight: 650; color: var(--text-primary); }
+  .tooltip .trow span.n { color: var(--text-secondary); text-align: right; }
+  details.tableview { margin-top: 8px; border-top: 1px solid var(--grid); padding-top: 8px; }
+  details.tableview summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 8px; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-secondary); font-weight: 600; }
+  .fine { font-size: 12px; color: var(--text-muted); margin: 8px 2px 0; }
+</style>
+</head>
+<body class="viz-root">
+<header>
+  <h1>House &amp; wedding planner</h1>
+  <p class="sub">Move the sliders to see how savings, a wedding, a house purchase and a child change net worth over the next 10 years.</p>
+  <p class="privacy">Everything you enter stays in this browser tab. Nothing is saved, sent anywhere, or put in the address bar. The starting values are generic placeholders.</p>
+</header>
+
+<div class="layout">
+  <aside class="card controls" id="controls" aria-label="Assumptions"></aside>
+
+  <section class="results">
+    <div class="card hero">
+      <div class="label">Net worth in 10 years</div>
+      <div class="value" id="hero-value">–</div>
+      <div class="note" id="hero-note"></div>
+    </div>
+
+    <div class="tiles">
+      <div class="card tile">
+        <div class="label">Cash needed to buy</div>
+        <div class="value" id="t-cash">–</div>
+        <div class="note" id="t-cash-note"></div>
+      </div>
+      <div class="card tile">
+        <div class="label">Monthly housing cost</div>
+        <div class="value" id="t-month">–</div>
+        <div class="note" id="t-month-note"></div>
+      </div>
+      <div class="card tile">
+        <div class="label">Lowest liquid cash after buying</div>
+        <div class="value" id="t-low">–</div>
+        <div class="status" id="t-status"></div>
+        <div class="note" id="t-low-note"></div>
+      </div>
+    </div>
+
+    <div class="card chartcard">
+      <h2>Net worth over time</h2>
+      <p class="desc">Hover or use the arrow keys to read any month. Vertical lines mark your events.</p>
+      <ul class="legend" id="legend"></ul>
+      <div class="chart" id="chart">
+        <svg id="svg" viewBox="0 0 820 380" role="img" tabindex="0" aria-label="Net worth chart"></svg>
+        <div class="tooltip" id="tip" role="status"></div>
+      </div>
+      <details class="tableview">
+        <summary>Table view</summary>
+        <table id="table"></table>
+      </details>
+      <p class="fine">Simplified model for planning, not advice. Savings grow at the return you set; a house is bought at today's price grown by appreciation; housing cost = mortgage + property tax + insurance + 1% a year maintenance, replacing your current rent. Retirement and other assets grow at the same return with no new contributions.</p>
+    </div>
+  </section>
+</div>
+
+<script>
+'use strict';
+const MONTHS = 120;
+
+/* ---------- inputs (placeholders only; nothing is persisted) ---------- */
+const CONFIG = [
+  { group: 'Today', items: [
+    { id: 'liquid', label: 'Liquid savings',          min: 0,    max: 2000000, step: 10000, value: 250000, kind: 'money' },
+    { id: 'retire', label: 'Retirement & other',      min: 0,    max: 3000000, step: 10000, value: 300000, kind: 'money' },
+    { id: 'save',   label: 'Monthly savings',         min: 0,    max: 40000,   step: 500,   value: 8000,   kind: 'money' },
+    { id: 'take',   label: 'Take-home pay / month',   min: 5000, max: 60000,   step: 500,   value: 20000,  kind: 'money' },
+    { id: 'rent',   label: 'Current rent / month',    min: 0,    max: 8000,    step: 100,   value: 3000,   kind: 'money' },
+    { id: 'ret',    label: 'Return on savings / yr',  min: 0,    max: 8,       step: 0.5,   value: 4,      kind: 'pct' }
+  ]},
+  { group: 'Wedding', items: [
+    { id: 'wed',  label: 'Wedding budget',   min: 0, max: 400000, step: 5000, value: 80000, kind: 'money' },
+    { id: 'wedm', label: 'Wedding happens in', min: 0, max: MONTHS, step: 1, value: 12, kind: 'months' }
+  ]},
+  { group: 'House', items: [
+    { id: 'price', label: 'Price (in today\'s dollars)', min: 400000, max: 3000000, step: 25000, value: 1000000, kind: 'money' },
+    { id: 'down',  label: 'Down payment',        min: 3,  max: 40, step: 1,     value: 20,  kind: 'pct0' },
+    { id: 'close', label: 'Closing costs',       min: 2,  max: 5,  step: 0.5,   value: 3,   kind: 'pct' },
+    { id: 'rate',  label: 'Mortgage rate (30-yr)', min: 4, max: 9, step: 0.125, value: 6.5, kind: 'pct3' },
+    { id: 'tax',   label: 'Property tax per $1,000', min: 8, max: 20, step: 0.1, value: 12, kind: 'plain1' },
+    { id: 'ins',   label: 'Insurance / month',   min: 100, max: 600, step: 25,   value: 250, kind: 'money' },
+    { id: 'appr',  label: 'Home appreciation / yr', min: 0, max: 6, step: 0.5,   value: 3,   kind: 'pct' },
+    { id: 'furn',  label: 'Furnishing & early repairs', min: 0, max: 100000, step: 5000, value: 30000, kind: 'money' },
+    { id: 'buym',  label: 'Buy in',              min: 0, max: MONTHS, step: 1,  value: 24,  kind: 'months' }
+  ]},
+  { group: 'Child', items: [
+    { id: 'childm', label: 'Child arrives in',    min: 0, max: MONTHS, step: 1, value: 36, kind: 'months' },
+    { id: 'childc', label: 'Cost / month (0 = none)', min: 0, max: 6000, step: 100, value: 2500, kind: 'money' }
+  ]}
+];
+const DEFAULTS = Object.fromEntries(CONFIG.flatMap(g => g.items.map(i => [i.id, i.value])));
+const state = { ...DEFAULTS };
+
+/* ---------- formatting ---------- */
+function money(n) {
+  const a = Math.abs(n), s = n < 0 ? '−' : '';
+  if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M';
+  if (a >= 1e3) return s + '$' + Math.round(a / 1e3) + 'K';
+  return s + '$' + Math.round(a);
+}
+const moneyFull = n => (n < 0 ? '−' : '') + '$' + Math.round(Math.abs(n)).toLocaleString('en-US');
+function monthsText(m) {
+  if (m === 0) return 'now';
+  const y = m / 12;
+  return m < 12 ? m + ' mo' : (Number.isInteger(y) ? y + ' yr' : y.toFixed(1) + ' yr') + ' (' + m + ' mo)';
+}
+function fmt(kind, v) {
+  switch (kind) {
+    case 'money':  return moneyFull(v);
+    case 'pct':    return v.toFixed(1) + '%';
+    case 'pct0':   return v.toFixed(0) + '%';
+    case 'pct3':   return v.toFixed(3) + '%';
+    case 'plain1': return '$' + v.toFixed(1);
+    case 'months': return monthsText(v);
+  }
+}
+
+/* ---------- model ---------- */
+function compute(v) {
+  const r = v.ret / 100 / 12, appr = Math.pow(1 + v.appr / 100, 1 / 12);
+  const i = v.rate / 1200;
+  let liquid = v.liquid, retire = v.retire, value = 0, loan = 0, pmt = 0, bought = false;
+  let cash = 0, housingAtBuy = 0, priceAtBuy = 0, lowAfter = Infinity, loanAtBuy = 0;
+  const out = { m: [], liquid: [], equity: [], retire: [], total: [] };
+  for (let m = 0; m <= MONTHS; m++) {
+    if (m === v.wedm) liquid -= v.wed;
+    if (m === v.buym) {
+      priceAtBuy = v.price * Math.pow(1 + v.appr / 100, m / 12);
+      const down = priceAtBuy * v.down / 100, closing = priceAtBuy * v.close / 100;
+      cash = down + closing + v.furn;
+      liquid -= cash;
+      value = priceAtBuy; loan = priceAtBuy - down; loanAtBuy = loan; bought = true;
+      pmt = i === 0 ? loan / 360 : loan * i / (1 - Math.pow(1 + i, -360));
+      housingAtBuy = pmt + value * v.tax / 1000 / 12 + v.ins + value * 0.01 / 12;
+    }
+    if (bought) lowAfter = Math.min(lowAfter, liquid);
+    out.m.push(m); out.liquid.push(liquid); out.retire.push(retire);
+    out.equity.push(value - loan); out.total.push(liquid + retire + value - loan);
+    if (m < MONTHS) {
+      liquid = liquid * (1 + r) + v.save;
+      if (bought) liquid -= (pmt + value * v.tax / 1000 / 12 + v.ins + value * 0.01 / 12) - v.rent;
+      if (v.childc > 0 && m >= v.childm) liquid -= v.childc;
+      if (bought && loan > 0) { loan -= (pmt - loan * i); if (loan < 0) loan = 0; }
+      if (bought) value *= appr;
+      retire *= 1 + r;
+    }
+  }
+  const spend = Math.max(0, v.take - v.save);
+  const events = [{ m: v.wedm, name: 'Wedding' }, { m: v.buym, name: 'House' }];
+  if (v.childc > 0) events.push({ m: v.childm, name: 'Child' });
+  return { ...out, cash, housingAtBuy, priceAtBuy, loanAtBuy, lowAfter, reserve: 6 * spend, events };
+}
+
+/* ---------- DOM helpers ---------- */
+const $ = id => document.getElementById(id);
+const NS = 'http://www.w3.org/2000/svg';
+function s(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function h(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+/* ---------- controls ---------- */
+const outputs = {};
+function buildControls() {
+  const root = $('controls');
+  CONFIG.forEach(g => {
+    const d = h('details', 'group'); d.open = true;
+    d.appendChild(h('summary', '', g.group));
+    g.items.forEach(it => {
+      const row = h('div', 'row');
+      const lab = h('label', '', it.label); lab.htmlFor = 'in-' + it.id;
+      const out = h('output', '', fmt(it.kind, it.value)); out.htmlFor = 'in-' + it.id;
+      const inp = h('input'); inp.type = 'range'; inp.id = 'in-' + it.id;
+      inp.min = it.min; inp.max = it.max; inp.step = it.step; inp.value = it.value;
+      inp.addEventListener('input', () => { state[it.id] = parseFloat(inp.value); out.textContent = fmt(it.kind, state[it.id]); render(); });
+      outputs[it.id] = { inp, out, it };
+      row.append(lab, out, inp); d.appendChild(row);
+    });
+    root.appendChild(d);
+  });
+  const reset = h('button', 'reset', 'Reset to placeholders'); reset.type = 'button';
+  reset.addEventListener('click', () => {
+    for (const k in outputs) { const o = outputs[k]; state[k] = DEFAULTS[k]; o.inp.value = DEFAULTS[k]; o.out.textContent = fmt(o.it.kind, DEFAULTS[k]); }
+    render();
+  });
+  root.appendChild(reset);
+}
+
+/* ---------- chart ---------- */
+const W = 820, H = 380, M = { l: 62, r: 78, t: 50, b: 34 };
+const PW = W - M.l - M.r, PH = H - M.t - M.b;
+const SERIES = [
+  { key: 'total',  name: 'Total net worth (incl. retirement)', css: '--series-1' },
+  { key: 'liquid', name: 'Liquid savings',                     css: '--series-2' },
+  { key: 'equity', name: 'Home equity',                        css: '--series-3' }
+];
+let model = null, sel = null;
+
+function niceTicks(lo, hi) {
+  const span = hi - lo || 1, raw = span / 5, p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(k => k * p).find(x => x >= raw);
+  const t = []; let y = Math.floor(lo / step) * step;
+  do { t.push(y); y += step; } while (t[t.length - 1] < hi - step * 0.001);
+  return { ticks: t, lo: t[0], hi: t[t.length - 1] };
+}
+const X = m => M.l + (m / MONTHS) * PW;
+
+function drawChart() {
+  const svg = $('svg'); svg.replaceChildren();
+  const all = SERIES.flatMap(x => model[x.key]);
+  const { ticks, lo, hi } = niceTicks(Math.min(0, ...all), Math.max(...all));
+  const Y = v => M.t + (1 - (v - lo) / (hi - lo)) * PH;
+
+  ticks.forEach(t => {
+    svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t), stroke: t === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
+    svg.appendChild(s('text', { x: M.l - 8, y: Y(t) + 4, 'text-anchor': 'end' }, money(t)));
+  });
+  for (let yr = 0; yr <= 10; yr++) {
+    svg.appendChild(s('text', { x: X(yr * 12), y: H - 10, 'text-anchor': 'middle' }, yr === 0 ? 'Now' : 'Yr ' + yr));
+  }
+
+  // event markers, labels staggered across three rows so they never collide
+  [...model.events].sort((a, b) => a.m - b.m).forEach((e, idx) => {
+    const x = X(e.m), y = 12 + (idx % 3) * 13, right = x > W - M.r - 90;
+    svg.appendChild(s('line', { x1: x, x2: x, y1: y + 4, y2: M.t + PH, stroke: 'var(--axis)', 'stroke-width': 1 }));
+    svg.appendChild(s('text', { x: right ? x - 4 : x + 4, y: y + 3, 'text-anchor': right ? 'end' : 'start', class: 'evt' }, e.name + ' · ' + monthsText(e.m)));
+  });
+
+  // soft wash under total, then 2px lines
+  const area = model.total.map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ')
+             + ' L' + X(MONTHS) + ' ' + Y(Math.max(0, lo)) + ' L' + X(0) + ' ' + Y(Math.max(0, lo)) + ' Z';
+  svg.appendChild(s('path', { d: area, fill: 'var(--series-1)', opacity: 0.10 }));
+  SERIES.forEach(x => {
+    const d = model[x.key].map((v, m) => (m ? 'L' : 'M') + X(m).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
+    svg.appendChild(s('path', { d, fill: 'none', stroke: 'var(' + x.css + ')', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+  });
+
+  // end dots with a 2px surface ring; label only the headline series
+  SERIES.forEach(x => svg.appendChild(s('circle', { cx: X(MONTHS), cy: Y(model[x.key][MONTHS]), r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2 })));
+  svg.appendChild(s('text', { x: X(MONTHS) + 10, y: Y(model.total[MONTHS]) + 4, class: 'endlabel' }, money(model.total[MONTHS])));
+
+  // hover layer
+  const cross = s('line', { y1: M.t, y2: M.t + PH, stroke: 'var(--text-muted)', 'stroke-width': 1, visibility: 'hidden' });
+  const dots = SERIES.map(x => s('circle', { r: 4, fill: 'var(' + x.css + ')', stroke: 'var(--surface-1)', 'stroke-width': 2, visibility: 'hidden' }));
+  svg.append(cross, ...dots);
+  const hit = s('rect', { x: M.l, y: M.t - 10, width: PW, height: PH + 20, fill: 'transparent' });
+  svg.appendChild(hit);
+
+  function show(m) {
+    sel = m; const x = X(m);
+    cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
+    dots.forEach((d, k) => { d.setAttribute('cx', x); d.setAttribute('cy', Y(model[SERIES[k].key][m])); d.setAttribute('visibility', 'visible'); });
+    const tip = $('tip'); tip.replaceChildren();
+    tip.appendChild(h('div', 'when', m === 0 ? 'Today' : 'Year ' + (m / 12).toFixed(1) + ' · month ' + m));
+    SERIES.forEach(sr => {
+      const row = h('div', 'trow'), key = h('span', 'key');
+      key.style.borderTopColor = 'var(' + sr.css + ')';
+      row.append(key, h('strong', '', moneyFull(model[sr.key][m])), h('span', 'n', sr.key === 'total' ? 'Total' : sr.name));
+      tip.appendChild(row);
+    });
+    const ev = model.events.filter(e => e.m === m).map(e => e.name);
+    if (ev.length) tip.appendChild(h('div', 'when', 'Event: ' + ev.join(', ')));
+    tip.style.display = 'block';
+    const box = $('chart').getBoundingClientRect(), px = (x / W) * box.width;
+    tip.style.left = (px + 14 + tip.offsetWidth > box.width ? px - 14 - tip.offsetWidth : px + 14) + 'px';
+  }
+  function hide() { sel = null; cross.setAttribute('visibility', 'hidden'); dots.forEach(d => d.setAttribute('visibility', 'hidden')); $('tip').style.display = 'none'; }
+  hit.addEventListener('pointermove', ev => {
+    const b = svg.getBoundingClientRect(), x = (ev.clientX - b.left) * (W / b.width);
+    show(Math.max(0, Math.min(MONTHS, Math.round((x - M.l) / PW * MONTHS))));
+  });
+  hit.addEventListener('pointerleave', hide);
+  svg.onkeydown = ev => {
+    const step = ev.shiftKey ? 12 : 1; let m = sel === null ? MONTHS : sel;
+    if (ev.key === 'ArrowLeft') m -= step; else if (ev.key === 'ArrowRight') m += step;
+    else if (ev.key === 'Home') m = 0; else if (ev.key === 'End') m = MONTHS; else if (ev.key === 'Escape') { hide(); return; } else return;
+    ev.preventDefault(); show(Math.max(0, Math.min(MONTHS, m)));
+  };
+  svg.onfocus = () => { if (sel === null) show(0); };
+  svg.onblur = hide;
+  if (sel !== null) show(sel);
+}
+
+function drawLegend() {
+  const ul = $('legend'); ul.replaceChildren();
+  SERIES.forEach(sr => {
+    const li = h('li'), key = h('span', 'key'); key.style.borderTopColor = 'var(' + sr.css + ')';
+    li.append(key, document.createTextNode(sr.name)); ul.appendChild(li);
+  });
+}
+
+function drawTable() {
+  const t = $('table'); t.replaceChildren();
+  const head = h('tr'); ['When', 'Total', 'Liquid', 'Home equity', 'Retirement & other'].forEach(c => head.appendChild(h('th', '', c)));
+  t.appendChild(head);
+  for (let yr = 0; yr <= 10; yr++) {
+    const m = yr * 12, tr = h('tr');
+    [yr === 0 ? 'Now' : 'Year ' + yr, moneyFull(model.total[m]), moneyFull(model.liquid[m]), moneyFull(model.equity[m]), moneyFull(model.retire[m])]
+      .forEach(c => tr.appendChild(h('td', '', c)));
+    t.appendChild(tr);
+  }
+}
+
+/* ---------- summary tiles ---------- */
+function drawSummary(v) {
+  const start = v.liquid + v.retire;
+  $('hero-value').textContent = money(model.total[MONTHS]);
+  $('hero-note').textContent = 'Up from ' + money(start) + ' today, including home equity of ' + money(model.equity[MONTHS]) + '.';
+
+  $('t-cash').textContent = moneyFull(model.cash);
+  $('t-cash-note').textContent = 'Down payment + closing + furnishing on a ' + money(model.priceAtBuy) + ' home bought in ' + monthsText(v.buym) + '.';
+
+  $('t-month').textContent = moneyFull(model.housingAtBuy);
+  const pct = model.housingAtBuy / v.take * 100;
+  $('t-month-note').textContent = pct.toFixed(0) + '% of take-home; ' + (model.housingAtBuy - v.rent >= 0 ? moneyFull(model.housingAtBuy - v.rent) + ' more' : moneyFull(v.rent - model.housingAtBuy) + ' less') + ' than current rent.';
+
+  const low = model.lowAfter;
+  $('t-low').textContent = moneyFull(low);
+  const st = $('t-status'); st.replaceChildren();
+  let cls, icon, txt;
+  if (low < 0)                     { cls = 'bad';  icon = '✕'; txt = 'Short: cash runs out'; }
+  else if (low < model.reserve)    { cls = 'warn'; icon = '!';      txt = 'Below a 6-month reserve'; }
+  else                             { cls = 'good'; icon = '✓'; txt = 'Above a 6-month reserve'; }
+  st.className = 'status ' + cls;
+  st.append(h('span', 'icon', icon), h('span', '', txt));
+  $('t-low-note').textContent = '6 months of spending is about ' + moneyFull(model.reserve) + ' (take-home minus savings).';
+}
+
+function render() {
+  model = compute(state);
+  drawSummary(state); drawChart(); drawTable();
+  $('svg').setAttribute('aria-label', 'Net worth chart. Today ' + moneyFull(model.total[0]) + ', in 10 years ' + moneyFull(model.total[MONTHS]) + '.');
+}
+
+buildControls(); drawLegend(); render();
+</script>
+</body>
+</html>
