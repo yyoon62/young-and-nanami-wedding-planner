@@ -62,11 +62,13 @@ class StatementShortcuts(unittest.TestCase):
     def test_explicit_create_then_edit_one_of_two_same_servicer_loans(self):
         with tempfile.TemporaryDirectory() as tmp, running(Path(tmp) / "fictional.db") as request:
             original = request("/")[1]
-            token = re.search(r'name="token" value="([^"]+)"', request("/new")[1])[1]
-            status, view = shortcut("/new?servicer=uas", token)
+            self.assertIn('href="/servicers"', original)
+            self.assertIn('href="/new?servicer=uas"', request("/servicers")[1])
+            status, view = request("/new?servicer=uas")
             self.assertEqual(status, 200)
             values = dict(re.findall(r'name="(\w+)" value="([^"]*)"', view))
             values["side"] = re.search(r'<option value="(\w+)" selected>', view)[1]
+            values["owner"] = re.search(r"<option selected>([^<]+)</option>", view)[1]
             action = re.search(r'<form method="post" action="([^"]+)"', view)[1]
             self.assertEqual(request("/")[1], original)
             first = dict(values, balance="10.05", nickname="Larch", currency="USD")

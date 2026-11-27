@@ -11,6 +11,7 @@ import re
 import secrets
 import sqlite3
 from urllib.parse import parse_qs, urlsplit
+from servicers import servicer_get
 
 
 ROOT = Path(__file__).resolve().parent
@@ -116,6 +117,7 @@ def dashboard(rows, today, view):
                 'they do not connect to an account or refresh balances.</p>'
                 f'<div class="cards">{cards}</div><div class="bar"><h2>Accounts</h2>'
                 f'<a class="button" href="/new">Add account</a></div>{detail}'
+                '<p><a href="/servicers">Record a student loan from a statement</a></p>'
                 '<p><a href="/federal-preview">Preview federal My Aid Data</a> · No accounts will change.</p>')
 
 
@@ -174,6 +176,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.local_host():
             return self.send(403, "Local requests only.")
+        result = servicer_get(self.path, page=page, form=form, token=self.server.token)
+        if result is not None:
+            return self.send(*result)
         path = urlsplit(self.path).path
         if path == "/federal-preview":
             return self.send(200, (ROOT / "preview.html").read_text(), preview=True)

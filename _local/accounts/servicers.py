@@ -55,7 +55,8 @@ def servicer_get(target, *, page, form, token):
     # becomes a field value, form action, or error message.
     for slug, (name, _) in _PROVIDERS.items():
         if query == f"servicer={slug}":
-            return 200, form({"institution": name, "kind": "Student loan", "side": "debt"},
+            return 200, form({"institution": name, "kind": "Student loan", "side": "debt",
+                              "owner": "Unspecified", "update_method": "Read dated loan balance"},
                              "/new", token)
     return 400, page('<h2>Unrecognized account shortcut</h2>'
                      '<p><a href="/servicers">Choose a servicer</a> or '
