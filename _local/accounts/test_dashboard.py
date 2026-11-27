@@ -40,6 +40,7 @@ class AccountFlow(unittest.TestCase):
             with running(db) as request:
                 token = re.search(r'name="token" value="([^"]+)"', request("/new")[1])[1]
                 base = dict(token=token, nickname="Cedar", institution="Example", kind="Checking",
+                            owner="Unspecified", update_method="Manual entry",
                             side="asset", balance="100.10", currency="USD", asof=str(today - timedelta(days=31)))
                 self.assertEqual(request("/new", base)[0], 303)
                 self.assertEqual(request("/new", dict(base, nickname="Birch", side="debt", kind="Credit card",

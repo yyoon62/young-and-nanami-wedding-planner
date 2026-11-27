@@ -15,7 +15,10 @@ from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DB = Path.home() / ".local/share/planner-accounts/accounts.sqlite3"
-FIELDS = ("institution", "nickname", "kind", "side", "currency", "balance", "asof")
+FIELDS = ("institution", "nickname", "kind", "side", "currency", "balance", "asof", "owner", "update_method")
+PEOPLE = ("Young", "Nanami")
+OWNERS = ("Unspecified", *PEOPLE, "Joint")
+DEFAULT_METHOD = "Manual entry"
 KINDS = ("Checking", "Savings", "Cash", "Brokerage", "Retirement", "Pension",
          "Health savings", "Digital assets", "Credit card", "Mortgage", "Student loan",
          "Personal loan", "Auto loan", "Line of credit")
@@ -38,6 +41,10 @@ def validate(raw, today):
             raise ValueError(f"{label}: enter 1–100 characters.")
     if v["side"] not in {"asset", "debt"}:
         raise ValueError("Choose asset or debt.")
+    if v["owner"] not in OWNERS:
+        raise ValueError("Choose a listed owner or Unspecified.")
+    if not 1 <= len(v["update_method"]) <= 100:
+        raise ValueError("Update method: enter 1–100 characters.")
     v["currency"] = v["currency"].upper()
     if not re.fullmatch("[A-Z]{3}", v["currency"]):
         raise ValueError("Currency: enter a three-letter currency code, such as USD.")
@@ -60,10 +67,16 @@ def validate(raw, today):
 def init_db(path):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with closing(sqlite3.connect(path)) as db, db:
+        db.execute("BEGIN IMMEDIATE")
         db.execute("""CREATE TABLE IF NOT EXISTS accounts (
             id INTEGER PRIMARY KEY AUTOINCREMENT, institution TEXT NOT NULL, nickname TEXT NOT NULL,
             kind TEXT NOT NULL, side TEXT NOT NULL CHECK(side IN ('asset','debt')),
             currency TEXT NOT NULL, balance TEXT NOT NULL, asof TEXT NOT NULL)""")
+        columns = {r[1] for r in db.execute("PRAGMA table_info(accounts)")}
+        if "owner" not in columns:
+            db.execute("ALTER TABLE accounts ADD COLUMN owner TEXT NOT NULL DEFAULT 'Unspecified'")
+        if "update_method" not in columns:
+            db.execute("ALTER TABLE accounts ADD COLUMN update_method TEXT NOT NULL DEFAULT 'Manual entry'")
 
 
 def page(content):
@@ -74,7 +87,7 @@ def page(content):
 <p>Manual balance snapshots · saved on this computer</p></header>{content}</main></html>"""
 
 
-def dashboard(rows, today):
+def dashboard(rows, today, view):
     totals, lines = {}, []
     for r in rows:
         c, amt = r["currency"], Decimal(r["balance"])
@@ -84,16 +97,24 @@ def dashboard(rows, today):
         lines.append(f"""<tr><th scope="row">{escape(r['nickname'])}<small>{escape(r['institution'])}</small></th>
 <td>{escape(r['kind'])}<small>{r['side'].title()}</small></td><td>{money(amt,c)}</td>
 <td>{r['asof']}{'<small class="stale">Stale</small>' if stale else ''}</td>
+<td>{escape(r['owner'])}</td><td>{escape(r['update_method'])}</td>
 <td><a href="/edit/{r['id']}">Edit<span class="sr"> {escape(r['nickname'])}</span></a></td></tr>""")
     cards = "".join(f"""<section class="card"><small>{c} · NET WORTH</small>
 <strong>{money(t['asset']-t['debt'], c)}</strong>
 <div>Assets: {money(t['asset'], c)} · Debts: {money(t['debt'], c)}</div></section>"""
                     for c, t in sorted(totals.items()))
     detail = (f"""<div class="table"><table><thead><tr><th>Account</th><th>Type</th>
-<th>Balance</th><th>As of</th><th></th></tr></thead><tbody>{''.join(lines)}</tbody></table></div>
+<th>Balance</th><th>As of</th><th>Owner</th><th>Update method</th><th></th></tr></thead><tbody>{''.join(lines)}</tbody></table></div>
 <p>Balances older than 30 days are marked stale and still included. Currencies are totaled separately.</p>"""
-              if rows else "<p>No accounts yet. Start with a checking account, investment, loan, or any other account.</p>")
-    return page(f'<div class="cards">{cards}</div><div class="bar"><h2>Your accounts</h2>'
+              if rows else "<p>No accounts in this view.</p>")
+    links = " · ".join(label if label == view else f'<a href="{url}">{label}</a>'
+                       for label, url in [("Household", "/"), *((p, f"/?view={p}") for p in PEOPLE)])
+    return page(f'<nav aria-label="Inventory views">View: {links}</nav><h2>{view} inventory</h2>'
+                '<p>Household counts every account once, including Unspecified. Each person sees their own '
+                'accounts plus the full joint balances. These views overlap; do not add them together.</p>'
+                '<p>Ownership is a label, not access control. Update methods describe manual steps; '
+                'they do not connect to an account or refresh balances.</p>'
+                f'<div class="cards">{cards}</div><div class="bar"><h2>Accounts</h2>'
                 f'<a class="button" href="/new">Add account</a></div>{detail}'
                 '<p><a href="/federal-preview">Preview federal My Aid Data</a> · No accounts will change.</p>')
 
@@ -103,6 +124,7 @@ def form(v, target, token, error=""):
         return (f'<label>{label}<input required name="{key}" value="{escape(v.get(key, ""))}" '
                 f'{attrs}></label>')
     choices = "".join(f'<option value="{k}">' for k in KINDS)
+    owners = "".join(f'<option{" selected" if v.get("owner")==k else ""}>{k}</option>' for k in OWNERS)
     remove = f'<p><a href="{target.replace("/edit/", "/remove/")}">Remove account…</a></p>' if target.startswith("/edit/") else ""
     sides = "".join(f'<option value="{k}" {"selected" if v.get("side")==k else ""}>{text}</option>'
                     for k, text in (("asset", "Asset — money or value you own"), ("debt", "Debt — money you owe")))
@@ -114,6 +136,10 @@ def form(v, target, token, error=""):
 {field('nickname','Account name','maxlength="100" placeholder="e.g. Joint checking"')}
 {field('kind','Account type — choose or type your own','list="types" maxlength="100"')}
 <datalist id="types">{choices}</datalist>
+<label>Owner<select required name="owner">{owners}</select></label>
+{field('update_method','Update method','maxlength="100"')}
+<p>Describe how to get the next balance, e.g. “Copy closing balance from monthly statement”.
+Do not enter credentials or account numbers.</p>
 <label>Count this balance as<select required name="side"><option value="">Choose asset or debt</option>{sides}</select></label>
 {field('currency','Valuation currency','maxlength="3" placeholder="USD"')}
 {field('balance','Balance in that currency','inputmode="decimal" placeholder="0.00"')}
@@ -156,12 +182,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/style.css":
             return self.send(200, (ROOT / "style.css").read_text(), "text/css")
         if path == "/new":
-            return self.send(200, form({"currency": "USD", "asof": str(date.today())}, path, self.server.token))
+            return self.send(200, form({"currency": "USD", "asof": str(date.today()), "owner": "Unspecified",
+                                        "update_method": DEFAULT_METHOD}, path, self.server.token))
         with closing(sqlite3.connect(self.server.db)) as db:
             db.row_factory = sqlite3.Row
             if path == "/":
-                rows = db.execute("SELECT * FROM accounts ORDER BY nickname COLLATE NOCASE, id").fetchall()
-                return self.send(200, dashboard(rows, date.today()))
+                view = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("view", ["Household"])
+                if len(view) != 1 or view[0] not in ("Household", *PEOPLE):
+                    return self.send(400, "Unknown inventory view.")
+                rows = db.execute("""SELECT * FROM accounts WHERE ? = 'Household' OR owner IN (?, 'Joint')
+                                     ORDER BY nickname COLLATE NOCASE, id""", (view[0], view[0])).fetchall()
+                return self.send(200, dashboard(rows, date.today(), view[0]))
             match = re.fullmatch(r"/(edit|remove)/([1-9][0-9]{0,17})", path)
             if match:
                 row = db.execute("SELECT * FROM accounts WHERE id=?", (match[2],)).fetchone()
@@ -199,12 +230,12 @@ class Handler(BaseHTTPRequestHandler):
         params = tuple(values[k] for k in FIELDS)
         with closing(sqlite3.connect(self.server.db)) as db, db:
             if edit:
-                changed = db.execute("UPDATE accounts SET institution=?,nickname=?,kind=?,side=?,currency=?,balance=?,asof=? WHERE id=?",
+                changed = db.execute("UPDATE accounts SET institution=?,nickname=?,kind=?,side=?,currency=?,balance=?,asof=?,owner=?,update_method=? WHERE id=?",
                                      (*params, edit[1])).rowcount
                 if not changed:
                     return self.send(404, "Account not found.")
             else:
-                db.execute("INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof) VALUES (?,?,?,?,?,?,?)", params)
+                db.execute("INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof,owner,update_method) VALUES (?,?,?,?,?,?,?,?,?)", params)
         self.send(303, "", location="/")
 
 
