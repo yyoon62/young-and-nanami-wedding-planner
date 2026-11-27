@@ -69,21 +69,22 @@ class BrowserBulk(unittest.TestCase):
                     self.assertNotIn(path_marker, page.content())
                     page.get_by_label("Default owner for new accounts").select_option("Young")
                     for i in range(12):
+                        expose(page, f"[name=m{i}]")
                         page.locator(f"[name=m{i}]").select_option("1" if i == 0 else "new")
                         page.locator(f"[name=d{i}]").select_option("debt" if i == 0 else "asset")
                     page.locator("[name=o1]").select_option("Nanami")
                     page.get_by_role("button", name="Select all review rows").click()
-                    self.assertEqual(page.locator("fieldset input:checked").count(), 12)
+                    self.assertEqual(page.locator(".review-row input[name^=s]:checked").count(), 12)
                     if exclude_one:
                         page.locator("[name=s11]").uncheck()
                         self.assertEqual(page.locator("[name=m11]").input_value(), "new")
-                        self.assertEqual(page.locator("fieldset input:checked").count(), 11)
+                        self.assertEqual(page.locator(".review-row input[name^=s]:checked").count(), 11)
                     count = 11 if exclude_one else 12
                     yen = "JPY 1,503" if exclude_one else "JPY 2,004"
                     page.get_by_text("Apply reviewed selections").click()
                     page.get_by_text("Linked balances", exact=True).wait_for()
                     self.assertNotIn(path_marker, page.content())
-                    page.get_by_text("← Inventory").click()
+                    page.get_by_role("link", name="Accounts").first.click()
                     rows = page.locator("tbody tr")
                     self.assertEqual(rows.count(), count)
                     self.assertEqual(rows.filter(has_text="Maple Trust").filter(has_text="Cash").count(),
@@ -100,13 +101,16 @@ class BrowserBulk(unittest.TestCase):
                 payload["errlist"] = [{"code":"con.auth", "conn_id":"2", "msg":marker + path_marker}]
                 with running(path, provider) as origin:
                     page.goto(origin+"/batch")
-                    page.locator("[name=r2]").uncheck()
+                    # Nothing is checked for refresh; choose explicitly, all but r2.
+                    for link in page.locator("input[name^=r]").all():
+                        if link.get_attribute("name") != "r2":
+                            link.check()
                     page.get_by_text("Refresh selected balances").click()
                     page.get_by_text("Institution sign-in required", exact=False).wait_for()
                     self.assertIn("provider error; retained", page.locator("main").inner_text())
                     self.assertNotIn(marker, page.content())
                     self.assertNotIn(path_marker, page.content())
-                    page.get_by_text("← Inventory").click()
+                    page.get_by_role("link", name="Accounts").first.click()
                     self.assertEqual(page.locator("tbody tr").count(), count)
                     self.assertEqual(page.locator(".card strong").all_text_contents(), [yen, "USD 47.81"])
             browser.close()
@@ -117,6 +121,15 @@ class BrowserBulk(unittest.TestCase):
             self.assertNotIn(marker.encode(), path.read_bytes())
             self.assertNotIn(path_marker, str(requests))
             self.assertNotIn(path_marker.encode(), path.read_bytes())
+
+
+def expose(page, selector):
+    """Open any ancestor native <details> so a control is visible (keyboard-accessible)."""
+    loc = page.locator(selector)
+    if loc.is_visible():
+        return
+    for d in loc.locator("xpath=ancestor::details[not(@open)]").all():
+        d.locator(":scope > summary").click()
 
 
 if __name__ == "__main__":

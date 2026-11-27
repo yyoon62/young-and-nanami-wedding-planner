@@ -25,7 +25,7 @@ class HouseholdInventory(unittest.TestCase):
                 status, body = request(url)
                 self.assertEqual(status, 200)
                 self.assertCountEqual(re.findall(r'href="/edit/(\d+)"', body), list(map(str, ids)))
-                self.assertCountEqual(re.findall(r"<strong>([^<]+)</strong>", body), totals)
+                self.assertCountEqual(re.findall(r'<section class="card[^"]*">.*?<strong>([^<]+)</strong>', body, re.S), totals)
                 return body
 
             def stored():

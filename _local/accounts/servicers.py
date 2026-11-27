@@ -18,7 +18,7 @@ def guide():
         f'<li><a href="/new?servicer={slug}">{name}</a> — {hint}</li>'
         for slug, (name, hint) in _PROVIDERS.items()
     )
-    return f"""<a href="/">← Accounts</a><h2>Record a student loan from a statement</h2>
+    return f"""<h2>Record a student loan from a statement</h2>
 <p>Find the outstanding balance for one loan and the date that balance is as of.
 Don't use a payment due date, a payoff quote, or a total for several loans.
 If the balance or its date is unclear, check the loan detail before saving.</p>
@@ -47,7 +47,7 @@ def servicer_get(target, *, page, form, token):
     repeated keys). Bare /new, edits, removals and the preview stay unchanged.
     """
     if target == "/servicers":
-        return 200, page(guide())
+        return 200, page(guide(), current="/servicers")
     path, sep, query = target.partition("?")
     if path != "/new" or not sep:
         return None
@@ -57,7 +57,7 @@ def servicer_get(target, *, page, form, token):
         if query == f"servicer={slug}":
             return 200, form({"institution": name, "kind": "Student loan", "side": "debt",
                               "owner": "Unspecified", "update_method": "Read dated loan balance"},
-                             "/new", token)
+                             "/new", token, current="/servicers")
     return 400, page('<h2>Unrecognized account shortcut</h2>'
                      '<p><a href="/servicers">Choose a servicer</a> or '
-                     '<a href="/new">open the ordinary account form</a>.</p>')
+                     '<a href="/new">open the ordinary account form</a>.</p>', current="/servicers")

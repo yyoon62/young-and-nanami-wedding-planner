@@ -85,12 +85,38 @@ def init_db(path):
         schema(db)
 
 
-def page(content):
+NAV = (("/", "Accounts"), ("/batch", "Batch balances"), ("/new", "Add account"),
+       ("/servicers", "Statements"), ("/federal-preview", "Federal preview"))
+
+
+def nav(current=None):
+    """Centered compact pill navigation; active page is explicit. Local only."""
+    items = "".join(
+        f'<a href="{href}"' + (' aria-current="page"' if current == href else '') + f'>{escape(label)}</a>'
+        for href, label in NAV)
+    return f'<nav class="sitenav" aria-label="Local accounts sections">{items}</nav>'
+
+
+def mode_banner(server):
+    """One short mode cue: fictional demo vs local manual vs configured; none is live."""
+    if getattr(server, "demo", False):
+        return ('<p class="mode-banner demo" role="note"><strong>Fictional demo</strong>'
+                ' · discarded on exit · synthetic · no live accounts</p>')
+    batch = getattr(server, "batch", None)
+    if batch is not None and getattr(batch, "provider", None) is not None:
+        label = escape(getattr(batch.provider, "label", "Provider") or "Provider")
+        return ('<p class="mode-banner configured" role="note"><strong>Configured</strong> · ' + label
+                + ' · not live · no automatic sync</p>')
+    return ('<p class="mode-banner manual" role="note"><strong>Local manual</strong>'
+            ' · no provider · saved on this computer</p>')
+
+
+def page(content, current=None, heading="Financial accounts"):
     return f"""<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Financial accounts · Local planner</title><link rel="stylesheet" href="/style.css">
-<main><header><small>YOUNG &amp; NANAMI · LOCAL PLANNER</small><h1>Financial accounts</h1>
-<p>Dated balance snapshots · saved on this computer</p></header>{content}</main></html>"""
+<meta name="robots" content="noindex,nofollow">
+<title>{escape(heading)} · Local planner</title><link rel="stylesheet" href="/style.css">
+<main>{nav(current)}<header><small>YOUNG &amp; NANAMI · LOCAL PLANNER</small><h1>{escape(heading)}</h1></header>{content}</main></html>"""
 
 
 def dashboard(rows, today, view):
@@ -111,7 +137,8 @@ def dashboard(rows, today, view):
                     for c, t in sorted(totals.items()))
     detail = (f"""<div class="table"><table><thead><tr><th>Account</th><th>Type</th>
 <th>Balance</th><th>As of</th><th>Owner</th><th>Update method</th><th></th></tr></thead><tbody>{''.join(lines)}</tbody></table></div>
-<p>Balances older than 30 days are marked stale and still included. Currencies are totaled separately.</p>"""
+<p class="scroll-cue">On narrow screens, scroll the table sideways to read every column; the page itself does not scroll horizontally.</p>
+<p>Balances older than 30 days are marked stale (as-of older than 30 days) and still included; balance dates are the source dates, not last-checked times. Currencies are totaled separately.</p>"""
               if rows else "<p>No accounts in this view.</p>")
     links = " · ".join(label if label == view else f'<a href="{url}">{label}</a>'
                        for label, url in [("Household", "/"), *((p, f"/?view={p}") for p in PEOPLE)])
@@ -119,14 +146,15 @@ def dashboard(rows, today, view):
                 '<p>Household counts every account once, including Unspecified. Each person sees their own '
                 'accounts plus the full joint balances. These views overlap; do not add them together.</p>'
                 '<p>Ownership is a label, not access control. To review or refresh linked accounts, '
-                'open <a href="/batch">Batch balances</a>.</p>'
+                'use <strong>Batch balances</strong> in the navigation.</p>'
                 f'<div class="cards">{cards}</div><div class="bar"><h2>Accounts</h2>'
                 f'<a class="button" href="/new">Add account</a></div>{detail}'
                 '<p><a href="/servicers">Record a student loan from a statement</a></p>'
-                '<p><a href="/federal-preview">Preview federal My Aid Data</a> · No accounts will change.</p>')
+                '<p><a href="/federal-preview">Preview federal My Aid Data</a> · No accounts will change.</p>', current="/")
 
 
-def form(v, target, token, error=""):
+def form(v, target, token, error="", current=None):
+    current = current or ("/new" if target == "/new" else "/")
     def field(key, label, attrs=""):
         return (f'<label>{label}<input required name="{key}" value="{escape(v.get(key, ""))}" '
                 f'{attrs}></label>')
@@ -135,7 +163,7 @@ def form(v, target, token, error=""):
     remove = f'<p><a href="{target.replace("/edit/", "/remove/")}">Remove account…</a></p>' if target.startswith("/edit/") else ""
     sides = "".join(f'<option value="{k}" {"selected" if v.get("side")==k else ""}>{text}</option>'
                     for k, text in (("asset", "Asset — money or value you own"), ("debt", "Debt — money you owe")))
-    return page(f"""<a href="/">← Accounts</a><h2>{'Add' if target=='/new' else 'Edit'} account</h2>
+    return page(f"""<h2>{'Add' if target=='/new' else 'Edit'} account</h2>
 {f'<p role="alert">{escape(error)}</p>' if error else ''}
 <form method="post" action="{target}">
 <input type="hidden" name="token" value="{token}">
@@ -152,7 +180,8 @@ Do not enter credentials or account numbers.</p>
 {field('balance','Balance in that currency','inputmode="decimal" placeholder="0.00"')}
 <p>Enter the amount without a minus sign. Use Debt for an amount owed, including an overdraft.</p>
 {field('asof','Balance as of',f'type="date" max="{date.today()}"')}
-<div class="bar"><button>Save account</button><a href="/">Cancel</a></div></form>{remove}""")
+<div class="bar"><button>Save account</button><a href="/" class="button secondary">Cancel</a></div></form>{remove}""",
+                     current=current)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -160,8 +189,8 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def send(self, code, text, kind="text/html; charset=utf-8", location=None, preview=False):
-        if getattr(self.server, "demo", False) and kind.startswith("text/html"):
-            text = text.replace("<main>", "<main><p><strong>Fictional demo · discarded on exit</strong></p>", 1)
+        if kind.startswith("text/html"):
+            text = text.replace("<main>", "<main>" + mode_banner(self.server), 1)
         body = text.encode()
         self.send_response(code)
         if location:
@@ -185,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.local_host():
             return self.send(403, "Local requests only.")
         if self.path == "/batch":
-            return self.send(200, page(display(self.server, OWNERS)))
+            return self.send(200, page(display(self.server, OWNERS), current="/batch", heading="Batch balances"))
         result = servicer_get(self.path, page=page, form=form, token=self.server.token)
         if result is not None:
             return self.send(*result)
@@ -215,7 +244,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(200, page(f"""<h2>Remove {escape(row['nickname'])}?</h2>
 <p>This deletes this account's local snapshot.</p><form method="post" action="{path}">
 <input type="hidden" name="token" value="{self.server.token}">
-<div class="bar"><button>Remove account</button><a href="/">Cancel</a></div></form>"""))
+<div class="bar"><button>Remove account</button><a href="/" class="button secondary">Cancel</a></div></form>""", current="/"))
                 if row:
                     return self.send(200, form(dict(row), path, self.server.token))
         self.send(404, "Account or page not found.")
@@ -238,13 +267,15 @@ class Handler(BaseHTTPRequestHandler):
         if batch:
             if target == "/batch/select-all":
                 # Redisplay the form only. Do not fetch, persist choices or apply a mapping.
-                return self.send(200, page(display(self.server, OWNERS, previous=data, select_all=True)))
+                return self.send(200, page(display(self.server, OWNERS, previous=data, select_all=True),
+                                           current="/batch", heading="Batch balances"))
             try:
                 notices = batch.run(target.rsplit("/", 1)[1], data)
             except Problem as exc:
-                return self.send(422, page(display(self.server, OWNERS, [str(exc)], data)))
+                return self.send(422, page(display(self.server, OWNERS, [], data, error=str(exc)),
+                                           current="/batch", heading="Batch balances"))
             if notices:
-                return self.send(200, page(display(self.server, OWNERS, notices)))
+                return self.send(200, page(display(self.server, OWNERS, notices), current="/batch", heading="Batch balances"))
             return self.send(303, "", location="/batch")
         if remove:
             with closing(sqlite3.connect(self.server.db)) as db, db:
