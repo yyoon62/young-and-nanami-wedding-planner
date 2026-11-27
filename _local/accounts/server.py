@@ -1,6 +1,6 @@
 """Manual accounts dashboard. Run with python3 server.py (standard library only)."""
 import argparse
-from contextlib import closing
+from contextlib import closing, ExitStack
 from datetime import date
 from decimal import Decimal
 from html import escape
@@ -10,8 +10,12 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
+import tempfile
 from urllib.parse import parse_qs, urlsplit
 from servicers import servicer_get
+from bridge import Bridge, Problem
+from bulk import Batch, schema
+from bulk_ui import display
 
 
 ROOT = Path(__file__).resolve().parent
@@ -78,6 +82,7 @@ def init_db(path):
             db.execute("ALTER TABLE accounts ADD COLUMN owner TEXT NOT NULL DEFAULT 'Unspecified'")
         if "update_method" not in columns:
             db.execute("ALTER TABLE accounts ADD COLUMN update_method TEXT NOT NULL DEFAULT 'Manual entry'")
+        schema(db)
 
 
 def page(content):
@@ -85,7 +90,7 @@ def page(content):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Financial accounts · Local planner</title><link rel="stylesheet" href="/style.css">
 <main><header><small>YOUNG &amp; NANAMI · LOCAL PLANNER</small><h1>Financial accounts</h1>
-<p>Manual balance snapshots · saved on this computer</p></header>{content}</main></html>"""
+<p>Dated balance snapshots · saved on this computer</p></header>{content}</main></html>"""
 
 
 def dashboard(rows, today, view):
@@ -113,8 +118,8 @@ def dashboard(rows, today, view):
     return page(f'<nav aria-label="Inventory views">View: {links}</nav><h2>{view} inventory</h2>'
                 '<p>Household counts every account once, including Unspecified. Each person sees their own '
                 'accounts plus the full joint balances. These views overlap; do not add them together.</p>'
-                '<p>Ownership is a label, not access control. Update methods describe manual steps; '
-                'they do not connect to an account or refresh balances.</p>'
+                '<p>Ownership is a label, not access control. To review or refresh linked accounts, '
+                'open <a href="/batch">Batch balances</a>.</p>'
                 f'<div class="cards">{cards}</div><div class="bar"><h2>Accounts</h2>'
                 f'<a class="button" href="/new">Add account</a></div>{detail}'
                 '<p><a href="/servicers">Record a student loan from a statement</a></p>'
@@ -155,6 +160,8 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def send(self, code, text, kind="text/html; charset=utf-8", location=None, preview=False):
+        if getattr(self.server, "demo", False) and kind.startswith("text/html"):
+            text = text.replace("<main>", "<main><p><strong>Fictional demo · discarded on exit</strong></p>", 1)
         body = text.encode()
         self.send_response(code)
         if location:
@@ -177,6 +184,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.local_host():
             return self.send(403, "Local requests only.")
+        if self.path == "/batch":
+            return self.send(200, page(display(self.server, OWNERS)))
         result = servicer_get(self.path, page=page, form=form, token=self.server.token)
         if result is not None:
             return self.send(*result)
@@ -217,14 +226,23 @@ class Handler(BaseHTTPRequestHandler):
         target = self.path
         edit = re.fullmatch(r"/edit/([1-9][0-9]{0,17})", target)
         remove = re.fullmatch(r"/remove/([1-9][0-9]{0,17})", target)
-        if not edit and not remove and target != "/new":
+        batch = target in {"/batch/discover", "/batch/apply", "/batch/refresh"} and self.server.batch
+        if not batch and not edit and not remove and target != "/new":
             return self.send(404, "Page not found.")
         length = self.headers.get("Content-Length", "")
-        if not re.fullmatch(r"[0-9]{1,5}", length) or int(length) > 8192:
+        if not re.fullmatch(r"[0-9]{1,5}", length) or int(length) > (60000 if batch else 8192):
             return self.send(413, "Form too large.")
         data = {k: v[0] for k, v in parse_qs(self.rfile.read(int(length)).decode("utf8", "replace")).items()}
         if not secrets.compare_digest(data.get("token", "").encode(), self.server.token.encode()):
             return self.send(403, "Reload the form and try again.")
+        if batch:
+            try:
+                notices = batch.run(target.rsplit("/", 1)[1], data)
+            except Problem as exc:
+                return self.send(422, page(display(self.server, OWNERS, [str(exc)], data)))
+            if notices:
+                return self.send(200, page(display(self.server, OWNERS, notices)))
+            return self.send(303, "", location="/batch")
         if remove:
             with closing(sqlite3.connect(self.server.db)) as db, db:
                 db.execute("DELETE FROM accounts WHERE id=?", (remove[1],))
@@ -245,21 +263,40 @@ class Handler(BaseHTTPRequestHandler):
         self.send(303, "", location="/")
 
 
-def serve(path, port):
+def serve(path, port, provider=None):
     init_db(path)
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.token = secrets.token_urlsafe(32)
     server.db = path
+    server.batch = Batch(path, provider, validate) if provider else None
     return server
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--db", type=Path, default=DEFAULT_DB)
+    modes.add_argument("--demo", action="store_true", help="Fictional batch walkthrough, disposable database only")
+    modes.add_argument("--bridge", action="store_true", help="Enable configured SimpleFIN Bridge")
     args = parser.parse_args()
     os.umask(0o077)
-    with serve(args.db, args.port) as server:
+    with ExitStack() as stack:
+        path, provider = args.db, None
+        if args.demo:
+            from demo_batch import Demo, seed
+            path = Path(stack.enter_context(tempfile.TemporaryDirectory())) / "fictional.sqlite3"
+            provider = Demo()
+        if args.bridge:
+            try:
+                provider = Bridge()
+            except (Problem, OSError, UnicodeError):
+                parser.exit(1, "Bridge disabled: missing or unsafe credential storage. See BULK.md.\n")
+        server = stack.enter_context(serve(path, args.port, provider))
+        server.demo = args.demo
+        if args.demo:
+            with closing(sqlite3.connect(path)) as db, db:
+                seed(db)
         print(f"Open http://127.0.0.1:{server.server_port}/ · Ctrl-C to stop", flush=True)
         try:
             server.serve_forever()
