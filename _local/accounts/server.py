@@ -165,7 +165,8 @@ class Handler(BaseHTTPRequestHandler):
         policy = "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
         self.send_header("Content-Security-Policy", policy + (
             "script-src 'self'; connect-src 'none'; form-action 'none'" if preview else "form-action 'self'"))
-        self.send_header("Referrer-Policy", "no-referrer")
+        # A no-referrer form sends Origin: null even on a local POST.
+        self.send_header("Referrer-Policy", "no-referrer" if preview else "same-origin")
         self.end_headers()
         self.wfile.write(body)
 
