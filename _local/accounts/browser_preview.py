@@ -41,7 +41,8 @@ class BrowserFlow(unittest.TestCase):
             logs = StringIO()
             with serve(db, 0) as server, redirect_stderr(logs), redirect_stdout(logs):
                 with closing(sqlite3.connect(db)) as conn, conn:
-                    conn.executemany("INSERT INTO accounts VALUES (NULL, 'Example', ?, 'Custom', ?, ?, ?, '2024-01-01')",
+                    conn.executemany("""INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof)
+                                     VALUES ('Example', ?, 'Custom', ?, ?, ?, '2024-01-01')""",
                                      [("Cedar", "asset", "USD", "11.10"), ("Birch", "debt", "JPY", "500")])
                 original = db.read_bytes(), db.stat().st_mtime_ns
                 thread = Thread(target=server.serve_forever)
