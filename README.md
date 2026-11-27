@@ -14,6 +14,20 @@ apps-script/Code.gs                backend that stores votes in a Google Sheet
 Test locally: `python3 -m http.server 8000` in this folder, then open http://localhost:8000.
 Without a sync URL, votes are saved only in that browser.
 
+## Local financial accounts dashboard
+
+Run `python3 _local/accounts/server.py` (Python 3.9+), then open
+<http://127.0.0.1:8765/>. Enter checking, investment, retirement, loan,
+credit card or custom accounts manually. Use the statement balance and its
+as-of date. For investments or crypto enter the account's value in its
+valuation currency, not a share or token count. Totals show assets, debts and
+net worth by currency without applying exchange rates.
+
+Balances are kept in `~/.local/share/planner-accounts/accounts.sqlite3`, outside
+this repo. Stop with Ctrl-C; rerun the command to reopen the same database.
+Use `--db /path/to/another.sqlite3` for a separate dataset. This local app
+uses no third-party scripts, sign-in, sync or bank connections.
+
 ## Set up syncing (about 5 minutes)
 
 1. Create a new Google Sheet (any name, for example "Wedding votes").
