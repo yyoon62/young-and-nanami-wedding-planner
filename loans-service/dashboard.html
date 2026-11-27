@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Shared loans</title>
+  <script src="/dashboard.js" defer></script>
+  <script src="https://accounts.google.com/gsi/client" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Shared loans</h1>
+    <p id="status" role="status">Sign in to view shared loans.</p>
+    <div id="g_id_onload" data-client_id="GOOGLE_CLIENT_ID" data-callback="openDashboard" data-auto_prompt="false"></div>
+    <div id="signin" class="g_id_signin" data-type="standard"></div>
+    <button id="signout" hidden>Sign out</button>
+  </main>
+</body>
+</html>
