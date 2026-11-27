@@ -5,7 +5,7 @@ _PROVIDERS = {
     "aidvantage": ("Aidvantage", "Use Current Balance, not Monthly Payment Amount."),
     # “Who is University Accounting Service?” and “I didn’t receive my billing statement.”
     # https://www.uasconnect.com/faq
-    "uas": ("UAS", "UAS Connect has billing statements and account information. "
+    "uas": ("UAS", "University Accounting Service offers billing statements in UAS Connect. "
             "UAS bills both federal and private loans."),
     # https://heartland.ecsi.net/tpl/tpl_account-overview.html (public, unpopulated template)
     "heartland-ecsi": ("Heartland ECSI", "Look under Billing &amp; Payments for statements. "
@@ -27,13 +27,17 @@ If the balance or its date is unclear, check the loan detail before saving.</p>
 not just the servicer: several loans can have the same servicer, and a loan can change
 servicers. Update its balance and as-of date together rather than adding it again.</p>
 <h3>First snapshot for this loan</h3>
+<p>These shortcuts open a local form, not a connection to your servicer.
+There is no servicer sign-in or automatic balance refresh. You cannot upload or import a servicer statement here.</p>
 <p>Choose the servicer on your statement. Enter a distinct nickname (not an account number),
 currency, balance and as-of date. Nothing is saved until you choose Save account.</p>
 <ul>{choices}</ul>
 <h3>Have federal My Aid Data instead?</h3>
 <p>Only if you've confirmed this specific loan is included,
 <a href="/federal-preview">preview the federal snapshot</a>. The preview is read-only;
-it does not fill or save an account. If coverage is unknown, use the statement route above.</p>"""
+it does not fill or save an account. It labels loans by file order, not by servicer.
+If coverage is unknown or you can't identify your loan in the file, use the dated statement instead.
+Don't guess which record is yours or combine principal and interest with different as-of dates.</p>"""
 
 
 def servicer_get(target, *, page, form, token):

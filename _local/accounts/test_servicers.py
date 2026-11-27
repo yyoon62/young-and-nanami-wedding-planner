@@ -14,6 +14,19 @@ def shortcut(target, token="example-token"):
 
 
 class StatementShortcuts(unittest.TestCase):
+    def test_chooser_explains_shortcuts_and_record_ambiguity(self):
+        _, guide = shortcut("/servicers")
+        before_choices, choices = guide.split('<a href="/new?servicer=', 1)
+        for message in ("local form, not a connection", "no servicer sign-in or automatic balance refresh",
+                        "cannot upload or import a servicer statement"):
+            self.assertIn(message, before_choices)
+        self.assertIn('servicer=uas">UAS</a> — University Accounting Service', choices)
+        for message in ("by file order, not by servicer",
+                        "can't identify your loan in the file, use the dated statement",
+                        "Don't guess which record is yours",
+                        "or combine principal and interest with different as-of dates"):
+            self.assertIn(message, choices)
+
     def test_guide_to_manual_forms_and_conditional_preview(self):
         status, guide = shortcut("/servicers")
         self.assertEqual(status, 200)
