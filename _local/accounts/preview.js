@@ -19,15 +19,34 @@
     }
     return "Unrecognized date";
   }
+  // One complete pair per line, in one notation for the whole file. Never
+  // repair an individual line: doing so could hide a boundary or a source date.
+  function* records(text) {
+    let wrapped, ended = false;
+    for (const raw of text.split(/\r\n?|\n/)) {
+      let line = raw.trim();
+      if (!line) continue;
+      wrapped ??= line.startsWith('"');
+      if (wrapped) {
+        const match = /^"([^"]+)"(,?)$/.exec(line);
+        if (ended || !match) throw new Error();
+        ended = !match[2];
+        line = match[1];
+      } else if (line.includes('"')) {
+        throw new Error();
+      }
+      yield line;
+    }
+  }
   function parse(text) {
     const loans = [];
     let last = -1, current = null;
-    for (const raw of text.split(/\r\n?|\n/)) {
-      const line = raw.trim();
-      if (!line) continue;
+    for (const line of records(text)) {
       const colon = line.indexOf(":");
-      if (colon < 1) throw new Error();
+      if (colon < 1 || !/^[A-Za-z]/.test(line)) throw new Error();
       const pos = fields.indexOf(line.slice(0, colon).trim());
+      // A trailing record separator is never part of a loan code, amount or date.
+      if ((pos === 0 || pos >= 13) && line.endsWith(",")) throw new Error();
       if (pos === 0) {
         if (last === 0 || !line.slice(colon + 1).trim()) throw new Error();
         current = Array(4).fill("Not provided");
@@ -75,7 +94,7 @@
       byId("picker").hidden = !loans.length;
       status.textContent = loans.length ? "Choose one loan to view its snapshot." : "No supported loan blocks found.";
     } catch {
-      status.textContent = "Cannot safely separate these records. Check the text layout for missing boundaries or repeated or out-of-order fields.";
+      status.textContent = "Cannot safely separate these records. Check for mixed or malformed quoting, missing loan boundaries, or repeated or out-of-order fields.";
     }
   };
   select.onchange = () => {

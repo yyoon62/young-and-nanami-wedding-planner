@@ -38,7 +38,12 @@ cover several federal servicers; it is not a private-loan or live Nelnet connect
 Layout reference: Federal Student Aid, [NSLDS Download My Aid Data File Layout,
 Oct. 31, 2022](https://fsapartners.ed.gov/sites/default/files/2023-02/DownloadMyAidDataFileLayout.pdf),
 p. 4 (ordered `name:value` lines and repeating subsections), pp. 7–9
-(Student totals, Loan Type Total vs. Loan), Appendix A p. 18 (sample labels).
+(Student totals, Loan Type Total vs. Loan), Appendix A pp. 17–21 (sample output).
+Use one notation throughout: bare pairs such as `Loan Type Code:D0` (p. 4), or
+whole quoted pairs such as `"Loan Type Code:D0",` (Appendix A), with a comma
+between records and an optional final comma. Each nonblank line must contain
+one complete pair. Mixed or broken double quoting is rejected; this is not a
+general CSV reader and it does not reassemble lines wrapped for PDF display.
 `Type Code` starts a **total**, not a loan. `Loan Type Code` starts each **loan**;
 the following description and award ID are not unique selection keys. Loan
 positions 14–17 are `Loan Outstanding Principal Balance`,

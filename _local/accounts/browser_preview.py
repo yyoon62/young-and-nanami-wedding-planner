@@ -89,20 +89,22 @@ class BrowserFlow(unittest.TestCase):
                 inspect()
 
             start = len(requests)
-            choose(FILE.replace("\n", "\r\n"))
-            self.assertEqual(select.locator("option").all_text_contents(), ["Choose a loan", "Loan 1", "Loan 2"])
-            self.assertEqual(select.input_value(), "")
-            self.assertEqual(result.inner_text(), "")
-            for i, expected in enumerate([
-                ["$1,001.10", "04/30/2024", "$0.01", "05/01/2024"],
-                ["Not provided", "05/03/2024", "$0.00", "Not provided"],
-            ]):
-                select.select_option(str(i))
-                self.assertEqual(result.locator("p").all_text_contents(), [
-                    "Dated snapshot — not a payoff quote.",
-                    f"Outstanding principal: {expected[0]}", f"Principal as of: {expected[1]}",
-                    f"Outstanding interest: {expected[2]}", f"Interest as of: {expected[3]}"])
-                inspect()
+            wrapped = ",\n".join(f'"{line}"' for line in FILE.splitlines())
+            for notation in (FILE.replace("\n", "\r\n"), wrapped):
+                choose(notation)
+                self.assertEqual(select.locator("option").all_text_contents(), ["Choose a loan", "Loan 1", "Loan 2"])
+                self.assertEqual(select.input_value(), "")
+                self.assertEqual(result.inner_text(), "")
+                for i, expected in enumerate([
+                    ["$1,001.10", "04/30/2024", "$0.01", "05/01/2024"],
+                    ["Not provided", "05/03/2024", "$0.00", "Not provided"],
+                ]):
+                    select.select_option(str(i))
+                    self.assertEqual(result.locator("p").all_text_contents(), [
+                        "Dated snapshot — not a payoff quote.",
+                        f"Outstanding principal: {expected[0]}", f"Principal as of: {expected[1]}",
+                        f"Outstanding interest: {expected[2]}", f"Interest as of: {expected[3]}"])
+                    inspect()
             self.assertEqual(requests[start:], [])
             page.get_by_role("link", name="Cancel and return to accounts").click()
             self.assertEqual(page.locator("main").inner_text(), before)
@@ -120,6 +122,12 @@ class BrowserFlow(unittest.TestCase):
             self.assertIn("Interest as of: Not provided", result.inner_text())
             self.assertNotIn("05/01/2024", result.inner_text())
             for malformed in [
+                FILE.replace(date_line, f'"{date_line}",'),
+                FILE.replace(date_line, date_line + ","),
+                FILE.replace("Loan Type Code:D1", 'Loan Type Code:D1",', 1),
+                wrapped.replace('"Loan Type Code:D1",', "Loan Type Code:D1", 1),
+                wrapped.replace(f'"{date_line}",', f'"{date_line},'),
+                wrapped.replace(f'"{date_line}",', f'"{date_line}"'),
                 FILE.replace("Loan Type Code:D1", "", 1),
                 FILE.replace("Loan Outstanding Interest Balance:$0.01",
                              "Loan Outstanding Interest Balance:$0.01\nLoan Outstanding Interest Balance:$0.02"),
