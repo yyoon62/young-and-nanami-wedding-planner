@@ -226,7 +226,7 @@ class Handler(BaseHTTPRequestHandler):
         target = self.path
         edit = re.fullmatch(r"/edit/([1-9][0-9]{0,17})", target)
         remove = re.fullmatch(r"/remove/([1-9][0-9]{0,17})", target)
-        batch = target in {"/batch/discover", "/batch/apply", "/batch/refresh"} and self.server.batch
+        batch = target in {"/batch/discover", "/batch/select-all", "/batch/apply", "/batch/refresh"} and self.server.batch
         if not batch and not edit and not remove and target != "/new":
             return self.send(404, "Page not found.")
         length = self.headers.get("Content-Length", "")
@@ -236,6 +236,9 @@ class Handler(BaseHTTPRequestHandler):
         if not secrets.compare_digest(data.get("token", "").encode(), self.server.token.encode()):
             return self.send(403, "Reload the form and try again.")
         if batch:
+            if target == "/batch/select-all":
+                # Redisplay the form only. Do not fetch, persist choices or apply a mapping.
+                return self.send(200, page(display(self.server, OWNERS, previous=data, select_all=True)))
             try:
                 notices = batch.run(target.rsplit("/", 1)[1], data)
             except Problem as exc:

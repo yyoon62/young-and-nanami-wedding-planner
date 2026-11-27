@@ -1,6 +1,7 @@
 """Opt-in SimpleFIN Bridge transport. No credentials in the HTTP dashboard."""
 import base64
 import getpass
+import hashlib
 from http.client import HTTPSConnection
 import json
 import os
@@ -14,7 +15,8 @@ import warnings
 
 HOST = r"(?:beta-)?bridge\.simplefin\.org"
 CLAIM = re.compile(rf"https://({HOST})(/simplefin/claim/[A-Za-z0-9._~-]+)")
-ACCESS = re.compile(rf"https://([A-Za-z0-9._~%+-]+):([A-Za-z0-9._~%+-]+)@({HOST})/simplefin/?")
+ACCESS = re.compile(rf"https://([A-Za-z0-9._~%+-]+):([A-Za-z0-9._~%+-]+)@({HOST})"
+                    r"(/simplefin(?:/[A-Za-z0-9._~-]+)*)/?")
 STORE = Path.home() / ".local/share/planner-accounts/bridge.access"
 
 
@@ -45,10 +47,10 @@ def wire(method, host, path, headers):
 
 def credentials(url):
     m = ACCESS.fullmatch(url)
-    if not m:
+    if not m or len(url) > 4096 or any(part in {".", ".."} for part in m[4].split("/")):
         raise Problem("Unrecognized Bridge access URL; no account request made.")
     auth = base64.b64encode((unquote(m[1]) + ":" + unquote(m[2])).encode()).decode()
-    return m[3], {"Authorization": "Basic " + auth}
+    return m[3], m[4], {"Authorization": "Basic " + auth}, {m[2], unquote(m[2]), auth}
 
 
 def claim(token, transport):
@@ -102,15 +104,16 @@ class Bridge:
                     or s.st_nlink != 1 or s.st_uid != os.getuid()):
                 raise Problem("Bridge credential must be a private regular file (0600).")
             url = f.read(4097)
-            self.host, self.headers = credentials(url)
-            m = ACCESS.fullmatch(url)
-            self.private_strings = {m[2], unquote(m[2]), self.headers["Authorization"].split()[1]}
+            self.host, self.root, self.headers, self.private_strings = credentials(url)
+            self.private_paths = set(self.root.split("/")[2:])
         self.namespace = "bridge:" + self.host
+        if self.private_paths:
+            self.namespace += ":" + hashlib.sha256(self.root.encode()).hexdigest()
         self.transport = transport
 
     def fetch(self):
         try:
-            status, body = self.transport("GET", self.host, "/simplefin/accounts?version=2&balances-only=1",
+            status, body = self.transport("GET", self.host, self.root + "/accounts?version=2&balances-only=1",
                                           self.headers)
             if status != 200:
                 raise Problem({402: "Bridge reports payment required.", 403: "Bridge access denied or revoked."}
@@ -123,7 +126,9 @@ class Bridge:
                     for row in data.get(group, []):
                         if isinstance(row, dict) and any(
                             secret in value for field in ("name", "currency", "balance")
-                            if isinstance(value := row.get(field), str) for secret in self.private_strings
+                            if isinstance(value := row.get(field), str)
+                            for secret in (self.private_strings | self.private_paths if field == "name"
+                                           else self.private_strings)
                         ):
                             raise Problem("Unexpected sensitive provider field; balances held.")
             return data

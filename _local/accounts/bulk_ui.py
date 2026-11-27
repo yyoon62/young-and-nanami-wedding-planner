@@ -5,7 +5,7 @@ import sqlite3
 from bulk import inventory, mappings
 
 
-def display(server, owners, notices=(), previous=None):
+def display(server, owners, notices=(), previous=None, select_all=False):
     batch = server.batch
     head = '<a href="/">← Inventory</a><h2>Batch balances</h2>'
     if not batch:
@@ -22,11 +22,14 @@ def display(server, owners, notices=(), previous=None):
     head += (form("discover") + "<button>Discover accounts for review</button></form>"
              "<p>Requests balances across connections. Discovery does not change the inventory.</p>")
     review = batch.review
+    if select_all and (not review or previous.get("review") != review[0]):
+        head += '<p role="status">Review expired. Discover again.</p>'
+        select_all = False
     if review:
         nonce, entries, rows, links, warnings = review
         previous = previous if previous and previous.get("review") == nonce else {}
         def check(name):
-            return f'<input type="checkbox" name="{name}"{" checked" if previous.get(name) else ""}>'
+            return f'<input type="checkbox" name="{name}"{" checked" if select_all or previous.get(name) else ""}>'
         def select(name, label, choices):
             options = "".join(f'<option value="{escape(k)}"{" selected" if previous.get(name)==k else ""}>'
                               f'{escape(v)}</option>' for k, v in choices)
@@ -35,7 +38,8 @@ def display(server, owners, notices=(), previous=None):
         head += form("apply") + f'<input type="hidden" name="review" value="{nonce}"><h3>Review {len(entries)} balances</h3>'
         head += ('<p>Select rows; for each, explicitly match or create and confirm how the signed amount '
                  'counts. Applying replaces the matched balance and date, not its owner or other details.</p>'
-                 f'<label>{check("all")}Include all review rows</label>')
+                 '<button type="submit" formaction="/batch/select-all">Select all review rows</button>'
+                 '<p>Uncheck any to leave out. Only checked rows will be applied.</p>')
         owner_options = [(o, o) for o in owners]
         head += select("owner", "Default owner for new accounts", owner_options)
         linked = {str(l["local"]) for l in links.values()}

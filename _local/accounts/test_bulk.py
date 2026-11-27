@@ -52,8 +52,9 @@ class ReviewFlow(unittest.TestCase):
 
     def review(self):
         self.batch.run("discover", {})
-        fields = {"review": self.batch.review[0], "all": "on", "owner": "Young", "o1": "Nanami"}
+        fields = {"review": self.batch.review[0], "owner": "Young", "o1": "Nanami"}
         for i in range(12):
+            fields[f"s{i}"] = "on"
             fields[f"m{i}"] = "1" if i == 0 else "new"
             fields[f"d{i}"] = "debt" if i == 0 else "asset"
         return fields
@@ -155,6 +156,18 @@ class ReviewFlow(unittest.TestCase):
             self.assertEqual(len(b.review[1]), 11)
             self.assertTrue(b.review[-1])
 
+    def test_malformed_signed_balance_does_not_cancel_valid_peer(self):
+        self.batch.run("apply", self.review())
+        bad, good = self.provider.payload["accounts"][:2]
+        for a in (bad, good):
+            a["balance-date"] += 86400
+        bad["balance"], good["balance"] = "- 1", "21.42"
+        notices = self.batch.run("refresh", {"r1": "on", "r2": "on"})
+        self.assertEqual(notices, ["Provider row 1: invalid, unsupported or duplicate; held."])
+        self.assertEqual(self.sql("select balance,status from accounts join source_links on id=local "
+                                  "where id in (1,2) order by id"),
+                         [("20.01", "Missing, invalid or provider error; retained"), ("21.42", "Updated")])
+
 
 class BridgePrivacy(unittest.TestCase):
     access = "https://fiction:FICTIONAL-PRIVATE@beta-bridge.simplefin.org/simplefin"
@@ -219,6 +232,30 @@ class BridgePrivacy(unittest.TestCase):
                 with self.assertRaisesRegex(Problem, msg) as caught:
                     b.fetch()
                 self.assertNotIn("FICTIONAL-PRIVATE", str(caught.exception))
+
+    def test_claimed_nested_root_is_preserved_but_never_displayed(self):
+        suffix = "/v2/test-FICTIONAL-ROOT"
+        for slash in ("", "/"):
+            root = self.access + suffix + slash
+            received = claim(self.token, lambda *_: (200, root.encode()))
+            self.assertEqual(received, root)
+            with tempfile.TemporaryDirectory() as tmp:
+                p = Path(tmp).resolve() / "access"
+                p.write_text(received)
+                p.chmod(0o600)
+                targets = []
+                def echo(method, host, target, headers):
+                    targets.append(target)
+                    return 200, b'{"accounts":[{"name":"test-FICTIONAL-ROOT"}]}'
+                b = Bridge(p, echo)
+                with self.assertRaisesRegex(Problem, "sensitive") as exc:
+                    b.fetch()
+                self.assertNotIn("FICTIONAL-ROOT", str(exc.exception))
+                self.assertEqual(targets, ["/simplefin" + suffix + "/accounts?version=2&balances-only=1"])
+        for bad in ("/.", "/v2/../x", "//x", "/x//", "/%2e%2e", "/x%2fy", "/x\\y",
+                    "/v2?user=x", "/v2#x", "/x y", "/x\nq", "/x@y"):
+            with self.subTest(bad=bad), self.assertRaises(Problem):
+                credentials(self.access + bad)
 
     def test_demo_cannot_target_existing_database(self):
         with tempfile.TemporaryDirectory() as tmp:

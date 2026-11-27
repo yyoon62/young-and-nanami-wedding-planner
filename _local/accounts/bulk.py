@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 import hashlib
 import json
+import re
 import secrets
 import sqlite3
 from threading import Lock
@@ -95,6 +96,8 @@ def unpack(payload, namespace, validate):
             stamp, signed = a["balance-date"], text(a["balance"], 32)
             if type(stamp) != int or not 0 < stamp <= time.time():
                 raise ValueError()
+            if not re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", signed):
+                raise ValueError()
             magnitude = signed.removeprefix("-")
             if "." in magnitude and magnitude.partition(".")[2].isdigit():
                 magnitude = magnitude.rstrip("0").rstrip(".")  # exact; never round to fit
@@ -180,7 +183,7 @@ class Batch:
         rows, links = inventory(db), mappings(db)
         if rows != old_rows or links != old_links:
             raise Problem("Inventory changed since review. Discover again.")
-        selected = [(i, e) for i, e in enumerate(entries) if data.get("all") or data.get(f"s{i}")]
+        selected = [(i, e) for i, e in enumerate(entries) if data.get(f"s{i}")]
         if not selected:
             raise Problem("Select at least one account.")
         for i, e in selected:

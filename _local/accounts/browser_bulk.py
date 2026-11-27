@@ -29,13 +29,21 @@ def running(path, bridge):
 
 class BrowserBulk(unittest.TestCase):
     def test_household(self):
+        self.household(exclude_one=False)
+
+    def test_select_all_then_exclude_configured_account(self):
+        self.household(exclude_one=True)
+
+    def household(self, exclude_one):
         with tempfile.TemporaryDirectory() as tmp, sync_playwright() as pw:
             root = Path(tmp).resolve()
             path = root / "fictional.db"
             payload = Demo().fetch()
             marker = "PRIVATE-FICTIONAL-MARKER"
+            path_marker = "FICTIONAL-PATH-SECRET"
+            access_root = "/simplefin/v2/" + path_marker if exclude_one else "/simplefin"
             access = root / "fictional.access"
-            access.write_text(f"https://fiction:{marker}@beta-bridge.simplefin.org/simplefin")
+            access.write_text(f"https://fiction:{marker}@beta-bridge.simplefin.org{access_root}")
             access.chmod(0o600)
             calls = []
             def offline(method, host, target, headers):
@@ -58,27 +66,38 @@ class BrowserBulk(unittest.TestCase):
                     page.get_by_role("link", name="Batch balances").click()
                     page.get_by_text("Discover accounts for review").click()
                     self.assertIn("Review 12 balances", page.locator("main").inner_text())
-                    page.get_by_label("Include all review rows").check()
+                    self.assertNotIn(path_marker, page.content())
                     page.get_by_label("Default owner for new accounts").select_option("Young")
                     for i in range(12):
                         page.locator(f"[name=m{i}]").select_option("1" if i == 0 else "new")
                         page.locator(f"[name=d{i}]").select_option("debt" if i == 0 else "asset")
                     page.locator("[name=o1]").select_option("Nanami")
+                    page.get_by_role("button", name="Select all review rows").click()
+                    self.assertEqual(page.locator("fieldset input:checked").count(), 12)
+                    if exclude_one:
+                        page.locator("[name=s11]").uncheck()
+                        self.assertEqual(page.locator("[name=m11]").input_value(), "new")
+                        self.assertEqual(page.locator("fieldset input:checked").count(), 11)
+                    count = 11 if exclude_one else 12
+                    yen = "JPY 1,503" if exclude_one else "JPY 2,004"
                     page.get_by_text("Apply reviewed selections").click()
                     page.get_by_text("Linked balances", exact=True).wait_for()
+                    self.assertNotIn(path_marker, page.content())
                     page.get_by_text("← Inventory").click()
                     rows = page.locator("tbody tr")
-                    self.assertEqual(rows.count(), 12)
+                    self.assertEqual(rows.count(), count)
+                    self.assertEqual(rows.filter(has_text="Maple Trust").filter(has_text="Cash").count(),
+                                     0 if exclude_one else 1)
                     self.assertIn("Joint", rows.filter(has_text="Household card").inner_text())
                     self.assertIn("Nanami", rows.filter(has_text="Cedar Credit").filter(has_text="Savings").inner_text())
-                    self.assertEqual(page.locator(".card strong").all_text_contents(), ["JPY 2,004", "USD 50.69"])
+                    self.assertEqual(page.locator(".card strong").all_text_contents(), [yen, "USD 50.69"])
                     self.assertNotIn(marker, page.content())
                 # Restart the server, reorder upstream rows and change two; refresh only one.
                 for a in payload["accounts"][:2]:
                     a.update(balance="-22.89" if a["id"] == "0" else "345.67")
                     a["balance-date"] += 86400
                 payload["accounts"].reverse()
-                payload["errlist"] = [{"code":"con.auth", "conn_id":"2", "msg":marker}]
+                payload["errlist"] = [{"code":"con.auth", "conn_id":"2", "msg":marker + path_marker}]
                 with running(path, provider) as origin:
                     page.goto(origin+"/batch")
                     page.locator("[name=r2]").uncheck()
@@ -86,15 +105,18 @@ class BrowserBulk(unittest.TestCase):
                     page.get_by_text("Institution sign-in required", exact=False).wait_for()
                     self.assertIn("provider error; retained", page.locator("main").inner_text())
                     self.assertNotIn(marker, page.content())
+                    self.assertNotIn(path_marker, page.content())
                     page.get_by_text("← Inventory").click()
-                    self.assertEqual(page.locator("tbody tr").count(), 12)
-                    self.assertEqual(page.locator(".card strong").all_text_contents(), ["JPY 2,004", "USD 47.81"])
+                    self.assertEqual(page.locator("tbody tr").count(), count)
+                    self.assertEqual(page.locator(".card strong").all_text_contents(), [yen, "USD 47.81"])
             browser.close()
-            self.assertEqual(calls, [("GET", "/simplefin/accounts?version=2&balances-only=1")]*2)
+            self.assertEqual(calls, [("GET", access_root + "/accounts?version=2&balances-only=1")]*2)
             self.assertEqual(output.getvalue(), "")
             self.assertNotIn(marker, str(requests))
             self.assertTrue(all(url.startswith("http://127.0.0.1:") and "?" not in url for url, _ in requests))
             self.assertNotIn(marker.encode(), path.read_bytes())
+            self.assertNotIn(path_marker, str(requests))
+            self.assertNotIn(path_marker.encode(), path.read_bytes())
 
 
 if __name__ == "__main__":
