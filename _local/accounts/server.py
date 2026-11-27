@@ -94,7 +94,8 @@ def dashboard(rows, today):
 <p>Balances older than 30 days are marked stale and still included. Currencies are totaled separately.</p>"""
               if rows else "<p>No accounts yet. Start with a checking account, investment, loan, or any other account.</p>")
     return page(f'<div class="cards">{cards}</div><div class="bar"><h2>Your accounts</h2>'
-                f'<a class="button" href="/new">Add account</a></div>{detail}')
+                f'<a class="button" href="/new">Add account</a></div>{detail}'
+                '<p><a href="/federal-preview">Preview federal My Aid Data</a> · No accounts will change.</p>')
 
 
 def form(v, target, token, error=""):
@@ -125,7 +126,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def send(self, code, text, kind="text/html; charset=utf-8", location=None):
+    def send(self, code, text, kind="text/html; charset=utf-8", location=None, preview=False):
         body = text.encode()
         self.send_response(code)
         if location:
@@ -133,7 +134,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+        policy = "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
+        self.send_header("Content-Security-Policy", policy + (
+            "script-src 'self'; connect-src 'none'; form-action 'none'" if preview else "form-action 'self'"))
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(body)
@@ -146,6 +149,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self.local_host():
             return self.send(403, "Local requests only.")
         path = urlsplit(self.path).path
+        if path == "/federal-preview":
+            return self.send(200, (ROOT / "preview.html").read_text(), preview=True)
+        if path == "/preview.js":
+            return self.send(200, (ROOT / "preview.js").read_text(), "application/javascript")
         if path == "/style.css":
             return self.send(200, (ROOT / "style.css").read_text(), "text/css")
         if path == "/new":

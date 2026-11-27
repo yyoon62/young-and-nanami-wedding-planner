@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Preview federal My Aid Data · Local accounts</title>
+<link rel="stylesheet" href="/style.css"><script defer src="/preview.js"></script>
+<main>
+  <header><small>LOCAL ACCOUNTS · PREVIEW ONLY</small><h1>Preview federal My Aid Data</h1></header>
+  <p>Choose the text export from StudentAid.gov → My Aid → Download My Aid Data.
+    It may include several federal servicers, not private loans. Nothing is uploaded or saved.</p>
+  <input hidden type="file" id="file" accept=".txt,text/plain" autocomplete="off">
+  <button type="button" id="choose">Choose My Aid Data file</button>
+  <p id="status" role="status"></p>
+  <label hidden id="picker">Loan in file order (this preview only)
+    <select id="loan" autocomplete="off"></select>
+  </label>
+  <section aria-live="polite" id="result"></section>
+  <p><a href="/">Cancel and return to accounts</a></p>
+  <noscript>This private preview requires JavaScript in your browser.</noscript>
+</main></html>

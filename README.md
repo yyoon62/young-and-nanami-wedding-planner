@@ -28,6 +28,33 @@ this repo. Stop with Ctrl-C; rerun the command to reopen the same database.
 Use `--db /path/to/another.sqlite3` for a separate dataset. This local app
 uses no third-party scripts, sign-in, sync or bank connections.
 
+**Federal loan preview:** From the dashboard choose **Preview federal My Aid Data**,
+open the StudentAid.gov → My Aid → Download My Aid Data plain-text export, then
+choose a loan by its order in that file. The browser reads it locally (8 MiB
+limit); there is no upload, account matching, payoff calculation, or save step.
+Cancel to discard the preview. A missing value is not zero. The export may
+cover several federal servicers; it is not a private-loan or live Nelnet connection.
+
+Layout reference: Federal Student Aid, [NSLDS Download My Aid Data File Layout,
+Oct. 31, 2022](https://fsapartners.ed.gov/sites/default/files/2023-02/DownloadMyAidDataFileLayout.pdf),
+p. 4 (ordered `name:value` lines and repeating subsections), pp. 7–9
+(Student totals, Loan Type Total vs. Loan), Appendix A p. 18 (sample labels).
+`Type Code` starts a **total**, not a loan. `Loan Type Code` starts each **loan**;
+the following description and award ID are not unique selection keys. Loan
+positions 14–17 are `Loan Outstanding Principal Balance`,
+`Loan Outstanding Principal Balance as of Date`, `Loan Outstanding Interest Balance`,
+and `Loan Outstanding Interest Balance as of Date`. Each date belongs only to
+its named amount in the same block. The parser stops accepting balance fields
+at any other subsection (e.g. Loan Status, Loan Contact, Grant); only a new
+loan start reopens the block. Repeated/out-of-order recognized fields stop the
+preview rather than overwriting or filling another loan. Unrecognized layouts
+may therefore be rejected. No personal-field values are needed to select a loan.
+
+Verification: `python3 -m unittest discover -s _local/accounts -v` uses temporary
+databases. Optional `python3 _local/accounts/browser_preview.py -v` requires
+Playwright for Python and installed Chrome; it runs headless with an isolated
+browser context, a temporary database and generated fictional text, not your export.
+
 ## Set up syncing (about 5 minutes)
 
 1. Create a new Google Sheet (any name, for example "Wedding votes").
