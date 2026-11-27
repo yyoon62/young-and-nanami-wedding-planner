@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#FBF7F2">
+<title>TODO · Young &amp; Nanami's planner</title>
+<link rel="stylesheet" href="../styles.css?v=3">
+<link rel="stylesheet" href="todo.css?v=1">
+</head>
+<body>
+<a class="skip" href="#main">Skip to TODO board</a>
+<nav class="sitenav" aria-label="Planner sections">
+  <a href="../">Wedding venues</a>
+  <a href="../house-plan/">House plan</a>
+  <a href="../loans/">Loans</a>
+  <a href="./" aria-current="page">TODO</a>
+</nav>
+
+<header class="todo-hdr">
+  <div class="todo-hdr-inner">
+    <div class="brand">
+      <h1><span class="heart" aria-hidden="true">&#10003;</span> TODO Board</h1>
+      <span id="syncBadge" class="sync" role="status">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="syncText" class="txt">Not connected</span>
+      </span>
+    </div>
+    <div class="hdr-actions">
+      <button id="refreshBtn" class="tbtn" type="button" title="Reload from GitHub" aria-label="Refresh">↻ <span class="btn-lbl">Refresh</span></button>
+      <button id="settingsBtn" class="tbtn" type="button" title="GitHub sync settings" aria-label="Settings">⚙ <span class="btn-lbl">Sync</span></button>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="todo-main" tabindex="-1">
+  <!-- Locked / Connect screen shown when no GitHub token is stored -->
+  <section id="connectView" class="connect-card hide" aria-labelledby="connectTitle">
+    <h2 id="connectTitle">Private Org-Mode TODO Board</h2>
+    <p class="connect-lead">
+      This page is public, so your tasks stay in your private GitHub repo (<code>yyoon62/notes</code>).
+      Connect a fine-grained GitHub token saved only in this browser to view and sync <code>agenda.org</code> and <code>inbox.org</code>.
+    </p>
+    <form id="connectForm" class="stack">
+      <label class="field">
+        <span>Fine-grained GitHub token</span>
+        <input id="connectToken" type="password" placeholder="github_pat_…" autocomplete="off" required>
+      </label>
+      <details class="adv">
+        <summary>Repository settings (defaults to yyoon62/notes · main)</summary>
+        <div class="adv-grid">
+          <label class="field"><span>Owner</span><input id="connectOwner" type="text" value="yyoon62"></label>
+          <label class="field"><span>Repo</span><input id="connectRepo" type="text" value="notes"></label>
+          <label class="field"><span>Branch</span><input id="connectBranch" type="text" value="main"></label>
+        </div>
+      </details>
+      <div id="connectError" class="err-box hide" role="alert"></div>
+      <div class="row-actions">
+        <button type="submit" class="pbtn primary">Connect &amp; Load</button>
+        <button id="demoBtn" type="button" class="pbtn">Try demo board</button>
+      </div>
+    </form>
+    <details class="setup-help">
+      <summary>How to create a scoped GitHub token (1 minute)</summary>
+      <ol>
+        <li>Open GitHub → <strong>Settings → Developer settings → Personal access tokens → Fine-grained tokens</strong>.</li>
+        <li>Click <strong>Generate new token</strong> and choose <strong>Only select repositories → yyoon62/notes</strong>.</li>
+        <li>Under <strong>Repository permissions</strong>, set <strong>Contents</strong> to <strong>Read and write</strong>.</li>
+        <li>Generate, copy the token, and paste it above. It is stored only in this browser’s <code>localStorage</code>.</li>
+      </ol>
+    </details>
+  </section>
+
+  <!-- Main board view -->
+  <div id="boardView" class="hide">
+    <div id="demoBanner" class="demo-banner hide">
+      <span><strong>Demo mode</strong> — fictional tasks, changes stay in memory only.</span>
+      <button id="exitDemoBtn" type="button" class="tbtn">Connect GitHub</button>
+    </div>
+
+    <!-- Quick capture bar -->
+    <form id="captureForm" class="capture-bar" aria-label="Add item to Inbox">
+      <input id="captureInput" type="text" placeholder="Add to Inbox…" autocomplete="off" enterkeyhint="done" aria-label="New inbox task">
+      <button id="captureMoreBtn" type="button" class="tbtn icon-only" title="Add date or note" aria-label="Add date or note">+</button>
+      <button type="submit" class="pbtn primary">Add</button>
+    </form>
+    <div id="captureExtras" class="capture-extras hide">
+      <label class="field inline-field">
+        <span>Scheduled</span>
+        <input id="captureDate" type="date">
+      </label>
+      <label class="field grow-field">
+        <span>Note (optional)</span>
+        <input id="captureNote" type="text" placeholder="Context, link, or reminder…">
+      </label>
+    </div>
+
+    <!-- Mobile section jump tabs -->
+    <nav id="mobileTabs" class="mobile-tabs" aria-label="Jump to column">
+      <button type="button" data-col="now" class="mtab active">Now <span class="mcount" data-count="now">0/3</span></button>
+      <button type="button" data-col="inbox" class="mtab">Inbox <span class="mcount" data-count="inbox">0</span></button>
+      <button type="button" data-col="waitlist" class="mtab">Waitlist <span class="mcount" data-count="waitlist">0</span></button>
+      <button type="button" data-col="done" class="mtab">Done <span class="mcount" data-count="done">0</span></button>
+    </nav>
+
+    <!-- 4-column board -->
+    <section id="board" class="board" aria-label="TODO columns">
+      <div class="col col-now" data-col="now">
+        <div class="col-hdr">
+          <h2>Now <span class="kw-pill kw-next">NEXT</span></h2>
+          <span class="col-count" id="count-now">0 / 3</span>
+        </div>
+        <div class="col-list" id="list-now" data-drop-col="now"></div>
+      </div>
+
+      <div class="col col-inbox" data-col="inbox">
+        <div class="col-hdr">
+          <h2>Inbox <span class="kw-pill kw-todo">inbox.org</span></h2>
+          <span class="col-count" id="count-inbox">0</span>
+        </div>
+        <div class="col-list" id="list-inbox" data-drop-col="inbox"></div>
+      </div>
+
+      <div class="col col-waitlist" data-col="waitlist">
+        <div class="col-hdr">
+          <h2>Waitlist <span class="kw-pill kw-waiting">WAITING</span></h2>
+          <span class="col-count" id="count-waitlist">0</span>
+        </div>
+        <div class="col-list" id="list-waitlist" data-drop-col="waitlist"></div>
+      </div>
+
+      <div class="col col-done" data-col="done">
+        <div class="col-hdr">
+          <h2>Done <span class="kw-pill kw-done">DONE</span></h2>
+          <span class="col-count" id="count-done">0</span>
+        </div>
+        <div class="col-list" id="list-done" data-drop-col="done"></div>
+        <button id="toggleDoneBtn" type="button" class="show-more hide">Show all completed</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<!-- Sticky drop dock that appears during drag for effortless phone drag-to-DONE -->
+<div id="dragDock" class="drag-dock hide" aria-hidden="true">
+  <div class="dock-target dock-now" data-drop-col="now">→ Now</div>
+  <div class="dock-target dock-wait" data-drop-col="waitlist">⏸ Waitlist</div>
+  <div class="dock-target dock-done" data-drop-col="done">✓ Drop for DONE</div>
+</div>
+
+<!-- Toast notification -->
+<div id="toast" class="toast hide" role="status" aria-live="polite"></div>
+
+<!-- Modal: Settings -->
+<div id="settingsModal" class="tmodal hide" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div class="tmodal-box">
+    <div class="tmodal-hdr">
+      <h2 id="settingsTitle">GitHub Sync Settings</h2>
+      <button type="button" class="tbtn icon-only" data-close-modal="settingsModal" aria-label="Close">&times;</button>
+    </div>
+    <form id="settingsForm" class="stack">
+      <label class="field">
+        <span>Fine-grained GitHub token</span>
+        <input id="setToken" type="password" placeholder="github_pat_…" autocomplete="off">
+      </label>
+      <div class="adv-grid">
+        <label class="field"><span>Owner</span><input id="setOwner" type="text"></label>
+        <label class="field"><span>Repo</span><input id="setRepo" type="text"></label>
+        <label class="field"><span>Branch</span><input id="setBranch" type="text"></label>
+      </div>
+      <div id="settingsError" class="err-box hide" role="alert"></div>
+      <div class="row-actions spread">
+        <button id="disconnectBtn" type="button" class="pbtn danger">Forget token</button>
+        <div class="row-actions">
+          <button type="button" class="pbtn" data-close-modal="settingsModal">Cancel</button>
+          <button type="submit" class="pbtn primary">Save &amp; Sync</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal: Waitlist reason -->
+<div id="reasonModal" class="tmodal hide" role="dialog" aria-modal="true" aria-labelledby="reasonTitle">
+  <div class="tmodal-box">
+    <div class="tmodal-hdr">
+      <h2 id="reasonTitle">What is it waiting on?</h2>
+      <button type="button" class="tbtn icon-only" data-close-modal="reasonModal" aria-label="Close">&times;</button>
+    </div>
+    <p id="reasonSubtitle" class="modal-sub"></p>
+    <form id="reasonForm" class="stack">
+      <label class="field">
+        <span>One-line reason</span>
+        <input id="reasonInput" type="text" placeholder="e.g., Waiting on reply from venue…" autocomplete="off">
+      </label>
+      <div class="row-actions end">
+        <button type="button" class="pbtn" data-close-modal="reasonModal">Cancel</button>
+        <button type="submit" class="pbtn primary">Move</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal: Max 3 NEXT swap -->
+<div id="maxNextModal" class="tmodal hide" role="dialog" aria-modal="true" aria-labelledby="maxNextTitle">
+  <div class="tmodal-box">
+    <div class="tmodal-hdr">
+      <h2 id="maxNextTitle">Now already has 3 NEXT items</h2>
+      <button type="button" class="tbtn icon-only" data-close-modal="maxNextModal" aria-label="Close">&times;</button>
+    </div>
+    <p id="maxNextSubtitle" class="modal-sub">Pick one current NEXT item to move to Waitlist first:</p>
+    <div id="maxNextChoices" class="swap-list"></div>
+    <div class="row-actions end">
+      <button type="button" class="pbtn" data-close-modal="maxNextModal">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Edit / Details -->
+<div id="editModal" class="tmodal hide" role="dialog" aria-modal="true" aria-labelledby="editTitle">
+  <div class="tmodal-box">
+    <div class="tmodal-hdr">
+      <h2 id="editTitle">Edit Task</h2>
+      <button type="button" class="tbtn icon-only" data-close-modal="editModal" aria-label="Close">&times;</button>
+    </div>
+    <form id="editForm" class="stack">
+      <label class="field">
+        <span>Title</span>
+        <input id="editTitleInput" type="text" required>
+      </label>
+      <label class="field">
+        <span>Scheduled date (optional)</span>
+        <input id="editDateInput" type="date">
+      </label>
+      <label class="field">
+        <span>Notes / blocker reason</span>
+        <textarea id="editNoteInput" rows="4" placeholder="Details, [[file:notes.org][links]], or waiting reason…"></textarea>
+      </label>
+      <div id="editMeta" class="edit-meta"></div>
+      <div class="row-actions spread">
+        <button id="cancelTaskBtn" type="button" class="pbtn danger">Mark CANCELLED</button>
+        <div class="row-actions">
+          <button type="button" class="pbtn" data-close-modal="editModal">Close</button>
+          <button type="submit" class="pbtn primary">Save</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="org.js?v=1"></script>
+<script src="sync.js?v=1"></script>
+<script src="todo.js?v=1"></script>
+</body>
+</html>

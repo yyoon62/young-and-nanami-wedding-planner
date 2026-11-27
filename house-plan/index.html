@@ -184,7 +184,7 @@
   th:first-child, td:first-child { text-align: left; }
   th { color: var(--text-secondary); font-weight: 600; }
   .fine { font-size: 12px; color: var(--text-muted); margin: 8px 2px 0; }
-  .sitenav { display: flex; justify-content: center; gap: 4px; padding: 6px 12px; background: var(--page); border-bottom: 1px solid var(--grid); font-size: 13px; }
+  .sitenav { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 6px 12px; background: var(--page); border-bottom: 1px solid var(--grid); font-size: 13px; }
   .sitenav a { min-height: 32px; display: inline-flex; align-items: center; padding: 0 14px; border-radius: 999px; color: var(--text-secondary); text-decoration: none; font-weight: 500; }
   .sitenav a:hover { background: var(--grid); }
   .sitenav a[aria-current="page"] { background: var(--surface-1); color: var(--text-primary); font-weight: 700; box-shadow: 0 0 0 1px var(--border); }
@@ -195,6 +195,7 @@
   <a href="../">Wedding venues</a>
   <a href="./" aria-current="page">House plan</a>
   <a href="../loans/">Loans</a>
+  <a href="../todo/">TODO</a>
 </nav>
 <header>
   <h1>House &amp; wedding planner</h1>
