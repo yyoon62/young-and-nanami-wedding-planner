@@ -31,11 +31,14 @@ class HostedProjectionTab(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.db = Path(tmp.name).resolve() / "fictional.db"
-        seed_fictional.seed(self.db)
+        # L24: a hosted start refuses a database holding transaction rows, so seed balances only,
+        # start, then add the fictional rows to prove they stay hidden ("gated off, not absent").
+        seed_fictional.seed(self.db, transactions=False)
         self.now = NOW
         ctx = running(self.db, self.rsa, lambda: self.now)
         self.server = ctx.__enter__()
         self.addCleanup(ctx.__exit__, None, None, None)
+        seed_fictional.add_transactions(self.db)
         self.jar = {}
         assert login(self.server, self.rsa, self.jar, email="member.alpha@gmail.com")[0] == 204
 
