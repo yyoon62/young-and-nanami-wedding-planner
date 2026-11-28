@@ -195,9 +195,9 @@ def _summary_card(currency, t, cmp, incomplete, f):
         chips += (' <span class="partial-flag" title="Not every linked account has fetched this whole month, '
                   'so the totals may be incomplete">partial</span>')
     line = (f'<div class="tx-sum"><span title="Credits including refunds; not verified income">💰 Income '
-            f'<strong>{fmt(t.credits, currency)}</strong></span> · '
+            f'<strong>{fmt(t.credits, currency)}</strong></span> '
             f'<span title="Pending, transfers and card credits under review are excluded">💸 Spending '
-            f'<strong>{fmt(t.spending, currency)}</strong></span> · '
+            f'<strong>{fmt(t.spending, currency)}</strong></span> '
             f'<span title="Income minus spending: cash flow, not measured savings">{label} '
             f'<strong>{fmt(t.net, currency, absolute=True)}</strong></span></div>')
     confirm = ""

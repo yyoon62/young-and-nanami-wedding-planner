@@ -206,7 +206,8 @@ class BrowserTx(unittest.TestCase):
         with block_network(allow_loopback=True), running(self.path) as origin, self.browser() as page:
             page.goto(origin + "/transactions?month=2026-11")
             usd = page.locator("article.tx-card", has=page.locator("small", has_text="USD"))
-            expect(usd.locator(".tx-sum")).to_contain_text("💰 Income $3,000.00 · 💸 Spending $2,380.00")
+            expect(usd.locator(".tx-sum")).to_contain_text(re.compile(r"💰 Income \$3,000\.00\s+💸 Spending \$2,380\.00"))
+            self.assertNotIn("·", usd.locator(".tx-sum").inner_text())      # no dangling text dots at a wrap
             expect(usd.locator(".tx-sum")).to_contain_text("🟢 Saved $620.00")
             expect(usd.locator(".partial-flag").first).to_have_text("so far, through 28 Nov")
             self.assertEqual(usd.locator(".partial-flag").count(), 1)             # fetched from Aug 1: not "partial"

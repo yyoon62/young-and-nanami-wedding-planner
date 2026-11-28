@@ -420,6 +420,7 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
 .tx-card .tx-card-head .partial-flag { margin-left: 0; }
 .card .tx-sum { color: #2b2320; font-size: 1rem; line-height: 1.55; margin: .15rem 0 .2rem; }
 .card .tx-sum strong { display: inline; font: inherit; font-weight: 700; margin: 0; }
+.card .tx-sum { display: flex; flex-wrap: wrap; gap: 0 1.1rem; }   /* separators are the gap, never text dots at a wrap */
 .card .tx-sum > span { white-space: nowrap; }
 .card .tx-confirm { margin: .15rem 0 .35rem; }
 .tx-confirm a { display: inline-block; padding: .22rem .7rem; border-radius: 999px; background: #fdf0d5; color: #7a4b00;
