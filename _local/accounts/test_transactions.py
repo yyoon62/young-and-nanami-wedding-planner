@@ -184,8 +184,6 @@ class TransactionsTest(Fixture, unittest.TestCase):
             (lambda d: d | {"accounts": [d["accounts"][0]] * 2}, "duplicate"),
             (lambda d: d | {"accounts": [d["accounts"][0] | {
                 "transactions": d["accounts"][0]["transactions"] * 2}]}, "duplicate"),
-            (lambda d: d | {"accounts": [d["accounts"][0] | {"transactions": [
-                tx("future", "2026-12-20", "-1", "wrong window")]}]}, "outside"),
         ]:
             with self.subTest(expected=message):
                 self.alter = alter
@@ -194,6 +192,14 @@ class TransactionsTest(Fixture, unittest.TestCase):
                 self.assertNotIn("<provider message>", str(caught.exception))
         self.assertEqual(self.db.execute("SELECT count(*) FROM transaction_coverage").fetchone()[0], 0)
         self.assertEqual(self.db.execute("SELECT count(*) FROM account_transactions").fetchone()[0], 0)
+
+    def test_future_dated_posting_is_skipped_not_fatal(self):
+        self.account("Bank")
+        self.add("Bank", tx("now", "2026-11-03", "-4", "In window"),
+                 tx("future", "2026-12-20", "-1", "Scheduled payment"))
+        self.assertTrue(self.sync().caught_up)
+        self.assertEqual([r[0] for r in self.db.execute("SELECT description FROM account_transactions")],
+                         ["In window"])
 
     def test_pending_hidden_transition_replay_and_expiration(self):
         self.account("Bank")

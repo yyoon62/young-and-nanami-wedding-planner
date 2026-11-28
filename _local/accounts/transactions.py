@@ -231,9 +231,10 @@ def _unpack(provider, data, links, start, end, include_pending):
                 if pending and not include_pending:
                     continue
                 # Real banks often timestamp posted dates at noon UTC or local midnight,
-                # so allow slight boundary drift while still rejecting far-future dates.
-                if not pending and not (0 < posted <= end + 2 * DAY):
-                    raise Problem("Provider returned a posting far outside the requested UTC window; window held.")
+                # so allow slight boundary drift. Future-dated postings (scheduled
+                # payments, settlement dates) are skipped; a later window picks them up.
+                if not pending and posted > end + 2 * DAY:
+                    continue
                 transacted = tx.get("transacted_at", 0) if pending else 0
                 if type(transacted) is not int or transacted < 0:
                     raise ValueError()
