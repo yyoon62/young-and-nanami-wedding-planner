@@ -214,10 +214,14 @@ def _unpack(provider, data, links, start, end, include_pending):
                 posted, pending = tx["posted"], tx.get("pending", False)
                 if type(posted) is not int or type(pending) is not bool or posted < 0:
                     raise ValueError()
+                if posted == 0:
+                    pending = True
                 if pending and not include_pending:
                     continue
-                if not pending and not (posted > 0 and start <= posted < end):
-                    raise Problem("Provider returned a posting outside the requested UTC window; window held.")
+                # Real banks often timestamp posted dates at noon UTC or local midnight,
+                # so allow slight boundary drift while still rejecting far-future dates.
+                if not pending and not (0 < posted <= end + 2 * DAY):
+                    raise Problem("Provider returned a posting far outside the requested UTC window; window held.")
                 transacted = tx.get("transacted_at", 0) if pending else 0
                 if type(transacted) is not int or transacted < 0:
                     raise ValueError()

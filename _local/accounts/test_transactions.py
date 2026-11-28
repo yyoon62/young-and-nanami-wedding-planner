@@ -269,7 +269,7 @@ class TransactionsTest(unittest.TestCase):
             (lambda d: d | {"accounts": [d["accounts"][0] | {
                 "transactions": d["accounts"][0]["transactions"] * 2}]}, "duplicate"),
             (lambda d: d | {"accounts": [d["accounts"][0] | {"transactions": [
-                tx("future", "2026-12-15", "-1", "wrong window")]}]}, "outside"),
+                tx("future", "2026-12-20", "-1", "wrong window")]}]}, "outside"),
         ]:
             with self.subTest(expected=message):
                 self.alter = alter
