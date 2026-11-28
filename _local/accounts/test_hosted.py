@@ -67,9 +67,9 @@ class RSA:
 
 
 @contextmanager
-def running(path, rsa, time_read=None, *, http=False, provider=None):
+def running(path, rsa, time_read=None, *, http=False, provider=None, transactions=False):
     with serve(path, 0, provider, logo_dir=path.parent / "logos", hosted=CONFIG, keys=rsa.keys,
-               clock=time_read) as server:
+               clock=time_read, transactions=transactions) as server:
         server.logo_fetcher = None
         if http:
             server.auth.config = replace(CONFIG, origin=f"http://127.0.0.1:{server.server_port}")

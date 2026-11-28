@@ -12,7 +12,7 @@ import re
 import secrets
 import sqlite3
 import tempfile
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 from servicers import servicer_get
 from bridge import Bridge, Problem
 from bulk import Batch, schema
@@ -448,7 +448,7 @@ class Handler(BaseHTTPRequestHandler):
     def send(self, code, text, kind="text/html; charset=utf-8", location=None, preview=False, scripts=False,
              signin=False, cookies=()):
         if kind.startswith("text/html") and not signin:
-            if self.server.auth:
+            if self.server.auth and not self.server.transactions:
                 text = text.replace('<a href="/transactions">Transactions</a>', "", 1)
             text = text.replace("<main>", "<main>" + mode_banner(self.server), 1)
             if self.server.auth and "<main>" in text:
@@ -534,6 +534,10 @@ class Handler(BaseHTTPRequestHandler):
 <div id="google-button" data-client="{escape(self.server.auth.config.client)}"></div>
 <p id="status" role="status">Loading sign-in…</p>
 <noscript>JavaScript is required for Google sign-in.</noscript></html>""", signin=True)
+
+    def tx_enabled(self):
+        """Transactions are available locally, and on a hosted server only when it was started with --transactions."""
+        return not self.server.auth or self.server.transactions
 
     def exact_origin(self):
         return self.headers.get_all("Origin", []) == [self.server.auth.config.origin]
@@ -692,7 +696,7 @@ class Handler(BaseHTTPRequestHandler):
             if found:
                 return self.send_bytes(200, found[0], found[1], cache="private, max-age=86400")
             return self.send_bytes(200, fallback_svg(domain.split(".")[0]).encode(), "image/svg+xml")
-        if path == TX_PATH and not self.server.auth:
+        if path == TX_PATH and self.tx_enabled():
             notices, self.server.notices = self.server.notices, []
             try:
                 with closing(sqlite3.connect(self.server.db)) as db:
@@ -772,16 +776,21 @@ class Handler(BaseHTTPRequestHandler):
                 rerender=self.projection_rerender)
             return self.send(status, body, location=location, scripts=True)
         target = self.path
-        if not self.server.auth and target in (TX_EDIT, TX_SYNC):
-            lengths = self.headers.get_all("Content-Length", [])
-            if (len(lengths) != 1 or not re.fullmatch(r"[0-9]{1,5}", lengths[0])
-                    or int(lengths[0]) > 8192 or self.headers.get_all("Transfer-Encoding")):
-                return self.send(413, "Form too large.")
-            kinds = self.headers.get_all("Content-Type", [])
-            if len(kinds) != 1 or not re.fullmatch(r"application/x-www-form-urlencoded(?:; *charset=utf-8)?",
-                                                   kinds[0], re.IGNORECASE):
-                return self.send(415, "Unsupported form type.")
-            raw_body = self.rfile.read(int(lengths[0]))
+        if target in (TX_EDIT, TX_SYNC) and self.tx_enabled():
+            if self.server.auth:
+                # Session, exact origin and CSRF were verified above and the body is already parsed (no duplicate
+                # or oversized fields): hand post_transactions the same fields, which it validates again.
+                raw_body = urlencode(data).encode()
+            else:
+                lengths = self.headers.get_all("Content-Length", [])
+                if (len(lengths) != 1 or not re.fullmatch(r"[0-9]{1,5}", lengths[0])
+                        or int(lengths[0]) > 8192 or self.headers.get_all("Transfer-Encoding")):
+                    return self.send(413, "Form too large.")
+                kinds = self.headers.get_all("Content-Type", [])
+                if len(kinds) != 1 or not re.fullmatch(r"application/x-www-form-urlencoded(?:; *charset=utf-8)?",
+                                                       kinds[0], re.IGNORECASE):
+                    return self.send(415, "Unsupported form type.")
+                raw_body = self.rfile.read(int(lengths[0]))
             try:
                 with closing(sqlite3.connect(self.server.db, isolation_level=None)) as db:
                     db.row_factory = sqlite3.Row
@@ -800,7 +809,7 @@ class Handler(BaseHTTPRequestHandler):
                 tail = "Caught up." if sync_res.caught_up else "More history available — click Sync again later."
                 self.server.notices = [f"Synced transactions ({sync_res.windows} window(s)). {tail}",
                                        *sync_res.warnings,
-                                       *classify_after_sync(self.server.db, hosted=bool(self.server.auth))]
+                                       *classify_after_sync(self.server.db, hosted=not self.tx_enabled())]
             return self.send(303, "", location=result.location)
         edit = re.fullmatch(r"/edit/([1-9][0-9]{0,17})", target)
         remove = re.fullmatch(r"/remove/([1-9][0-9]{0,17})", target)
@@ -916,7 +925,9 @@ class HostedServer(ThreadingHTTPServer):
             self.state_lock.close()
 
 
-def serve(path, port, provider=None, logo_dir=None, *, hosted=None, keys=None, clock=None):
+def serve(path, port, provider=None, logo_dir=None, *, hosted=None, keys=None, clock=None, transactions=False):
+    if transactions and not hosted:
+        raise ValueError("--transactions only applies to a hosted server; a local server always has them.")
     with ExitStack() as locks:
         auth = None
         if hosted:
@@ -924,7 +935,7 @@ def serve(path, port, provider=None, logo_dir=None, *, hosted=None, keys=None, c
             path = db_path(path)
             locks.enter_context(offline_lock(path))
             os.close(os.open(path, os.O_CREAT | os.O_RDONLY | os.O_NOFOLLOW, 0o600))
-            require_clean(path)  # read-only, before init_db or any other write: no transaction data on the host
+            require_clean(path, transactions)  # read-only, before init_db or any other write: no unlisted data on the host
             if logo_dir:
                 logo_dir = external(logo_dir)
                 logo_dir.mkdir(mode=0o700, exist_ok=True)
@@ -948,6 +959,7 @@ def serve(path, port, provider=None, logo_dir=None, *, hosted=None, keys=None, c
     server.reclaimed = reclaimed
     server.token = None if hosted else secrets.token_urlsafe(32)
     server.db = path
+    server.transactions = bool(transactions)
     server.batch = Batch(path, provider, validate) if provider else None
     server.notices = []
     server.logo_dir = logo_dir
@@ -962,12 +974,16 @@ if __name__ == "__main__":
     parser.add_argument("--db", type=Path)
     parser.add_argument("--hosted", action="store_true", help="Require approved household Google sign-in")
     parser.add_argument("--hosted-env", type=Path, help="Load hosted settings from a private env file")
+    parser.add_argument("--transactions", action="store_true",
+                        help="Hosted only: this host holds transactions (page, sync, categories). Without it they stay refused.")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--demo", action="store_true", help="Fictional walkthrough, disposable database only")
     modes.add_argument("--bridge", action="store_true", help="Enable configured SimpleFIN Bridge")
     args = parser.parse_args()
     if args.hosted_env and not args.hosted:
         parser.error("--hosted-env requires --hosted.")
+    if args.transactions and not args.hosted:
+        parser.error("--transactions requires --hosted (a local server always has transactions).")
     if (args.demo and (args.hosted or args.db)) or (args.bridge and args.db and not args.hosted):
         parser.error("--demo cannot be combined with --hosted or --db; --bridge with --db requires --hosted.")
     os.umask(0o077)
@@ -992,7 +1008,8 @@ if __name__ == "__main__":
                 parser.exit(1, "Bridge disabled: missing or unsafe credential storage. See BULK.md.\n")
         logo_dir = None if args.demo else path.parent / "logos"
         try:
-            server = stack.enter_context(serve(path, args.port, provider, logo_dir=logo_dir, hosted=hosted))
+            server = stack.enter_context(serve(path, args.port, provider, logo_dir=logo_dir, hosted=hosted,
+                                               transactions=args.transactions))
         except Refused as exc:
             parser.exit(1, f"Hosted startup refused: {exc}\n")
         except (OSError, ValueError, sqlite3.Error) as exc:

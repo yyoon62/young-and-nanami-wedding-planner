@@ -30,6 +30,11 @@ def readonly(path):
         yield db
 
 
+def transactions_allowed():
+    """The Pi opts in with ACCOUNTS_BACKUP_TRANSACTIONS=1 in backup.env; anything else keeps transactions out."""
+    return os.environ.get("ACCOUNTS_BACKUP_TRANSACTIONS", "") == "1"
+
+
 def tables(db):
     return {r[0] for r in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
 
@@ -41,7 +46,7 @@ def checked_image(db, current=None):
     names = tables(db)
     if not TABLES <= names or db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
         raise ValueError("Snapshot failed dashboard schema or integrity checks.")
-    found = violations(db)
+    found = violations(db, transactions_allowed())
     if found:  # the timer runs without the service: never archive (or restore) data the host must not hold
         raise ValueError(f"Snapshot refused: {describe(found)}. Transaction data must not be on the host; "
                          f"install a file made by {EXPORT_COMMAND} instead.")

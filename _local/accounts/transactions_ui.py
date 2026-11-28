@@ -2,8 +2,9 @@
 
 Parent MUST authenticate/authorize all three routes, pass a trusted allowed_views
 set and session token, and retain Host/Origin, CSP, no-store and request-size
-guards. Owner tabs are not account ACLs; do not enable this in hosted mode
-without real per-account authorization. For POST require exact path (no
+guards. Owner tabs are not account ACLs: hosted mode (`server.py --hosted --transactions`, L30b)
+shows every signed-in member every transaction, by the household's decision (Young and Nanami see
+everything); do not enable it for anyone else without real per-account authorization. For POST require exact path (no
 query), application/x-www-form-urlencoded and strictly bounded raw bytes. Do not
 use the baseline dict of first form values; duplicates must be rejected.
 """
@@ -187,8 +188,7 @@ def _categories_info(db, f, token):
         "dates, accounts, owners or ids.",
         "Descriptions that look like Zelle, Venmo, payroll, transfers or checks are not sent. A bare person’s name or "
         "an employer in a description cannot be recognised and would be sent.",
-        "Suggestions never override anything you set and are not counted as confirmed. Not available when the "
-        "dashboard is hosted.",
+        "Suggestions never override anything you set and are not counted as confirmed.",
         f"{key_line} Model: {model_name()}.",
         status,
         f'Merchants so far: {st["suggested"]} suggested · {st["review"]} uncategorized · {st["pending"]} waiting.')

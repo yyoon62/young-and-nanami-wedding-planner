@@ -126,7 +126,7 @@ class EmojiAndPage(Fixture, unittest.TestCase):
         box = html[html.index('<details class="tx-info">'):]
         self.assertIn("Only cleaned merchant names (no amounts, dates or accounts) are sent, once each.", box)
         self.assertIn("A bare person’s name or an employer in a description cannot be recognised", box)
-        self.assertIn("Not available when the dashboard is hosted.", box)
+        self.assertNotIn("hosted", box)       # L30b: the classifier also runs on an opted-in Pi
         self.assertIn("↻ Refresh categories", box)
         self.assertEqual(html.count("↻ Refresh categories"), 1)
 

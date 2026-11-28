@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "deploy"))
@@ -292,6 +293,69 @@ class Policy(Base):
         junk.write_text("not a database " * 50)
         with self.assertRaises(hosted_guard.Refused):
             hosted_guard.check(junk)
+
+
+class ExportWithTransactions(Base):
+    """L30b: --with-transactions is an explicit opt-in for a host started with --transactions."""
+
+    def test_copies_the_transaction_tables_exactly_and_still_leaves_host_state_out(self):
+        source = make_source(self.dir)
+        with closing(sqlite3.connect(source)) as db, db:      # a custom category and a non-default classifier setting
+            db.execute("INSERT INTO transaction_categories(name, builtin, sort) VALUES ('Coffee', 0, 1000)")
+        before = sha(source)
+        result = self.export(source, "--with-transactions")
+        self.assertEqual(sha(source), before, "the source must not change")
+        self.assertIn("REAL TRANSACTIONS", result.stdout)
+        for table in hosted_guard.TRANSACTION_TABLES:
+            order = ",".join(str(i + 1) for i in range(len(rows(source, f"PRAGMA table_info({table})"))))
+            self.assertEqual(rows(self.out, f"SELECT * FROM {table} ORDER BY {order}"),
+                             rows(source, f"SELECT * FROM {table} ORDER BY {order}"), table)
+        self.assertEqual(rows(self.out, "SELECT COUNT(*) FROM account_transactions WHERE merchant='ZZ-SENTINEL-COFFEE'"), [(1,)])
+        self.assertEqual(rows(self.out, "SELECT COUNT(*) FROM transaction_categories WHERE name='Coffee' AND builtin=0"), [(1,)])
+        # host state is still never exported
+        self.assertEqual(rows(self.out, "SELECT COUNT(*) FROM fetch_attempts"), [(0,)])
+        data = self.out.read_bytes()
+        for marker in (b"member.one@gmail.com", b"sub-1"):
+            self.assertNotIn(marker, data)
+        self.assertEqual(rows(self.out, "PRAGMA integrity_check"), [("ok",)])
+        self.assertEqual(rows(self.out, "PRAGMA freelist_count"), [(0,)])
+        self.assertEqual(sorted(p.name for p in self.out.parent.iterdir()), ["export.sqlite3"])
+
+    def test_the_exported_file_passes_the_opted_in_guard_and_fails_the_default_one(self):
+        source = make_source(self.dir)
+        self.export(source, "--with-transactions")
+        self.assertEqual(hosted_guard.check(self.out, transactions=True), [])
+        refused = dict(hosted_guard.check(self.out))
+        self.assertIn("account_transactions", refused)
+        self.assertEqual(refused["account_transactions"], 4)         # 3 seeded + the sentinel row
+
+    def test_transaction_ids_and_the_next_id_survive_so_later_syncs_do_not_collide(self):
+        source = make_source(self.dir)
+        with closing(sqlite3.connect(source)) as db, db:
+            top = db.execute("SELECT max(row_id) FROM account_transactions").fetchone()[0]
+            db.execute("DELETE FROM account_transactions WHERE row_id=?", (top,))     # a deleted highest id
+        self.export(source, "--with-transactions")
+        self.assertEqual(rows(self.out, "SELECT row_id FROM account_transactions ORDER BY 1"),
+                         rows(source, "SELECT row_id FROM account_transactions ORDER BY 1"))
+        with closing(sqlite3.connect(self.out)) as db, db:
+            new = db.execute("""INSERT INTO account_transactions (account_id,tx_id,source,posted_date,amount,currency,
+                description,payee,merchant,pending,pending_active) VALUES (1,'new','s','2026-11-03','-1.00','USD','x','','x',0,0)""").lastrowid
+        self.assertGreater(new, top)
+
+    def test_default_export_is_unchanged_without_the_flag(self):
+        source = make_source(self.dir)
+        result = self.export(source)
+        self.assertNotIn("REAL TRANSACTIONS", result.stdout)
+        self.assertEqual(rows(self.out, "SELECT COUNT(*) FROM account_transactions"), [(0,)])
+        self.assertEqual(hosted_guard.check(self.out), [])
+
+    def test_backup_script_policy_follows_the_same_opt_in(self):
+        import backup_sqlite
+        with unittest.mock.patch.dict(os.environ, {"ACCOUNTS_BACKUP_TRANSACTIONS": "1"}):
+            self.assertTrue(backup_sqlite.transactions_allowed())
+        for value in ("", "0", "true", "yes"):
+            with unittest.mock.patch.dict(os.environ, {"ACCOUNTS_BACKUP_TRANSACTIONS": value}):
+                self.assertFalse(backup_sqlite.transactions_allowed(), value)
 
 
 if __name__ == "__main__":

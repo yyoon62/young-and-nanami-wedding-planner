@@ -20,6 +20,12 @@ EXPORT_TABLES = ("accounts", "balance_history", "source_links", "account_terms",
 # (Bridge sync quota timestamps, Google identity pins, sign-in sessions and challenges).
 HOSTED_TABLES = EXPORT_TABLES + ("fetch_attempts", "hosted_identities", "hosted_sessions", "hosted_challenges")
 
+# L30b: a host that is explicitly opted in (`server.py --hosted --transactions`, `daily_sync.py --transactions`,
+# ACCOUNTS_BACKUP_TRANSACTIONS=1 for the backup timer) also holds the transaction tables. Without the opt-in
+# nothing changes: the same rows are still refused. Anything NOT listed here is still refused either way.
+TRANSACTION_TABLES = ("account_transactions", "transaction_coverage", "transaction_merchant_rules",
+                      "transaction_categories", "classifier_cache", "classifier_settings")
+
 # init_db seeds built-in category names on every database, so those rows are expected on the host.
 # Custom categories (typed by the user or inferred from transactions) are not.
 ROW_RULES = {"transaction_categories": "builtin=1"}
@@ -35,12 +41,17 @@ def _quote(name):
     return '"' + name.replace('"', '""') + '"'
 
 
-def violations(db):
+def allowed(transactions=False):
+    return HOSTED_TABLES + (TRANSACTION_TABLES if transactions else ())
+
+
+def violations(db, transactions=False):
     """[(table, rows)] for every table holding rows the host must not have; internal sqlite_* tables ignored."""
     found = []
+    ok = allowed(transactions)
     for (table,) in db.execute("SELECT name FROM sqlite_schema WHERE type='table' "
                                "AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name").fetchall():
-        if table in HOSTED_TABLES:
+        if table in ok:
             continue
         quoted = _quote(table)
         count = None
@@ -60,20 +71,20 @@ def describe(found):
     return "; ".join(f"table {table} holds {count} row{'s' * (count != 1)}" for table, count in found)
 
 
-def check(path):
+def check(path, transactions=False):
     """Read-only check of the file at `path`; [] when it is missing, empty or clean. Raises Refused on any doubt."""
     path = Path(path)
     try:
         if not path.exists() or path.stat().st_size == 0:
             return []
         with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
-            return violations(db)
+            return violations(db, transactions)
     except sqlite3.Error as exc:
         raise Refused(f"the database could not be read safely ({type(exc).__name__}: {exc})") from None
 
 
-def require_clean(path):
-    found = check(path)
+def require_clean(path, transactions=False):
+    found = check(path, transactions)
     if found:
         raise Refused(f"{describe(found)}. Transaction data must not be on the host. "
                       f"On the machine that holds your data run {EXPORT_COMMAND} and install that file instead.")
