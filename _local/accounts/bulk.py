@@ -145,6 +145,13 @@ def mappings(db):
     return {r["source"]: r for r in db.execute("SELECT * FROM source_links ORDER BY local")}
 
 
+def daily_guard_problem(db):
+    oldest = db.execute("SELECT min(at) FROM fetch_attempts").fetchone()[0]
+    when = time.strftime("%-I:%M %p", time.localtime(oldest + 86400)) if oldest else "later"
+    return Problem(f"Daily guard: 24 SimpleFIN requests in the past 24 hours. "
+                   f"Next request available at {when}.")
+
+
 class Batch:
     def __init__(self, path, provider, validate):
         self.path, self.provider, self.validate = path, provider, validate
@@ -156,7 +163,7 @@ class Batch:
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM fetch_attempts WHERE at <= ?", (time.time() - 86400,))
             if db.execute("SELECT count(*) FROM fetch_attempts").fetchone()[0] >= 24:
-                raise Problem("Daily guard: 24 attempts in the past 24 hours. Try later.")
+                raise daily_guard_problem(db)
             db.execute("INSERT INTO fetch_attempts VALUES (?)", (time.time(),))
         return unpack(self.provider.fetch(), self.provider.namespace, self.validate)
 

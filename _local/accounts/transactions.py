@@ -17,7 +17,7 @@ import time
 from urllib.parse import urlencode
 
 from bridge import Bridge, Problem, unique_fields
-from bulk import fingerprint, text
+from bulk import daily_guard_problem, fingerprint, text
 from tx_classifier import install_classifier
 from tx_categories import (clean_merchant, add_category, canonical, install_categories, list_categories,
                            load_cache, load_rules, resolve)
@@ -128,7 +128,7 @@ def _reserve(db):
         now = time.time()
         db.execute("DELETE FROM fetch_attempts WHERE at <= ?", (now - DAY,))
         if db.execute("SELECT count(*) FROM fetch_attempts").fetchone()[0] >= 24:
-            raise Problem("Daily guard: 24 attempts in the past 24 hours. Try later.")
+            raise daily_guard_problem(db)
         db.execute("INSERT INTO fetch_attempts VALUES (?)", (now,))
 
 

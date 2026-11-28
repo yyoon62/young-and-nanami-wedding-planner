@@ -145,9 +145,9 @@ class TransactionsTest(Fixture, unittest.TestCase):
         self.alter = lambda _: (403, b"not displayed")
         with self.assertRaisesRegex(Problem, "denied or revoked"):
             self.sync()
-        with self.assertRaisesRegex(Problem, "24 attempts"):
+        with self.assertRaisesRegex(Problem, r"24 SimpleFIN requests.*Next request available at \d{1,2}:\d\d [AP]M\.$"):
             self.batch.sync()
-        with self.assertRaisesRegex(Problem, "24 attempts"):
+        with self.assertRaisesRegex(Problem, r"24 SimpleFIN requests.*Next request available at \d{1,2}:\d\d [AP]M\.$"):
             self.sync()
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.db.execute("SELECT count(*) FROM accounts").fetchone()[0], 2)
