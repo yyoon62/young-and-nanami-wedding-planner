@@ -24,7 +24,7 @@ from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo,
 from account_terms import install_terms, load_terms, parse_terms, save_terms
 from projections import install_projections
 import terms_ui
-from projections_ui import projection_get, projection_post
+from projections_ui import projection_post, projection_redirect
 from transactions import install_transactions, sync_transactions
 from tx_classifier import after_sync as classify_after_sync
 from transactions_ui import (EDIT as TX_EDIT, SYNC as TX_SYNC, TRANSACTIONS as TX_PATH,
@@ -124,7 +124,7 @@ def init_db(path):
         install_terms(db)
 
 
-NAV = (("/", "Accounts"), ("/transactions", "Transactions"), ("/projections", "Projections"),
+NAV = (("/", "Accounts"), ("/transactions", "Transactions"),
        ("/new", "Add account"), ("/servicers", "Statements"), ("/federal-preview", "Federal preview"))
 
 
@@ -661,10 +661,8 @@ class Handler(BaseHTTPRequestHandler):
         if result is not None:
             return self.send(*result)
         path = urlsplit(self.path).path
-        if path == "/projections":
-            status, body, location = projection_get(
-                self.server.db, self.path, page=page, token=self.token, people=PEOPLE,
-                section_for=section_for, places=places, today=date.today(), suggestions=not self.server.auth)
+        if path == "/projections":      # L29: the page moved into Accounts; old links and bookmarks keep working
+            status, body, location = projection_redirect(self.server.db, self.path, page=page, people=PEOPLE)
             return self.send(status, body, location=location)
         if path == "/federal-preview":
             return self.send(200, (ROOT / "preview.html").read_text(), preview=True)

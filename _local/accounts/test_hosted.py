@@ -556,7 +556,7 @@ class HostedTransactionsGated(unittest.TestCase):
                     VALUES (?,?,'l23-src',date('now','start of month',?),'3141.59','USD','Loan payment','','loan payment',0,0,1,1)""",
                            (loan, f"l23-{month}", f"-{month} months"))
         for jar in (self.a, self.b):
-            for target in ("/projections", "/projections?view=Young&currency=USD"):
+            for target in ("/?chart=projection", "/?view=Young&currency=USD&chart=projection"):   # L29: a tab on Accounts
                 response = request(self.server, target, jar=jar)
                 self.assertEqual(response[0], 200, target)
                 text = response[2].decode()
@@ -579,9 +579,10 @@ class HostedTransactionsGated(unittest.TestCase):
 
     def test_nav_has_no_transactions_link_on_any_page(self):
         for jar in (self.a, self.b):
-            for target in ("/", "/?view=Young", "/projections", "/servicers", "/new", "/federal-preview"):
+            for target in ("/", "/?view=Young", "/?chart=projection", "/servicers", "/new", "/federal-preview"):
                 html = request(self.server, target, jar=jar)[2].decode()
-                self.assertIn('href="/projections"' if target != "/federal-preview" else "Federal", html, target)
+                self.assertIn("Federal", html, target)
+                self.assertNotIn('href="/projections"', html, target)      # L29: Projection is a tab on Accounts
                 self.assertNotIn("/transactions", html, target)
                 self.assertNotIn(">Transactions<", html, target)
 
@@ -596,11 +597,13 @@ class HostedTransactionsGated(unittest.TestCase):
                        "/new?servicer=uas", "/transactions", "/transactions?month=2024-11", *re.findall(r'href="(/[^"]*)"', nav)}
             for view in ("Household", "Young", "Nanami"):
                 for currency in ("USD", "JPY", "EUR"):  # EUR: unavailable, must still not leak
-                    targets.add(f"/projections?view={view}&currency={currency}")
+                    targets.add(f"/projections?view={view}&currency={currency}")     # L29: a 308 or 400, never data
+                    targets.add(f"/?view={view}&currency={currency}&chart=projection")
                 targets.add(f"/projections?view={view}")
+                targets.add(f"/?view={view}&chart=projection")
             for target in sorted(targets):
                 response = request(self.server, target, jar=jar)
-                self.assertIn(response[0], (200, 400, 404), target)
+                self.assertIn(response[0], (200, 308, 400, 404), target)
                 self.assert_no_sentinel(response, target)
                 visited += response[0] == 200
             # Also the projection and logo caches reached by the same session.
@@ -638,7 +641,7 @@ class HostedProjections(unittest.TestCase):
             return db.execute("SELECT view, currency, assumptions FROM projection_assumptions ORDER BY 1, 2").fetchall()
 
     def token(self, jar):
-        body = request(self.server, "/projections", jar=jar)[2]
+        body = request(self.server, "/?chart=projection", jar=jar)[2]       # L29: the form lives on the Accounts tab
         return re.search(rb'name="token" value="([^"]+)"', body)[1].decode()
 
     def post(self, jar, token, origin=ORIGIN, **fields):
@@ -669,18 +672,18 @@ class HostedProjections(unittest.TestCase):
         self.now = NOW
         # Valid session, token and Origin: saved. The second member sees the same assumptions.
         self.assertEqual(self.post(self.a, token)[0], 303)
-        after = request(self.server, "/projections?view=Household&currency=USD", jar=self.b)[2].decode()
+        after = request(self.server, "/?currency=USD&chart=projection", jar=self.b)[2].decode()
         self.assertRegex(after, r'name="income"[^>]*value="5000"')
         self.assertNotIn(seed_fictional.PROJECTION_INCOME, after)
         # Owner views are shared data too: Young's scenario saved by member A is visible to member B only
         # through the same table, never as a permission boundary.
         self.assertEqual(self.post(self.a, token, view="Young", income="777")[0], 303)
-        young = request(self.server, "/projections?view=Young&currency=USD", jar=self.b)[2].decode()
+        young = request(self.server, "/?view=Young&currency=USD&chart=projection", jar=self.b)[2].decode()
         self.assertRegex(young, r'name="income"[^>]*value="777"')
         self.assertEqual([row[:2] for row in self.saved()], [("Household", "USD"), ("Young", "USD")])
         # Member B can overwrite (last writer wins); there is no per-member scenario.
         self.assertEqual(self.post(self.b, self.token(self.b), income="6000")[0], 303)
-        again = request(self.server, "/projections?view=Household&currency=USD", jar=self.a)[2].decode()
+        again = request(self.server, "/?currency=USD&chart=projection", jar=self.a)[2].decode()
         self.assertRegex(again, r'name="income"[^>]*value="6000"')
 
     def test_invalid_values_are_422_and_not_saved(self):

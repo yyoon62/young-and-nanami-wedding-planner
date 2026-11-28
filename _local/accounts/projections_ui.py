@@ -36,12 +36,31 @@ def projection_url(view, currency=None):
 
 
 def _page(page, content):
-    return page(content, current=PATH, heading="Projected net worth")
+    return page(content, current="/", heading="Projected net worth")
 
 
 def _scope_error(page, status, message, view="Household"):
     return (status, _page(page, f'<p class="notice" role="alert">{escape(message)}</p>'
                                  f'<p><a href="{escape(projection_url(view))}">Choose a projection</a></p>'), None)
+
+
+def projection_redirect(db_path, target, *, page, people):
+    """GET /projections[?view=&currency=] -> 308 to the Projection tab on Accounts. Same 400s as before (unknown view,
+    unavailable currency), so a bad link never redirects to nowhere. Returns (status, text, location)."""
+    from net_worth_ui import Scope
+    try:
+        query = parse_qs(urlsplit(target).query, keep_blank_values=True, max_num_fields=16)
+    except ValueError:
+        return _scope_error(page, 400, "Invalid projection selector.")
+    view, currency = query.get("view", ["Household"]), query.get("currency")
+    if len(view) != 1 or view[0] not in ("Household", *people):
+        return _scope_error(page, 400, "Unknown projection view.")
+    if currency is not None:
+        with closing(sqlite3.connect(db_path)) as db:
+            known = available_currencies(eligible_accounts(db, view[0]))
+        if len(currency) != 1 or currency[0] not in known:
+            return _scope_error(page, 400, "Currency is unavailable in this view.", view[0])
+    return 308, "", Scope(view[0], "projection", currency[0] if currency else None).url(anchor=True)
 
 
 def gather(db, view, currency, rows, *, places, today, suggestions, section_for):
@@ -67,7 +86,8 @@ def embed(db, view, currency, *, token, section_for, places, today, suggestions,
 
 
 def projection_get(db_path, target, *, page, token, people, section_for, places, today, suggestions=False):
-    """After the server's GET access gate. Returns (status, text, location)."""
+    """Standalone renderer of the panel (no route uses it since L29 moved the page into Accounts; unit tests do).
+    Returns (status, text, location)."""
     try:
         query = parse_qs(urlsplit(target).query, keep_blank_values=True, max_num_fields=16)
     except ValueError:
@@ -147,7 +167,7 @@ def _apply_suggestion(db, data, view, currency, scale, today, suggestions, page,
 def _suggestion_card(view, currency, token, suggestion, assumptions, scale):
     """Dated basis for the suggested income/spending; nothing here is saved by viewing it.
 
-    L29: one visible line + the apply button; the months table, basis and notes are in a collapsed ℹ️ (nothing dropped)."""
+    L29: the averages and the apply button come first; the notes are in a collapsed ℹ️ (nothing dropped)."""
     if suggestion is None:
         return ""
     money = lambda value: escape(currency) + " " + tx_money(value, currency)
@@ -185,12 +205,12 @@ def _suggestion_card(view, currency, token, suggestion, assumptions, scale):
         '💡 Suggested from your transactions</h2>'
         f'<p class="nw-sline">Average monthly credits (not verified income): <strong>{money(suggestion.income)}</strong> · '
         f'Average monthly spending: <strong>{money(suggestion.spending)}</strong></p>{apply}'
-        '<details class="nw-info"><summary>ℹ️ Months, basis and notes</summary>'
-        f'<p>Basis: <strong>{escape(suggestion.basis)}</strong> · cash and credit-card accounts only · '
+        f'<p class="history-range">Basis: <strong>{escape(suggestion.basis)}</strong> · cash and credit-card accounts only · '
         'transfers excluded. Not applied until you choose to.</p>'
         '<div class="table-wrap"><table class="acct-table"><thead><tr><th scope="col">Month</th>'
         '<th scope="col" class="num">Credits</th><th scope="col" class="num">Spending</th></tr></thead>'
         f'<tbody>{rows}</tbody></table></div>'
+        '<details class="nw-info"><summary>ℹ️ Notes</summary>'
         + "".join(f'<p class="history-range">{escape(n)}</p>' for n in notes)
         + '</details></section>')
 

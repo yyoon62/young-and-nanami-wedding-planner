@@ -18,11 +18,6 @@ from l29_fixture import fetch, running, seed
 GOLDEN = json.loads((Path(__file__).with_name("l29_golden.json")).read_text())
 
 
-def projection_url(view, currency):
-    """Where the Projection panel is served. Baseline 043c5a9: its own page."""
-    return "/projections?" + urlencode({"view": view, "currency": currency})
-
-
 class Base(unittest.TestCase):
     backdated = False
 
@@ -49,11 +44,8 @@ def accounts_url(view, currency):
 
 
 class Golden(Base):
-    def test_example_9_numbers_equal_the_baseline_projections_page(self):
-        """Pinned at 043c5a9 from GET /projections on this fixture: numbers, not layout."""
-        self.check(projection_url)
-
-    def test_example_9_same_numbers_in_the_accounts_projection_tab(self):
+    def test_example_9_the_accounts_projection_tab_shows_the_numbers_of_the_baseline_projections_page(self):
+        """Pinned at 043c5a9 (l29_golden.json, generated from GET /projections on this fixture): numbers, not layout."""
         self.check(accounts_url)
 
     def check(self, url):
@@ -72,6 +64,55 @@ class Golden(Base):
         for region in ("cards", "annual", "budget", "notes", "suggest", "debt", "asset", "form"):
             self.assertTrue(household[region], region)
         self.assertIn(["Net worth", "Start: USD 980.00", "Year 10: USD 262,935.95"], household["cards"])
+
+
+class Routes(Base):
+    """L29-4: no Projections tab; GET /projections is a validated permanent redirect."""
+
+    NAV = ["Accounts", "Transactions", "Add account", "Statements", "Federal preview"]
+
+    def nav(self, html):
+        nav = re.search(r'<nav class="sitenav"[^>]*>(.*?)</nav>', html, re.S)[1]
+        return re.findall(r'<a href="([^"]*)"( aria-current="page")?>([^<]*)</a>', nav)
+
+    def test_example_1_nav_has_no_projections_and_marks_the_active_page(self):
+        pages = {"/": "Accounts", "/?chart=projection": "Accounts", "/?view=Young&chart=projection": "Accounts",
+                 "/new": "Add account", "/servicers": "Statements", "/transactions": "Transactions",
+                 f"/edit/{self.ids['young-chk']}": "Accounts"}
+        for target, active in pages.items():
+            with self.subTest(target=target):
+                status, _, html = self.get(target)
+                self.assertEqual(status, 200)
+                nav = self.nav(html)
+                self.assertEqual([label for _, _, label in nav], self.NAV)
+                self.assertEqual([label for _, current, label in nav if current], [active])
+                self.assertNotIn("Projections", html.partition("</nav>")[0])
+
+    def test_example_2_old_links_redirect_permanently_to_the_projection_tab(self):
+        for old, new in (("/projections?view=Nanami&currency=EUR", "/?view=Nanami&currency=EUR&chart=projection#net-worth"),
+                         ("/projections", "/?chart=projection#net-worth"),
+                         ("/projections?view=Young", "/?view=Young&chart=projection#net-worth"),
+                         ("/projections?currency=USD", "/?currency=USD&chart=projection#net-worth"),
+                         ("/projections?view=Household&currency=EUR", "/?currency=EUR&chart=projection#net-worth")):
+            with self.subTest(old=old):
+                status, headers, body = self.get(old)
+                self.assertEqual((status, headers["Location"], body), (308, new, ""))
+                self.assertEqual(headers["Cache-Control"], "no-store")
+        status, _, html = self.get("/?view=Nanami&currency=EUR&chart=projection")
+        self.assertIn('name="currency" value="EUR"', html)
+        status, _, html = self.get("/?chart=projection")                         # bare: Household, default currency
+        self.assertIn('name="view" value="Household"', html)
+        self.assertIn('name="currency" value="USD"', html)
+
+    def test_example_2_bad_links_are_a_400_not_a_redirect_to_nowhere(self):
+        for target in ("/projections?view=Mallory", "/projections?view=Young&currency=EUR", "/projections?currency=JPY",
+                       "/projections?view=Young&view=Nanami", "/projections?currency=USD&currency=EUR",
+                       "/projections?currency=usd"):
+            with self.subTest(target=target):
+                status, headers, body = self.get(target)
+                self.assertEqual(status, 400)
+                self.assertNotIn("Location", headers)
+                self.assertNotIn('id="net-worth"', body)
 
 
 class Panel(Base):
