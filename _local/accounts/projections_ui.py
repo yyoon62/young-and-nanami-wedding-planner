@@ -13,10 +13,10 @@ from projections import (
 
 
 PATH = "/projections"
-METRICS = (
-    ("net_worth", "Net worth"), ("liquid", "Cash + HYSA"), ("investments", "Investments"),
-    ("retirement", "Retirement"), ("debt", "Debt owed"),
-)
+NET_WORTH = ("net_worth", "Net worth")
+OTHER_METRICS = (("investments", "Investments"), ("retirement", "Retirement"), ("debt", "Debt owed"))
+CARD_METRICS = (NET_WORTH, ("liquid", "Cash + HYSA"), *OTHER_METRICS)
+ANNUAL_METRICS = (NET_WORTH, ("cash", "Cash"), ("hysa", "Savings / HYSA"), *OTHER_METRICS)
 
 
 def projection_url(view, currency=None):
@@ -212,10 +212,27 @@ def _annual(points, metrics, money, unit_label):
     )
 
 
+def _debt_note(debt, target, surplus, money):
+    if not debt:
+        return ""
+    service = ('Debt service included in spending does not pay down model debt. '
+               'Modeled payments use only positive monthly net savings, not saved cash or HYSA.')
+    if not target or surplus <= 0:
+        reason = ("the debt payment target is zero" if not target
+                  else "monthly net savings are zero or negative")
+        return (f'<p class="notice" role="note"><strong>No debt payment is modeled:</strong> {reason}. '
+                f'Unpaid debt can grow with interest. {service}</p>')
+    if target > surplus:
+        return (f'<p class="notice" role="note"><strong>Debt payments can fall below the target:</strong> '
+                f'only {money(surplus)} is left each month after spending, before debt payments, '
+                f'compared with a {money(target)} target. {service}</p>')
+    return f'<p>{service}</p>'
+
+
 def _panel(view, currency, currencies, people, seed, assumptions, scale, token, *, attempted=None, errors=None):
     money = lambda value: _money(value, currency, scale)
     points = project(seed.balances, assumptions)
-    metrics = METRICS + ((("unclassified", "Unclassified assets"),) if seed.unclassified_count else ())
+    extra_metrics = (("unclassified", "Unclassified assets"),) if seed.unclassified_count else ()
     if seed.count:
         date_range = f'<time>{seed.oldest}</time>'
         if seed.oldest != seed.newest:
@@ -243,19 +260,21 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
     for name in OPTIONAL:
         if not getattr(assumptions, name):
             values[name] = ""
-    budget = (f'<p>Monthly take-home income: <strong>{money(assumptions.income)}</strong> · Spending: '
-              f'<strong>{money(assumptions.spending)}</strong> · Income minus spending: '
-              f'<strong>{money(assumptions.surplus)}</strong> (nominal).</p>')
+    surplus = assumptions.surplus
+    budget = (f'<p>Monthly take-home income: <strong>{money(assumptions.income)}</strong> · Monthly spending: '
+              f'<strong>{money(assumptions.spending)}</strong> · Monthly net savings before modeled allocations '
+              f'(income minus spending): <strong>{money(surplus)}</strong> (nominal).</p>')
+    debt_note = _debt_note(seed.balances.debt, assumptions.debt_target, surplus, money)
     return (
         _selector(view, currency, currencies, people)
-        + '<p class="notice"><strong>Illustrative projection only.</strong> Not financial advice or a guarantee. '
+        + '<p class="notice"><strong>Illustrative projection only:</strong> not financial advice or a forecast. '
           'The model uses saved balances; visiting this page does not refresh them.</p>'
         + '<section class="history" aria-labelledby="projection-heading"><h2 id="projection-heading">'
           'Net worth projection</h2>'
-        + asof + budget + gap + f'<p>{escape(unit_label)}.</p>'
-        + _cards(points[0].display, points[-1].display, assumptions.years, metrics, money)
+        + asof + budget + debt_note + gap + f'<p>{escape(unit_label)}.</p>'
+        + _cards(points[0].display, points[-1].display, assumptions.years, CARD_METRICS + extra_metrics, money)
         + _chart(points, money, assumptions.years)
-        + _annual(points, metrics, money, unit_label)
+        + _annual(points, ANNUAL_METRICS + extra_metrics, money, unit_label)
         + '</section>'
         + _form(view, currency, scale, token, attempted if attempted is not None else values, errors or {})
         + '<details><summary>How this projection works</summary>'

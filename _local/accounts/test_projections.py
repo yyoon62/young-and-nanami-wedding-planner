@@ -197,20 +197,27 @@ class EndpointTests(unittest.TestCase):
         self.fixture = SimpleNamespace(db=self.path, token="local-fixture-token", auth=None, server_port=8765,
                                        batch=None, logo_dir=None)
 
+    @staticmethod
+    def add(db, kind, owner, amount, *, side="asset", currency="USD", asof="2026-10-01", excluded=0):
+        db.execute("""INSERT INTO accounts (institution, nickname, kind, side, currency,
+            balance, asof, owner, excluded) VALUES ('Example', 'Fictional', ?, ?, ?, ?, ?, ?, ?)""",
+                   (kind, side, currency, amount, asof, owner, excluded))
+
     def populate(self):
         with closing(sqlite3.connect(self.path)) as db, db:
-            def add(kind, owner, amount, *, side="asset", currency="USD", asof="2026-10-01", excluded=0):
-                db.execute("""INSERT INTO accounts (institution, nickname, kind, side, currency,
-                    balance, asof, owner, excluded) VALUES ('Example', 'Fictional', ?, ?, ?, ?, ?, ?, ?)""",
-                           (kind, side, currency, amount, asof, owner, excluded))
+            def add(*args, **kwargs):
+                self.add(db, *args, **kwargs)
             add("Checking", "Young", "100.10")
             add("Savings", "Joint", "10.20", asof="2026-11-26")
             add("Brokerage", "Nanami", "15.30")
             add("IRA", "Unspecified", "20.40")
             add("Custom", "Unspecified", "2.01")
             add("Retirement", "Young", "250.55", side="debt")
+            add("Student loan", "Young", "30.10", side="debt")
+            add("Credit card", "Nanami", "40.20", side="debt", asof="2026-10-28")
+            add("Other", "Joint", "5.03", side="debt")
             add("Mortgage", "Unspecified", "3.05")  # asset in Loans
-            add("Checking", "Young", "777.77", excluded=1)
+            add("Checking", "Young", "777.77", asof="2026-01-01", excluded=1)
             add("Checking", "Unspecified", "999999", currency="JPY")
 
     def call(self, path="/projections", data=None, **kwargs):
@@ -231,30 +238,91 @@ class EndpointTests(unittest.TestCase):
             def seed(view, currency="USD"):
                 return starting_balances(eligible_accounts(db, view), currency, server.section_for, TODAY)
             household = seed("Household")
-            self.assertEqual(household.count, 7)
+            self.assertEqual(household.count, 10)
             self.assertEqual(household.balances, Balances(D("102.11"), D("10.20"), D("15.30"), D("20.40"),
-                                                         D("250.55"), D("3.05")))
-            self.assertEqual(household.balances.net_worth, D("-99.49"))
+                                                         D("325.88"), D("3.05")))
+            self.assertEqual(household.balances.net_worth, D("-174.82"))
             self.assertEqual((household.oldest, household.newest, household.stale_count, household.unclassified_count),
-                             (date(2026, 10, 1), date(2026, 11, 26), 6, 1))
-            self.assertEqual(seed("Young").balances.net_worth, D("-140.25"))
-            self.assertEqual(seed("Nanami").balances.net_worth, D("25.50"))
-            self.assertEqual(seed("Household", "JPY").balances.net_worth, 999999)
+                             (date(2026, 10, 1), date(2026, 11, 26), 8, 1))
+            young, nanami, jpy = seed("Young"), seed("Nanami"), seed("Household", "JPY")
+            self.assertEqual((young.count, young.balances.debt, young.balances.net_worth),
+                             (5, D("285.68"), D("-175.38")))
+            self.assertEqual((nanami.count, nanami.balances.debt, nanami.balances.net_worth),
+                             (4, D("45.23"), D("-19.73")))
+            self.assertEqual((jpy.count, jpy.oldest, jpy.newest, jpy.balances),
+                             (1, date(2026, 10, 1), date(2026, 10, 1), Balances(cash=D(999999))))
         status, _, body = self.call()
         self.assertEqual(status, 200)
-        for label in ("Start: USD -99.49", "mixed dates", "not treated as spendable cash", "Dashed line: zero.",
+        for label in ("Start: USD -174.82", "Start: USD 325.88",
+                      "<time>2026-10-01</time> to <time>2026-11-26</time> (mixed dates)",
+                      "not treated as spendable cash", "Dashed line: zero.",
                       'role="img"', "Show annual breakdown", "does not refresh"):
             self.assertIn(label, body)
         self.assertNotIn("USD 777.77", body)
         self.assertNotIn("999,999", body)
         body = self.call("/projections?currency=JPY")[2]
         self.assertIn("Start: JPY 999,999", body)
-        self.assertNotIn("USD -99.49", body)
+        self.assertNotIn("USD -174.82", body)
         body = self.call("/projections?view=Nanami")[2]
         self.assertNotIn('<option value="JPY"', body)
-        self.assertIn("Start: USD 25.50", body)
+        self.assertIn("Start: USD -19.73", body)
         for query in ("currency=EUR", "view=Joint", "view=Young&view=Nanami", "currency=USD&currency=JPY"):
             self.assertEqual(self.call("/projections?" + query)[0], 400)
+
+    def test_given_debt_then_result_warns_about_no_payment_or_an_underfunded_target(self):
+        with closing(sqlite3.connect(self.path)) as db, db:
+            self.add(db, "Credit card", "Unspecified", "100.00", side="debt")
+            self.add(db, "Checking", "Unspecified", "200.00")
+        no_payment = "No debt payment is modeled:"
+        underfunded = "Debt payments can fall below the target:"
+        service = "Debt service included in spending does not pay down model debt."
+        body = self.call()[2]
+        for text in (no_payment, "the debt payment target is zero", "Unpaid debt can grow with interest", service,
+                     "Monthly net savings before modeled allocations (income minus spending)",
+                     "not financial advice or a forecast"):
+            self.assertIn(text, body)
+        self.assertIn("<small>Debt owed</small><strong>Start: USD 100.00</strong><div>Year 10: USD 181.94", body)
+        self.assertNotIn(underfunded, body)
+
+        for income in ("34", "35"):
+            self.assertEqual(self.call(data=self.form(years="1", income=income, spending="35", debt_target="80"))[0], 303)
+            body = self.call()[2]
+            self.assertIn(no_payment, body)
+            self.assertIn("monthly net savings are zero or negative", body)
+            self.assertNotIn(underfunded, body)
+
+        params = dict(years="1", income="40", spending="35", debt_target="80", debt_apr="0")
+        self.assertEqual(self.call(data=self.form(**params))[0], 303)
+        body = self.call()[2]
+        for text in (underfunded, "only USD 5.00 is left each month", "compared with a USD 80.00 target",
+                     service, "not saved cash or HYSA",
+                     "<small>Debt owed</small><strong>Start: USD 100.00</strong><div>Year 1: USD 40.00",
+                     "<small>Cash + HYSA</small><strong>Start: USD 200.00</strong><div>Year 1: USD 200.00"):
+            self.assertIn(text, body)
+        self.assertNotIn(no_payment, body)
+
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("UPDATE accounts SET balance = '0.00' WHERE side = 'debt'")
+        body = self.call()[2]
+        for text in (no_payment, underfunded, service):
+            self.assertNotIn(text, body)
+        self.assertEqual(self.call(data=self.form())[0], 303)
+        self.assertNotIn(no_payment, self.call()[2])
+
+    def test_given_deficit_then_annual_rows_show_cash_depleted_before_savings(self):
+        with closing(sqlite3.connect(self.path)) as db, db:
+            self.add(db, "Checking", "Unspecified", "25.00")
+            self.add(db, "Savings", "Unspecified", "50.00")
+        self.assertEqual(self.call(data=self.form(years="1", spending="5", hysa_apy="0"))[0], 303)
+        body = self.call()[2]
+        self.assertIn("<small>Cash + HYSA</small><strong>Start: USD 75.00</strong><div>Year 1: USD 15.00", body)
+        annual = body.split("<summary>Show annual breakdown</summary>", 1)[1]
+        self.assertIn('<th scope="col" class="num">Cash</th><th scope="col" class="num">Savings / HYSA</th>', annual)
+        self.assertNotIn("Cash + HYSA", annual)
+        for year, balances in (("Start", ("75.00", "25.00", "50.00")), ("1", ("15.00", "0.00", "15.00"))):
+            row_start = f'<tr><th scope="row">{year}</th>'
+            self.assertIn(row_start + "".join(f'<td class="num">USD {v}</td>' for v in balances), annual)
+        self.assertNotIn("Unfunded spending begins", body)
 
     def test_given_no_balances_then_no_assumptions_row_until_valid_save_and_gap_visible(self):
         status, headers, body = self.call()
