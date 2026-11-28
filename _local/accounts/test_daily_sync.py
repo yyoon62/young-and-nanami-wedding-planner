@@ -268,6 +268,24 @@ class WithTransactions(TxFixture, unittest.TestCase):
         hook.assert_called_once_with(self.path, hosted=False)
         self.assertIn("Classifier: 3 merchants categorised.", self.lines[0])
 
+    def test_discord_posts_count_balances_only_and_a_transaction_failure_alerts(self):
+        import notify
+        posts = []
+        config = notify.Config(sync="https://discord.invalid/s", health="https://discord.invalid/h", user="1")
+        with patch.object(notify, "post", side_effect=lambda cfg, channel, text, **kw: posts.append((channel, text))):
+            self.assertEqual(self.go(config=config), 0, self.errors)
+            ok = posts[:]
+            self.assertEqual([c for c, _ in ok], ["sync"])
+            self.assertIn("✅ Sync (scheduled)", ok[0][1])
+            for private in ("Corner Cafe", "Gadget Barn", "Transactions:", "window"):
+                self.assertNotIn(private, ok[0][1])
+            posts.clear()
+            self.alter = lambda data: data | {"errlist": [{"code": "act.missingdata", "msg": "<private>"}]}
+            self.assertEqual(self.go(config=config, now=NOW + 86400), 1)
+        self.assertEqual([c for c, _ in posts], ["sync", "health"])
+        self.assertIn("❌ Sync failed (scheduled)", posts[0][1])
+        self.assertNotIn("<private>", " ".join(t for _, t in posts))
+
     def test_cli_refuses_transactions_without_hosted(self):
         with self.assertRaises(SystemExit) as caught, patch("sys.stderr"):
             daily_sync.main(["--transactions"])
