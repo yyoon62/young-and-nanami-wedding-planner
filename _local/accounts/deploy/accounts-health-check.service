@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly Pi health check: posts to Discord only when a problem starts, persists 24 h, or ends
+
+[Service]
+Type=oneshot
+# ACCOUNTS_BACKUP_DIR comes from the backup settings (so the check can see a stale or missing backup).
+EnvironmentFile=-%h/.config/planner-accounts/backup.env
+ExecStart=%h/.local/share/planner-accounts-venv/bin/python %h/planner/_local/accounts/pi_health.py check
+UMask=0077
+NoNewPrivileges=yes
+TimeoutStartSec=2min

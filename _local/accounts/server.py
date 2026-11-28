@@ -17,6 +17,7 @@ from servicers import servicer_get
 from bridge import Bridge, Problem
 from bulk import Batch, schema
 import sync_status
+import notify
 from history import install as install_history, net_worth
 import net_worth_ui
 from hosted_guard import Refused, reclaim, require_clean
@@ -824,7 +825,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self.server.notices = self.server.batch.sync()
             except Problem as exc:
+                notify.background(notify.report_sync, self.server.notify, "button", False,
+                                  reason=notify.reason_for(exc), db_path=self.server.db)
                 return self.render_home(back, error=str(exc), status=422)
+            notify.background(notify.report_sync, self.server.notify, "button", True,
+                              notices=self.server.notices, db_path=self.server.db)
             return self.send(303, "", location=view_url(back))
         if owner_act:
             chosen = data.get("owner", "")
@@ -950,6 +955,7 @@ def serve(path, port, provider=None, logo_dir=None, *, hosted=None, keys=None, c
     server.db = path
     server.batch = Batch(path, provider, validate) if provider else None
     server.notices = []
+    server.notify = None          # a notify.Config only when a real service entry point sets it (never in tests)
     server.logo_dir = logo_dir
     from logos import _default_fetch, hosted_fetch
     server.logo_fetcher = hosted_fetch if hosted else _default_fetch
@@ -1000,6 +1006,7 @@ if __name__ == "__main__":
                 raise
             parser.exit(1, f"Hosted startup refused ({type(exc).__name__}); check private state and listener.\n")
         server.demo = args.demo
+        server.notify = None if args.demo else notify.load()
         if args.demo:
             with closing(sqlite3.connect(path)) as db, db:
                 seed(db)
