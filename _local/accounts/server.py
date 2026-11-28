@@ -20,6 +20,9 @@ from history import history_panel, install as install_history, net_worth
 from hosted_auth import (Auth, Config, Rejected, CHALLENGE_TTL, SESSION_TTL, db_path, external,
                          load_env_file, offline_lock, private, require_crypto)
 from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo, sanitize_domain
+from transactions import install_transactions, sync_transactions
+from transactions_ui import (EDIT as TX_EDIT, SYNC as TX_SYNC, TRANSACTIONS as TX_PATH,
+                             RouteProblem, post_transactions, render_transactions)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -110,9 +113,10 @@ def init_db(path):
             db.execute("ALTER TABLE accounts ADD COLUMN logo_domain TEXT NOT NULL DEFAULT ''")
         schema(db)
         install_history(db)
+        install_transactions(db)
 
 
-NAV = (("/", "Accounts"), ("/new", "Add account"),
+NAV = (("/", "Accounts"), ("/transactions", "Transactions"), ("/new", "Add account"),
        ("/servicers", "Statements"), ("/federal-preview", "Federal preview"))
 
 
@@ -425,6 +429,8 @@ class Handler(BaseHTTPRequestHandler):
     def send(self, code, text, kind="text/html; charset=utf-8", location=None, preview=False, scripts=False,
              signin=False, cookies=()):
         if kind.startswith("text/html") and not signin:
+            if self.server.auth:
+                text = text.replace('<a href="/transactions">Transactions</a>', "", 1)
             text = text.replace("<main>", "<main>" + mode_banner(self.server), 1)
             if self.server.auth and "<main>" in text:
                 text = text.replace("</main>", self.sign_out_form() + "</main>", 1)
@@ -641,6 +647,20 @@ class Handler(BaseHTTPRequestHandler):
             if found:
                 return self.send_bytes(200, found[0], found[1], cache="private, max-age=86400")
             return self.send_bytes(200, fallback_svg(domain.split(".")[0]).encode(), "image/svg+xml")
+        if path == TX_PATH and not self.server.auth:
+            notices, self.server.notices = self.server.notices, []
+            try:
+                with closing(sqlite3.connect(self.server.db)) as db:
+                    db.row_factory = sqlite3.Row
+                    db.execute("BEGIN")
+                    body = render_transactions(db, urlsplit(self.path).query, token=self.token,
+                                               allowed_views={"Household", *PEOPLE},
+                                               can_sync=bool(self.server.batch))
+            except RouteProblem as exc:
+                return self.send(exc.status, page(f'<p class="notice" role="alert">{escape(str(exc))}</p>',
+                                                  current=TX_PATH, heading="Transactions"))
+            banner = "".join(f'<p class="notice" role="status">{escape(n)}</p>' for n in notices)
+            return self.send(200, page(banner + body, current=TX_PATH, heading="Transactions"))
         if path == "/new":
             return self.send(200, form({"currency": "USD", "asof": str(date.today()), "owner": "Unspecified",
                                         "update_method": DEFAULT_METHOD}, path, self.token))
@@ -693,6 +713,35 @@ class Handler(BaseHTTPRequestHandler):
         elif not self.local_host() or self.headers.get("Origin") not in {None, f"http://{self.headers.get('Host')}"}:
             return self.send(403, "Local requests only.")
         target = self.path
+        if not self.server.auth and target in (TX_EDIT, TX_SYNC):
+            lengths = self.headers.get_all("Content-Length", [])
+            if (len(lengths) != 1 or not re.fullmatch(r"[0-9]{1,5}", lengths[0])
+                    or int(lengths[0]) > 8192 or self.headers.get_all("Transfer-Encoding")):
+                return self.send(413, "Form too large.")
+            kinds = self.headers.get_all("Content-Type", [])
+            if len(kinds) != 1 or not re.fullmatch(r"application/x-www-form-urlencoded(?:; *charset=utf-8)?",
+                                                   kinds[0], re.IGNORECASE):
+                return self.send(415, "Unsupported form type.")
+            raw_body = self.rfile.read(int(lengths[0]))
+            try:
+                with closing(sqlite3.connect(self.server.db, isolation_level=None)) as db:
+                    db.row_factory = sqlite3.Row
+                    result = post_transactions(db, target, raw_body, token=self.token,
+                                               allowed_views={"Household", *PEOPLE},
+                                               can_sync=bool(self.server.batch))
+            except RouteProblem as exc:
+                return self.send(exc.status, page(f'<p class="notice" role="alert">{escape(str(exc))}</p>',
+                                                  current=TX_PATH, heading="Transactions"))
+            if result.sync:
+                try:
+                    sync_res = sync_transactions(self.server.batch, include_pending=result.include_pending)
+                except Problem as exc:
+                    return self.send(422, page(f'<p class="notice" role="alert">{escape(str(exc))}</p>',
+                                               current=TX_PATH, heading="Transactions"))
+                tail = "Caught up." if sync_res.caught_up else "More history available — click Sync again."
+                self.server.notices = [f"Synced transactions ({sync_res.windows} window(s)). {tail}",
+                                       *sync_res.warnings]
+            return self.send(303, "", location=result.location)
         edit = re.fullmatch(r"/edit/([1-9][0-9]{0,17})", target)
         remove = re.fullmatch(r"/remove/([1-9][0-9]{0,17})", target)
         owner_act = re.fullmatch(r"/owner/([1-9][0-9]{0,17})", target)
