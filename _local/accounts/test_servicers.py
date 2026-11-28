@@ -62,7 +62,7 @@ class StatementShortcuts(unittest.TestCase):
     def test_explicit_create_then_edit_one_of_two_same_servicer_loans(self):
         with tempfile.TemporaryDirectory() as tmp, running(Path(tmp) / "fictional.db") as request:
             original = request("/")[1]
-            self.assertIn('href="/servicers"', original)
+            self.assertNotIn('href="/servicers"', original)  # removed from the nav; the page still works
             self.assertIn('href="/new?servicer=uas"', request("/servicers")[1])
             status, view = request("/new?servicer=uas")
             self.assertEqual(status, 200)

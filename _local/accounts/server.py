@@ -125,8 +125,7 @@ def init_db(path):
         install_terms(db)
 
 
-NAV = (("/", "Accounts"), ("/transactions", "Transactions"),
-       ("/new", "Add account"), ("/servicers", "Statements"), ("/federal-preview", "Federal preview"))
+NAV = (("/", "Accounts"), ("/transactions", "Transactions"), ("/new", "Add account"))
 
 
 def nav(current=None):

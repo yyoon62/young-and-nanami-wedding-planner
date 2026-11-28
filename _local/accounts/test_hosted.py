@@ -588,7 +588,7 @@ class HostedTransactionsGated(unittest.TestCase):
         for jar in (self.a, self.b):
             for target in ("/", "/?view=Young", "/?chart=projection", "/servicers", "/new", "/federal-preview"):
                 html = request(self.server, target, jar=jar)[2].decode()
-                self.assertIn("Federal", html, target)
+                self.assertIn("Add account", html, target)                # nav still rendered
                 self.assertNotIn('href="/projections"', html, target)      # L29: Projection is a tab on Accounts
                 self.assertNotIn("/transactions", html, target)
                 self.assertNotIn(">Transactions<", html, target)

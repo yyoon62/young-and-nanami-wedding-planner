@@ -181,7 +181,7 @@ class Chart(Base):
 class Routes(Base):
     """L29-4: no Projections tab; GET /projections is a validated permanent redirect."""
 
-    NAV = ["Accounts", "Transactions", "Add account", "Statements", "Federal preview"]
+    NAV = ["Accounts", "Transactions", "Add account"]  # Statements / Federal preview removed from the nav
 
     def nav(self, html):
         nav = re.search(r'<nav class="sitenav"[^>]*>(.*?)</nav>', html, re.S)[1]
@@ -189,7 +189,7 @@ class Routes(Base):
 
     def test_example_1_nav_has_no_projections_and_marks_the_active_page(self):
         pages = {"/": "Accounts", "/?chart=projection": "Accounts", "/?view=Young&chart=projection": "Accounts",
-                 "/new": "Add account", "/servicers": "Statements", "/transactions": "Transactions",
+                 "/new": "Add account", "/transactions": "Transactions",
                  f"/edit/{self.ids['young-chk']}": "Accounts"}
         for target, active in pages.items():
             with self.subTest(target=target):

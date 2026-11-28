@@ -196,9 +196,10 @@ def _bars(cmp, f, totals):
                         for cls, v in (("tick-prev", prev), ("tick-avg", avg)) if v is not None)
         active = f["cat"] == name and f["currency"] == c
         href = _location(dict(f, cat=name, currency=c))
+        current = ' aria-current="true"' if active else ""  # no backslash in f-string expressions (Python 3.11 on the Pi)
         rows.append(
             f'<li><a class="bar-row{" is-active" if active else ""}" href="{escape(href)}"'
-            f'{" aria-current=\"true\"" if active else ""} title="Show only {escape(name)} ({escape(c)})">'
+            f'{current} title="Show only {escape(name)} ({escape(c)})">'
             f'<span class="bar-name">{escape(name)}</span>'
             f'<svg class="bar-svg" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="'
             f'{escape(name)}: {money(amount, c)}"><rect class="bar-fill" width="{scale(amount):.2f}" height="10"/>'
