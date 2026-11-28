@@ -367,6 +367,7 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
         _selector(view, currency, currencies, people)
         + '<p class="notice"><strong>Illustrative projection only:</strong> not financial advice or a forecast. '
           'The model uses saved balances; visiting this page does not refresh them.</p>'
+        + _suggestion_card(view, currency, token, suggestion, assumptions, scale)
         + '<section class="history" aria-labelledby="projection-heading"><h2 id="projection-heading">'
           'Net worth projection</h2>'
         + asof + budget + debt_note + gap + f'<p>{escape(unit_label)}.</p>'
@@ -374,7 +375,6 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
         + _chart(points, money, assumptions.years)
         + _annual(points, ANNUAL_METRICS + extra_metrics, money, unit_label)
         + '</section>'
-        + _suggestion_card(view, currency, token, suggestion, assumptions, scale)
         + _form(view, currency, scale, token, attempted if attempted is not None else values, errors or {})
         + '<details><summary>How this projection works</summary>'
           '<p>Start is the sum of included saved balances, even when their dates differ; the scenario does not '

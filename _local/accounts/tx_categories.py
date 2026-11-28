@@ -1,15 +1,28 @@
 """Transaction categories, the shared cleaned merchant key and read-time category precedence.
 
 Precedence (effective category, never stored on rows): manual row edit > live user
-merchant rule > legacy stamp > classifier cache > none. Classifier output lives only in
+merchant rule > legacy stamp > built-in default (positive payroll = Income) > classifier cache > none. Classifier output lives only in
 `classifier_cache`; it is never written onto `account_transactions`.
 """
+from decimal import Decimal, InvalidOperation
 import re
 import unicodedata
 
 BUILTIN = ("Groceries", "Dining", "Transport", "Housing", "Utilities", "Shopping", "Entertainment",
            "Health", "Travel", "Subscriptions", "Insurance", "Education", "Gifts & Donations",
            "Personal Care", "Fees & Taxes", "Other")
+INCOME = "Income"
+# Categories the classifier may never assign: Income changes totals, so only the user (or the
+# deterministic payroll default below) can set it. Kept out of BUILTIN so the model's list is unchanged.
+NEVER_ASSIGNED = frozenset((INCOME,))
+DEFAULT_EMOJI = {
+    "Groceries": "🛒", "Dining": "🍽️", "Transport": "🚇", "Housing": "🏠", "Utilities": "💡",
+    "Shopping": "🛍️", "Entertainment": "🎬", "Health": "🩺", "Travel": "✈️", "Subscriptions": "🔁",
+    "Insurance": "🛡️", "Education": "🎓", "Gifts & Donations": "🎁", "Personal Care": "🧴",
+    "Fees & Taxes": "🧾", "Other": "📦", INCOME: "💵",
+}
+TRANSFER_EMOJI, UNCATEGORIZED_EMOJI, CUSTOM_EMOJI = "🔄", "❔", "🏷️"
+PAYROLL = re.compile(r"\b(?:payroll|direct dep(?:osit)?|dir dep)\b")
 RESERVED = frozenset(("uncategorized", "needs review"))
 MAX_CATEGORIES = 60
 NAME_LIMIT = 48
@@ -68,6 +81,12 @@ def install_categories(db):
         sort INTEGER NOT NULL DEFAULT 0)""")
     db.executemany("INSERT OR IGNORE INTO transaction_categories(name, builtin, sort) VALUES (?,1,?)",
                    ((name, i) for i, name in enumerate(BUILTIN)))
+    # Income is built in but never classifier-assigned. A custom "Income" typed before this
+    # existed (any casing) is promoted in place; its transactions and rules keep resolving.
+    db.execute("INSERT OR IGNORE INTO transaction_categories(name, builtin, sort) VALUES (?,1,?)",
+               (INCOME, len(BUILTIN)))
+    db.execute("UPDATE transaction_categories SET name=?, builtin=1, sort=? WHERE name=? AND builtin=0",
+               (INCOME, len(BUILTIN), INCOME))
     legacy = {r[0] for r in db.execute("""SELECT category FROM account_transactions WHERE category<>''
         UNION SELECT category FROM transaction_merchant_rules WHERE category<>''""")}
     for name in sorted(legacy, key=str.casefold):
@@ -85,8 +104,23 @@ def list_categories(db):
 
 
 def builtin_categories(db):
+    """Categories the classifier may assign: built in, minus NEVER_ASSIGNED."""
     return [r[0] for r in db.execute(
-        "SELECT name FROM transaction_categories WHERE builtin=1 ORDER BY sort")]
+        "SELECT name FROM transaction_categories WHERE builtin=1 ORDER BY sort") if r[0] not in NEVER_ASSIGNED]
+
+
+def default_emoji(category, transfer=False):
+    """Static emoji for every row: its category's, a transfer mark, or a generic one (never model output)."""
+    if transfer:
+        return TRANSFER_EMOJI
+    if not category:
+        return UNCATEGORIZED_EMOJI
+    return DEFAULT_EMOJI.get(canonical_builtin(category), CUSTOM_EMOJI)
+
+
+def canonical_builtin(category):
+    folded = category.casefold()
+    return next((n for n in DEFAULT_EMOJI if n.casefold() == folded), category)
 
 
 def canonical(db, name):
@@ -126,6 +160,17 @@ def load_cache(db):
         return {}
 
 
+def _is_payroll(row):
+    """Built-in default: a positive payroll or direct-deposit credit is Income (lowest precedence but the cache)."""
+    try:
+        if not Decimal(row.get("amount", "0")) > 0:
+            return False
+    except (InvalidOperation, TypeError):
+        return False
+    text = " ".join(str(row.get(k) or "") for k in ("description", "payee", "merchant"))
+    return bool(PAYROLL.search(unicodedata.normalize("NFKC", text).casefold()))
+
+
 def resolve(row, rules, cache, canon):
     """(effective category, source). `canon` maps casefolded name -> list name."""
     stored = row["category"]
@@ -139,6 +184,8 @@ def resolve(row, rules, cache, canon):
         return canon.get(found.casefold(), found), "rule"
     if stored:
         return canon.get(stored.casefold(), stored), "stamp"
+    if _is_payroll(row):
+        return canon.get(INCOME.casefold(), INCOME), "default"
     hit = cache.get(key) if key else None
     if hit:
         category, status = hit[0], hit[1]
