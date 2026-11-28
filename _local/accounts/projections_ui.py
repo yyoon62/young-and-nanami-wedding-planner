@@ -10,6 +10,7 @@ from dataclasses import replace
 from account_terms import VARIABLE_NOTE, load_terms
 from debt_engine import compare_orders, month_add as plan_month_add, run_plan, schedule
 from debt_inputs import debt_rows, make_plan
+from observed import observed_payments
 from projections import (
     AMOUNTS, MODES, OPTIONAL, PRECISION, RATES, STALE_DAYS, Assumptions, available_currencies,
     eligible_accounts, load_assumptions, project, save_assumptions, starting_balances,
@@ -63,10 +64,12 @@ def projection_get(db_path, target, *, page, token, people, section_for, places,
         assumptions = load_assumptions(db, view, currency, places(currency))
         suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
         debts = (debt_rows(db, view, currency), load_terms(db))
+        observed = (observed_payments(db, view, currency, today, [r[0] for r in debts[0]])
+                    if suggestions else None)     # transaction-derived: never when hosted
     seed = starting_balances(rows, currency, section_for, today)
     return 200, _page(page, _panel(view, currency, currencies, people, seed, assumptions,
                                   places(currency), token, suggestion=suggestion,
-                                  debts=(*debts, section_for, today))), None
+                                  debts=(*debts, section_for, today), observed=observed)), None
 
 
 def projection_post(db_path, data, *, page, token, people, section_for, places, today, suggestions=False):
@@ -90,10 +93,12 @@ def projection_post(db_path, data, *, page, token, people, section_for, places, 
         saved = load_assumptions(db, view, currency, scale)
         suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
         debts = (debt_rows(db, view, currency), load_terms(db))
+        observed = (observed_payments(db, view, currency, today, [r[0] for r in debts[0]])
+                    if suggestions else None)
     seed = starting_balances(rows, currency, section_for, today)
     return 422, _page(page, _panel(view, currency, currencies, people, seed, saved, scale, token,
                                   attempted=data, errors=errors, suggestion=suggestion,
-                                  debts=(*debts, section_for, today))), None
+                                  debts=(*debts, section_for, today), observed=observed)), None
 
 
 def _apply_suggestion(db, data, view, currency, scale, today, suggestions, page):
@@ -382,7 +387,23 @@ def _compare(plan, a, money):
             + row("Planned payments only (no extra)", c.planned_only) + '</tbody></table></div>' + verdict + '</div>')
 
 
-def _debt_section(plan, entries, run, a, currency, scale, money):
+def _observed_line(obs, plan, money):
+    """Observed payments beside the plan; only called when transaction-derived data is allowed (not hosted)."""
+    if obs is None:
+        return ""
+    if obs.average is None:
+        return f'<div class="acct-sub">Observed: {escape(obs.reason)}</div>'
+    if not any(obs.values.values()):
+        text = "no observed payments found (loan payments are only counted when marked as transfers)"
+    else:
+        by_month = " · ".join(f"{escape(month_label(m)[:3])} {money(v)}" for m, v in obs.values.items())
+        text = (f'{money(obs.average)} <strong>avg of {len(obs.months)} month{"s" if len(obs.months) != 1 else ""}</strong>'
+                f' ({by_month}); shown for comparison, not used in the projection')
+    more = (f'; {obs.unconfirmed} payment-like credit(s) not confirmed' if obs.unconfirmed else "")
+    return f'<div class="acct-sub">Observed: {text}{more}</div>'
+
+
+def _debt_section(plan, entries, run, a, currency, scale, money, observed=None):
     """Per-debt table, flags and schedules; every number comes from the same `debt_engine` as the chart."""
     if not entries:
         return ""
@@ -428,6 +449,8 @@ def _debt_section(plan, entries, run, a, currency, scale, money):
             source = ("planned" if e.terms.planned_payment is not None else "minimum")
             pay = money(d.payment) + f' <span class="acct-sub">({source})</span>' if d.payment else (
                 '<span class="rate-flag">payment missing</span>')
+            if observed is not None:
+                pay += _observed_line(observed.get(d.key), plan, money)
             if out.payoff_month:
                 payoff = f'{escape(_when(plan, out.payoff_month))} <span class="acct-sub">(month {out.payoff_month})</span>'
                 total = money(out.total_interest)
@@ -486,7 +509,7 @@ def _debt_section(plan, entries, run, a, currency, scale, money):
 
 
 def _panel(view, currency, currencies, people, seed, assumptions, scale, token, *, attempted=None, errors=None,
-           suggestion=None, debts=None):
+           suggestion=None, debts=None, observed=None):
     money = lambda value: _money(value, currency, scale)
     plan = entries = run = None
     if debts is not None:
@@ -527,7 +550,7 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
               f'<strong>{money(assumptions.spending)}</strong> · Monthly net savings before modeled allocations '
               f'(income minus spending): <strong>{money(surplus)}</strong> (nominal).</p>')
     debt_note = _debt_note(seed.balances.debt if plan is None else plan.pool, assumptions.debt_target, surplus, money)
-    debt_section = _debt_section(plan, entries, run, assumptions, currency, scale, money) if plan is not None else ""
+    debt_section = _debt_section(plan, entries, run, assumptions, currency, scale, money, observed) if plan is not None else ""
     return (
         _selector(view, currency, currencies, people)
         + '<p class="notice"><strong>Illustrative projection only:</strong> not financial advice or a forecast. '
