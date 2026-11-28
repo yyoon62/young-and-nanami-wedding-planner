@@ -118,10 +118,10 @@ def load_rules(db):
 
 
 def load_cache(db):
-    """{clean_key: (category, status)}; empty before the classifier tables exist."""
+    """{clean_key: (category, status, emoji)}; empty before the classifier tables exist."""
     try:
-        return {k: (c, s) for k, c, s in db.execute(
-            "SELECT clean_key, category, status FROM classifier_cache WHERE status IN ('suggested','review')")}
+        return {k: (c, s, e) for k, c, s, e in db.execute(
+            "SELECT clean_key, category, status, emoji FROM classifier_cache WHERE status IN ('suggested','review')")}
     except Exception:
         return {}
 
@@ -141,7 +141,7 @@ def resolve(row, rules, cache, canon):
         return canon.get(stored.casefold(), stored), "stamp"
     hit = cache.get(key) if key else None
     if hit:
-        category, status = hit
+        category, status = hit[0], hit[1]
         if status == "suggested" and category:
             return category, "suggested"
         return "", "review"

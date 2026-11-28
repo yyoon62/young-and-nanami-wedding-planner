@@ -20,7 +20,9 @@ from tx_periods import month_add, month_label, money, spending_comparison
 from logos import cached_logo, domain_for, fallback_svg
 from transactions import (CURRENCY, VIEWS, category_context, edit_transaction, manual_index, month_dates,
                           monthly_snapshot)
+from pathlib import Path
 from tx_categories import list_categories
+from tx_classifier import enabled as classifier_enabled, load_key, model_name, run_classifier, set_setting, stats as classifier_stats
 
 
 TRANSACTIONS = "/transactions"
@@ -92,9 +94,39 @@ def _stamp(stamp):
     return datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-_SOURCES = {"manual": ' <span class="acct-sub">(set by you)</span>',
+_SOURCES = {"suggested": ' <span class="badge" title="Suggested by the classifier; not confirmed">suggested</span>',
+            "manual": ' <span class="acct-sub">(set by you)</span>',
             "rule": ' <span class="acct-sub">(merchant rule)</span>',
             "stamp": ' <span class="acct-sub">(saved rule)</span>'}
+
+
+def _data_dir(db):
+    row = db.execute("PRAGMA database_list").fetchone()
+    return Path(row[2]).parent if row and row[2] else None
+
+
+def _classifier_panel(db, f, token):
+    on, st = classifier_enabled(db), classifier_stats(db)
+    key, source, problem = load_key(_data_dir(db))
+    key_line = (f"Key: found ({source})." if key else (problem or "No key found.") + " Nothing is sent without a key.")
+    status = st["status"] or ("On, waiting for the next sync or Classify now." if on else "Off.")
+    form = (f'<form method="post" action="{EDIT}" class="drawer-form classifier-form">'
+            + _hidden(f, token=token)
+            + '<label class="check"><input type="checkbox" name="enabled" value="1"'
+            + (" checked" if on else "") + '> Suggest categories and an emoji with Claude Haiku. '
+            '<strong>Merchant names are sent to Anthropic.</strong></label>'
+            '<div class="drawer-left"><button name="action" value="classifier">Save</button>'
+            + ('<button class="button secondary" name="action" value="classify_now">Classify now</button>' if on else "")
+            + '</div></form>')
+    return (f'<details class="classifier"{" open" if on else ""}><summary>Category suggestions (off by default)</summary>'
+            + form +
+            f'<p class="acct-sub">{escape(key_line)} Model: {escape(model_name())}. Status: {escape(status)} '
+            f'{st["suggested"]} suggested · {st["review"]} need review · {st["pending"]} waiting.</p>'
+            '<p class="acct-sub">Only cleaned merchant text (for example “maple cafe”) leaves this computer, once per '
+            'merchant: never amounts, dates, accounts, owners or ids. Descriptions that look like Zelle, Venmo, '
+            'payroll, transfers or checks are not sent. A bare person’s name or an employer in a description '
+            'cannot be recognised and would be sent. Suggestions are labelled, never override anything you set, '
+            'and are not counted as confirmed. Not available when the dashboard is hosted.</p></details>')
 
 
 def _drawer(r, f, token, categories, manual, attempt, error):
@@ -160,7 +192,9 @@ def _bars(cmp, f, totals):
             f'<span class="bar-nums"><strong>{money(amount, c)}</strong>'
             f' <span class="bar-cmp">last month {money(prev, c) if prev is not None else "—"}'
             f' · {len(cmp.avg_months) or ""}{"-mo avg" if cmp.avg is not None else "3-mo avg"} '
-            f'{money(avg, c) if avg is not None else "—"}</span></span></a></li>')
+            f'{money(avg, c) if avg is not None else "—"}'
+            + (f' · includes {cmp.suggested[name]} suggested' if cmp.suggested.get(name) else "")
+            + '</span></span></a></li>')
     basis = (f'Compared with {escape(month_label(cmp.prev_month))} and the average of '
              f'{len(cmp.avg_months)} full month(s) before {escape(month_label(cmp.month))}. ' if cmp.avg is not None
              else f'Compared with {escape(month_label(cmp.prev_month))} where fully fetched; averages need at least '
@@ -290,11 +324,12 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
             f'<tr class="acct-row" id="tx-{r["row_id"]}"><td class="date-cell"><time datetime="{when}">{when}</time>'
             f'<div class="acct-sub">{label}</div></td><th scope="row" class="acct-cell">'
             f'<div class="acct-with-logo">{_logo(r, logo_dir)}<div class="acct-info">'
-            f'<span class="acct-name">{escape(r["description"] or "No description")}</span>{payee}'
+            f'<span class="acct-name">{escape(r["emoji"]) + " " if r["emoji"] else ""}{escape(r["description"] or "No description")}</span>{payee}'
             f'<div class="acct-sub">SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}</div>'
             f'</div></div></th>'
             f'<td class="num"><span class="cur">{escape(r["currency"])}</span> {_amount(r)}</td>'
-            f'<td>{category or "Uncategorized"}{origin} · {escape(r["flow"])}{suggestion} {drawer}</td></tr>')
+            f'<td>{category or ("Needs review" if r["category_source"] == "review" else "Uncategorized")}{origin}'
+            f' · {escape(r["flow"])}{suggestion} {drawer}</td></tr>')
     table = (
         '<div class="table-wrap"><table class="acct-table"><thead><tr><th>Date</th><th>Transaction</th>'
         '<th class="num">Amount</th><th>Category</th></tr></thead><tbody>'
@@ -303,7 +338,7 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
     return (
         '<script defer src="/dashboard.js"></script>'
         '<section class="history" aria-labelledby="cash-flow"><h2 id="cash-flow">Monthly cash flow</h2>'
-        + alert + search + sync + summary
+        + alert + search + sync + _classifier_panel(db, f, token) + summary
         + '<p>Pending, transfers and explicit unmatched card-payment credits are outside totals; unmatched bank '
         'debits remain spending. Automatic card matching requires corroboration on both available legs. '
         'Checking and savings matches are suggestions only. A manual transfer choice overrides a merchant '
@@ -326,6 +361,23 @@ class PostResult:
     include_pending: bool = False
 
 
+def _classifier_action(db, data, f):
+    """Toggle or run the classifier. Local only: the parent never routes this in hosted mode."""
+    if data.get("enabled", "1") not in ("0", "1") or ("enabled" in data and data["action"] != "classifier"):
+        raise RouteProblem(400, "Invalid classifier setting.")
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        if data["action"] == "classifier":
+            turning_on = data.get("enabled") == "1"
+            set_setting(db, "enabled", "1" if turning_on else "0")
+            set_setting(db, "failures", 0)
+            set_setting(db, "next_try_at", 0)
+            set_setting(db, "status", "")
+    if data["action"] == "classify_now":
+        run_classifier(db.execute("PRAGMA database_list").fetchone()[2], hosted=False)
+    return PostResult(_location(f))
+
+
 def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     """Accept exact path and raw UTF-8 form bytes after parent HTTP guards.
 
@@ -341,7 +393,7 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     except UnicodeError:
         raise RouteProblem(400, "Invalid transaction form.") from None
     keys = set(_FILTERS) | {"token"} | ({"row", "category", "new_category", "apply", "transfer",
-                                         "merchant_transfer", "action"}
+                                         "merchant_transfer", "action", "enabled"}
                                         if path == EDIT else {"include_pending"})
     data = _params(raw, keys)
     if not token or not secrets.compare_digest(data.get("token", "").encode("utf-8"), token.encode("utf-8")):
@@ -356,6 +408,8 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
         if pending not in ("0", "1"):
             raise RouteProblem(400, "Invalid pending option.")
         return PostResult(_location(f), True, pending == "1")
+    if data.get("action") in ("classifier", "classify_now"):
+        return _classifier_action(db, data, f)
     row = data.get("row", "")
     if not re.fullmatch(r"[1-9][0-9]{0,18}", row) or int(row) > 2**63 - 1:
         raise RouteProblem(400, "Invalid transaction row.")

@@ -74,6 +74,7 @@ class Comparison:
     avg_months: tuple = ()
     partial: str = ""     # "" when the viewed month is complete and covered
     unlinked: int = 0
+    suggested: dict = field(default_factory=dict)  # category -> merchants whose category is only a suggestion
 
 
 def _partial_label(accounts, month, today):
@@ -101,6 +102,7 @@ def spending_comparison(db, month, view, *, household_matching, today, context=N
     for currency, totals in snapshot.totals.items():
         accounts = scope_accounts(db, view, currency)
         cmp = Comparison(currency, month, dict(totals.category_spending), prev_month=baseline[0],
+                         suggested={k: len(v) for k, v in totals.category_suggested.items()},
                          partial=_partial_label(accounts, month, today),
                          unlinked=unlinked_count(db, view, currency))
         covered = [m for m in baseline if month_covered(accounts, m)]

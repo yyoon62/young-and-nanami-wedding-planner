@@ -18,6 +18,7 @@ from urllib.parse import urlencode
 
 from bridge import Bridge, Problem, unique_fields
 from bulk import fingerprint, text
+from tx_classifier import install_classifier
 from tx_categories import (clean_merchant, add_category, canonical, install_categories, list_categories,
                            load_cache, load_rules, resolve)
 
@@ -68,6 +69,7 @@ def install_transactions(db):
         db.execute("""UPDATE transaction_merchant_rules SET clean_key=? WHERE account_id=? AND source=?
                       AND currency=? AND merchant=?""", (clean_merchant(merchant), account, source, currency, merchant))
     install_categories(db)
+    install_classifier(db)
     db.execute("""CREATE TRIGGER IF NOT EXISTS account_transactions_delete
         AFTER DELETE ON accounts BEGIN
             DELETE FROM account_transactions WHERE account_id=OLD.id;
@@ -443,6 +445,7 @@ class Totals:
     net: Decimal = Decimal(0)
     review: Decimal = Decimal(0)
     category_spending: dict = field(default_factory=dict)
+    category_suggested: dict = field(default_factory=dict)  # category -> cleaned merchants suggested by the classifier
 
 
 @dataclass
@@ -484,6 +487,8 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
         r["category_stored"] = r["category"]
         r["category"], r["category_source"] = resolve(r, rules, cache, canon)
         r["clean_key"] = clean_merchant(r["merchant"])
+        hit = cache.get(r["clean_key"]) if r["category_source"] == "suggested" else None
+        r["emoji"] = hit[2] if hit else ""
     matched = _match_transfers(rows)
     # Suggestions never depend on the presence of a counterpart outside the
     # selected view, even if the viewer is authorized to switch to Household.
@@ -542,6 +547,8 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
                     totals.spending += spending
                     category = r["category"] or "Uncategorized"
                     totals.category_spending[category] = totals.category_spending.get(category, Decimal(0)) + spending
+                    if r["category_source"] == "suggested":
+                        totals.category_suggested.setdefault(category, set()).add(r["clean_key"])
                 totals.net += amount
     return result
 

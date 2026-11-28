@@ -23,6 +23,7 @@ from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo,
 from projections import install_projections
 from projections_ui import projection_get, projection_post
 from transactions import install_transactions, sync_transactions
+from tx_classifier import after_sync as classify_after_sync
 from transactions_ui import (EDIT as TX_EDIT, SYNC as TX_SYNC, TRANSACTIONS as TX_PATH,
                              RouteProblem, post_transactions, problem_body, render_transactions)
 
@@ -759,7 +760,8 @@ class Handler(BaseHTTPRequestHandler):
                                                current=TX_PATH, heading="Transactions"))
                 tail = "Caught up." if sync_res.caught_up else "More history available — click Sync again later."
                 self.server.notices = [f"Synced transactions ({sync_res.windows} window(s)). {tail}",
-                                       *sync_res.warnings]
+                                       *sync_res.warnings,
+                                       *classify_after_sync(self.server.db, hosted=bool(self.server.auth))]
             return self.send(303, "", location=result.location)
         edit = re.fullmatch(r"/edit/([1-9][0-9]{0,17})", target)
         remove = re.fullmatch(r"/remove/([1-9][0-9]{0,17})", target)
