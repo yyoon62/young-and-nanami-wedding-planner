@@ -161,6 +161,26 @@ Expect only `127.0.0.1:8765`, unauthenticated `/new` to return 401, and `/` to s
 
 The sign-in page alone permits the GIS script, iframe, stylesheet, and connection endpoints, with COOP `same-origin-allow-popups`. No One Tap or automatic sign-in is enabled. Protected pages do not load GIS; browser assets and cacheable logos are behind the same login gate and sent `no-store`. A hosted logo cache miss may send the institution domain (not the balance or household identity) to Google’s favicon service; it never fetches a provider-supplied host directly. If that lookup is blocked or fails, the app uses a monogram. Federal preview processes the file in the browser only. Sessions expire in one hour; starting sign-in creates a five-minute, browser-bound challenge, and logout revokes the server-side session. Signing out of this app does not sign the user out of Google or every other device.
 
+## 3a. Daily balance sync (so a day is never missed because nobody clicked)
+
+`daily_sync.py` is the **Sync balances** button without a browser: same `Batch.sync()`, same 24-requests-per-24-hours guard (kept in the database, shared with the web server), balances only, never transactions. `--hosted` adds the same checks as the server (private paths, refuses a database holding transaction rows). It needs the Bridge credential from section 2.5. Install as the service user, then enable the timer:
+
+```sh
+install -m 644 ~/planner/_local/accounts/deploy/accounts-sync.service ~/planner/_local/accounts/deploy/accounts-sync.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user start accounts-sync.service      # one real sync now (1 SimpleFIN request); expect "Synced: N unchanged/updated."
+systemctl --user enable --now accounts-sync.timer
+systemctl --user list-timers accounts-sync.timer
+```
+
+(From the administrator account use the `--machine=acctdash@.host` prefix from section 3, and `sudo journalctl _SYSTEMD_USER_UNIT=accounts-sync.service -o cat` for the log.)
+
+- **When:** about 06:30 daily. `Persistent=true`: if the Pi was off or rebooting at that time, the missed run happens at boot.
+- **Failures are loud:** any problem prints one line (never a traceback or URL) and exits 1; the unit retries up to 3 times, 20 minutes apart, then stays failed (`systemctl --user --failed`). A run in which no account was really refreshed also fails, so a bank that stopped answering is not reported as success.
+- **On the page:** the Accounts page shows `🕒 Synced 3 h ago` beside **Sync balances**, and `⚠️ Last synced N days ago: balances may be out of date` once it is older than 36 hours (derived from `source_links.checked`; no extra table).
+- **Budget:** each run is one SimpleFIN request (plus up to 3 retries on failure); the shared limit is 24 per day.
+- Remove by `systemctl --user disable --now accounts-sync.timer`.
+
 ## 4. Encrypted, online SQLite backups
 
 1. Generate a dedicated **passphrase-protected OpenPGP encryption key** on a trusted recovery device, export **only its public key**, and verify the full fingerprint out of band. Retain the private recovery key and passphrase in separate safe places. On the Pi, import the public key (`gpg --import /path/to/recovery-public.asc`) under the service user. The script selects the pinned full fingerprint; it will not fall back to another key or to plaintext. Backups are encrypted, not signed by the Pi, so restore only archives whose custody you trust.
