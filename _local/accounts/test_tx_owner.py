@@ -307,7 +307,7 @@ class OwnerUi(Owners):
         query = result.location.split("?", 1)[1].split("#", 1)[0]
         html = self.html(query)
         self.assertIn("Moved to Nanami's view", html)
-        self.assertIn(f'<a href="/transactions?month=2026-12&amp;view=Household&amp;currency=&amp;q=&amp;pending=0&amp;cat=#tx-{row}">'
+        self.assertIn(f'<a href="/transactions?month=2026-12&amp;view=Household&amp;currency=&amp;q=&amp;pending=0&amp;cat=&amp;review=#tx-{row}">'
                       "Show in Household</a>", html)
         self.assertNotIn("Harbor Fuel", html[html.index("<tbody>"):])     # the row is no longer in Young's list
         # no note when the row is still in the view, when the view is Household, or for a malformed value

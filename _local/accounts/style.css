@@ -416,6 +416,15 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
 .tx-table .owner-cell .inline-form + .inline-form { margin-left: .25rem; }
 .tx-reset { font-size: .95rem; vertical-align: middle; }
 .tx-ovr { margin-left: .2rem; font-style: italic; }
+.tx-card .tx-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
+.tx-card .tx-card-head .partial-flag { margin-left: 0; }
+.card .tx-sum { color: #2b2320; font-size: 1rem; line-height: 1.55; margin: .15rem 0 .2rem; }
+.card .tx-sum strong { display: inline; font: inherit; font-weight: 700; margin: 0; }
+.card .tx-sum > span { white-space: nowrap; }
+.card .tx-confirm { margin: .15rem 0 .35rem; }
+.tx-confirm a { display: inline-block; padding: .22rem .7rem; border-radius: 999px; background: #fdf0d5; color: #7a4b00;
+  font-weight: 700; font-size: .86rem; text-decoration: none; border: 1px solid #e9cf9b; }
+.tx-confirm a:hover, .tx-confirm a[aria-current] { background: #f6e1b3; }
 @media (max-width: 40rem) {
   .tx-table.tx-compact tr.acct-row { grid-template-areas: "tx amt" "date date" "own own" "cat cat"; }
   .tx-table.tx-compact tr.acct-row > td.owner-cell { grid-area: own; display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; }

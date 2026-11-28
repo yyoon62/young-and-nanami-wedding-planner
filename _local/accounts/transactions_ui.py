@@ -16,10 +16,11 @@ from urllib.parse import parse_qsl, urlencode
 
 from html import escape as _esc  # noqa: F401
 from decimal import Decimal
-from tx_periods import month_add, month_label, money, spending_comparison
+from tx_money import fmt, sign_of
+from tx_periods import month_add, month_label, spending_comparison
 from logos import cached_logo, domain_for, fallback_svg
-from transactions import (CURRENCY, VIEWS, category_context, edit_transaction, manual_index, month_dates,
-                          monthly_snapshot)
+from transactions import (CURRENCY, VIEWS, _midnight, category_context, edit_transaction, manual_index,
+                          month_dates, monthly_snapshot)
 from pathlib import Path
 from tx_categories import default_emoji, list_categories
 from tx_owners import PEOPLE, effective, effective_owner_of
@@ -29,7 +30,7 @@ from tx_classifier import enabled as classifier_enabled, load_key, model_name, r
 TRANSACTIONS = "/transactions"
 EDIT = TRANSACTIONS + "/edit"
 SYNC = TRANSACTIONS + "/sync"
-_FILTERS = ("month", "view", "currency", "q", "pending", "cat")
+_FILTERS = ("month", "view", "currency", "q", "pending", "cat", "review")
 _MOVED = re.compile(r"(Young|Nanami|Unspecified)-([1-9][0-9]{0,18})")   # one-shot GET note after an owner click, not a filter
 
 
@@ -70,13 +71,13 @@ def _filters(data, allowed_views, default_month):
         month_dates(month)
     except ValueError as exc:
         raise RouteProblem(400, str(exc)) from None
-    currency, q, pending, category = (data.get(k, default) for k, default in
-                                      (("currency", ""), ("q", ""), ("pending", "0"), ("cat", "")))
+    currency, q, pending, category, review = (data.get(k, default) for k, default in
+                                              (("currency", ""), ("q", ""), ("pending", "0"), ("cat", ""), ("review", "")))
     if ((currency and not CURRENCY.fullmatch(currency)) or len(q) > 100
-            or (q and not q.isprintable()) or pending not in ("0", "1")
+            or (q and not q.isprintable()) or pending not in ("0", "1") or review not in ("", "1")
             or len(category) > 48 or (category and not category.isprintable())):
         raise RouteProblem(400, "Invalid transaction filter.")
-    return dict(month=month, view=view, currency=currency, q=q, pending=pending, cat=category)
+    return dict(month=month, view=view, currency=currency, q=q, pending=pending, cat=category, review=review)
 
 
 def _hidden(data, **extra):
@@ -182,6 +183,35 @@ def _drawer(r, f, token, categories, manual, attempt, error):
         '</form></details>')
 
 
+def _summary_card(currency, t, cmp, incomplete, f):
+    """Opening tag + compact per-currency summary; the caller appends the bars and </article>."""
+    net = sign_of(t.net, currency)
+    label = "🟢 Saved" if net > 0 else "🔴 Overspent" if net < 0 else "⚪ Even"
+    chips = ""
+    if cmp.partial.startswith("so far"):
+        chips += (f' <span class="partial-flag" title="The month is still in progress; nothing is extrapolated">'
+                  f'{escape(cmp.partial)}</span>')
+    if incomplete:
+        chips += (' <span class="partial-flag" title="Not every linked account has fetched this whole month, '
+                  'so the totals may be incomplete">partial</span>')
+    line = (f'<div class="tx-sum"><span title="Credits including refunds; not verified income">💰 Income '
+            f'<strong>{fmt(t.credits, currency)}</strong></span> · '
+            f'<span title="Pending, transfers and card credits under review are excluded">💸 Spending '
+            f'<strong>{fmt(t.spending, currency)}</strong></span> · '
+            f'<span title="Income minus spending: cash flow, not measured savings">{label} '
+            f'<strong>{fmt(t.net, currency, absolute=True)}</strong></span></div>')
+    confirm = ""
+    if t.review_count:
+        n = t.review_count
+        active = f["review"] == "1" and f["currency"] == currency
+        confirm = (f'<div class="tx-confirm"><a href="{escape(_location(dict(f, review="1", currency=currency)))}"'
+                   f'{" aria-current=\"true\"" if active else ""} title="Unmatched card payment credits; '
+                   f'click to list them">⚠️ {n} card payment{"" if n == 1 else "s"} to confirm · '
+                   f'{fmt(t.review, currency)}</a></div>')
+    return (f'<article class="card tx-card"><div class="tx-card-head"><small>{escape(currency)}</small>{chips}</div>'
+            + line + confirm)
+
+
 def _owner_cell(r, f, token):
     """Young / Nanami pills with the Accounts markup; both active = Joint. A click toggles this transaction only."""
     eff = r["eff_owner"]
@@ -233,25 +263,24 @@ def _bars(cmp, f, totals):
             f'{" aria-current=\"true\"" if active else ""} title="Show only {escape(name)} ({escape(c)})">'
             f'<span class="bar-name">{escape(name)}</span>'
             f'<svg class="bar-svg" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="'
-            f'{escape(name)}: {money(amount, c)}"><rect class="bar-fill" width="{scale(amount):.2f}" height="10"/>'
+            f'{escape(name)}: {fmt(amount, c)}"><rect class="bar-fill" width="{scale(amount):.2f}" height="10"/>'
             f'{marks}</svg>'
-            f'<span class="bar-nums"><strong>{money(amount, c)}</strong>'
-            f' <span class="bar-cmp">last month {money(prev, c) if prev is not None else "—"}'
+            f'<span class="bar-nums"><strong>{fmt(amount, c)}</strong>'
+            f' <span class="bar-cmp">last month {fmt(prev, c) if prev is not None else "—"}'
             f' · {len(cmp.avg_months) or ""}{"-mo avg" if cmp.avg is not None else "3-mo avg"} '
-            f'{money(avg, c) if avg is not None else "—"}'
+            f'{fmt(avg, c) if avg is not None else "—"}'
             + (f' · includes {cmp.suggested[name]} suggested' if cmp.suggested.get(name) else "")
             + '</span></span></a></li>')
     basis = (f'Compared with {escape(month_label(cmp.prev_month))} and the average of '
              f'{len(cmp.avg_months)} full month(s) before {escape(month_label(cmp.month))}. ' if cmp.avg is not None
              else f'Compared with {escape(month_label(cmp.prev_month))} where fully fetched; averages need at least '
                   'two fully fetched months before this one. ')
-    flag = f' <span class="partial-flag">{escape(cmp.partial)}</span>' if cmp.partial else ""
     clear = ""
     if f["cat"] and f["currency"] == c:
         clear = (f'<p class="filter-chip">Showing {escape(f["cat"])} only ({escape(c)}) · '
                  f'<a href="{escape(_location(dict(f, cat="", currency="")))}">Clear filter</a></p>')
     return (f'<section class="bars" aria-label="Spending by category in {escape(c)}">'
-            f'<h3>Spending by category{flag}</h3>{clear}<ul class="bar-list">{"".join(rows)}</ul>'
+            f'<h3>Spending by category</h3>{clear}<ul class="bar-list">{"".join(rows)}</ul>'
             f'<p class="acct-sub">{basis}Bar = this month; ticks = last month and average. Transfers, pending '
             'and card credits under review are excluded. Click a category to filter the list.</p></section>')
 
@@ -333,19 +362,22 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
                                       today=today, context=context, snapshot=snap)
     totals = []
     for currency, t in sorted(snap.totals.items()):
-        qualifier = ("" if all(r["covered"] for r in snap.coverage if r["currency"] == currency)
-                     else " · partial coverage")
-        totals.append(f'<article class="card"><small>{escape(currency)}{qualifier}</small>'
-                      f'<strong>{t.net:f}</strong><div>Net saved estimate · signed cash flow</div>'
-                      f'<div>Income / credits {t.credits:f} · Spending {t.spending:f}</div>'
-                      + (f'<div>Card credits under review: {t.review:f}</div>' if t.review else "")
+        rows = [r for r in snap.coverage if r["currency"] == currency]
+        if comparisons[currency].partial.startswith("so far"):
+            # An in-progress month is never "covered" (it is not over); that is what the dated chip says. "partial"
+            # is for an account that has not fetched from the first of the month, or not at all.
+            lo = _midnight(month_dates(f["month"])[0])
+            incomplete = any(r["start_at"] is None or r["start_at"] > lo for r in rows)
+        else:
+            incomplete = not all(r["covered"] for r in rows)
+        totals.append(_summary_card(currency, t, comparisons[currency], incomplete, f)
                       + _bars(comparisons[currency], f, t) + '</article>')
     if not totals:
         summary = "<p>No posted data with sufficient coverage to report a zero.</p>"
     else:
         summary = ('<div class="cards">' + "".join(totals) + "</div>"
-                   '<p>Income / credits includes refunds; it is not verified income. '
-                   'The net saved estimate is signed cash flow, not measured savings.</p>')
+                   '<p>Income includes refunds; it is not verified income. '
+                   'Saved / Overspent is signed cash flow, not measured savings.</p>')
     if not any(not r["pending"] for r in snap.rows) and totals:
         summary += "<p>No posted transactions reported for this month in this view.</p>"
 
@@ -358,6 +390,8 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
                          ("description", "payee", "category", "nickname", "institution", "flow")):
             continue
         if f["cat"] and (r["category"] or "Uncategorized").casefold() != f["cat"].casefold():
+            continue
+        if f["review"] == "1" and r["flow"] != "Review card credit":
             continue
         category = escape(r["category"])
         drawer = _drawer(r, f, token, categories, manual, attempt if open_row == r["row_id"] else {},
@@ -386,6 +420,9 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         '<th>Owner</th><th class="num">Amount</th><th>Category</th></tr></thead><tbody>'
         + "".join(rows) + "</tbody></table></div>" if rows else "<p>No transactions match this list.</p>")
     alert = f'<p class="notice" role="alert">{escape(error)}</p>' if error else ""
+    review_chip = (f'<p class="filter-chip">Showing card payments to confirm only · '
+                   f'<a href="{escape(_location(dict(f, review="", currency="")))}">Clear filter</a></p>'
+                   if f["review"] == "1" else "")
     return (
         '<script defer src="/dashboard.js"></script>'
         '<section class="history" aria-labelledby="cash-flow"><h2 id="cash-flow">Monthly cash flow</h2>'
@@ -402,7 +439,7 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         'an evening transaction in a western timezone, or a local-midnight stamp east of UTC, can show a day '
         'off, and month filters use the same date.</p>'
         + ("<ul>" + "".join(coverage) + "</ul>" if coverage else "<p>No included accounts in this view.</p>")
-        + '</details></section><section><h2>Transactions</h2>' + table + '</section>')
+        + '</details></section><section><h2>Transactions</h2>' + review_chip + table + '</section>')
 
 
 @dataclass(frozen=True)

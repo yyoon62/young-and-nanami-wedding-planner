@@ -70,12 +70,13 @@ class Months(Fixture, unittest.TestCase):
         self.assertEqual(cmp["EUR"].current, {"Uncategorized": Decimal("50")})
         self.assertEqual(usd.partial, "so far, through 28 Nov")
         html = self.html()
-        self.assertIn('<span class="partial-flag">so far, through 28 Nov</span>', html)
+        self.assertRegex(html, r'<span class="partial-flag"[^>]*>so far, through 28 Nov</span>')
+        self.assertEqual(html.count("so far, through 28 Nov"), 2)     # chip on each currency card (USD, EUR)
         dining = re.search(r'<li><a class="bar-row"[^>]*title="Show only Dining \(USD\)".*?</a></li>', html, re.S).group(0)
-        for text in ("300.00", "last month 200.00", "3-mo avg 250.00"):
+        for text in ("$300.00", "last month $200.00", "3-mo avg $250.00"):
             self.assertIn(text, dining)
-        self.assertIn("Spending 800", html)
-        self.assertIn("Spending 50", html)
+        self.assertIn("Spending <strong>$800.00</strong>", html)
+        self.assertIn("Spending <strong>€50.00</strong>", html)
         # Click-to-filter: a plain, reversible GET link; the list shows only that category and currency.
         link = re.search(r'href="([^"]+)"[^>]*title="Show only Dining \(USD\)"', html).group(1).replace("&amp;", "&")
         self.assertEqual(parse_qs(urlsplit(link).query)["cat"], ["Dining"])
@@ -97,13 +98,13 @@ class Months(Fixture, unittest.TestCase):
         usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
         self.assertEqual(usd.avg_months, ("2026-10", "2026-09"))
         self.assertEqual(usd.avg["Dining"], Decimal("225.00"))
-        self.assertIn("2-mo avg 225.00", self.html())
+        self.assertIn("2-mo avg $225.00", self.html())
         cover(self.db, "2026-09-16", "2026-11-28")  # only October is complete: no average, previous still shown
         usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
         self.assertIsNone(usd.avg)
         self.assertEqual(usd.prev["Dining"], Decimal("200"))
         html = self.html()
-        self.assertIn("last month 200.00 · 3-mo avg —", html)
+        self.assertIn("last month $200.00 · 3-mo avg —", html)
         cover(self.db, "2026-10-20", "2026-11-28")  # not even October: no comparison at all
         usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
         self.assertIsNone(usd.prev)

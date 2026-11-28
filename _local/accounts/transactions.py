@@ -453,6 +453,7 @@ class Totals:
     spending: Decimal = Decimal(0)
     net: Decimal = Decimal(0)
     review: Decimal = Decimal(0)
+    review_count: int = 0    # card credits under review (L26: the "to confirm" line)
     category_spending: dict = field(default_factory=dict)
     category_suggested: dict = field(default_factory=dict)  # category -> cleaned merchants suggested by the classifier
 
@@ -549,6 +550,7 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
             totals = result.totals.setdefault(r["currency"], Totals())
             if r["flow"] == "Review card credit":
                 totals.review += Decimal(r["amount"])
+                totals.review_count += 1
             elif not r["effective_transfer"]:
                 amount = Decimal(r["amount"])
                 if amount > 0:
