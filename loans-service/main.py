@@ -1,51 +1,42 @@
 """Private, separately hosted entry point for the shared loan dashboard."""
-import os
+from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from google.auth import exceptions
-from google.auth.transport.requests import Request
-from google.oauth2.id_token import verify_oauth2_token
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
+
+import auth
+from accounts import router
+from storage import Config, initialize, transaction
 
 
 ROOT = Path(__file__).resolve().parent
-app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-bearer = HTTPBearer(auto_error=False)
 
 
-def settings():
-    client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
-    members = {e.strip().lower() for e in os.environ.get("LOANS_MEMBERS", "").split(",") if e.strip()}
-    if not client_id or len(members) != 2:
-        raise HTTPException(503, "Dashboard access has not been configured.")
-    return client_id, members
+@asynccontextmanager
+async def lifespan(app):
+    cfg = Config.load()
+    initialize(cfg)
+    app.state.cfg = cfg
+    yield
 
 
-def require_member(credentials: HTTPAuthorizationCredentials = Depends(bearer)):
-    client_id, members = settings()
-    if credentials is None:
-        raise HTTPException(401, "Sign in with Google.")
-    try:
-        claims = verify_oauth2_token(credentials.credentials, Request(), audience=client_id)
-    except exceptions.TransportError:
-        raise HTTPException(503, "Google verification is temporarily unavailable.") from None
-    except (ValueError, exceptions.GoogleAuthError):
-        raise HTTPException(401, "Sign in again.") from None
-    email = (claims.get("email") or "").lower()
-    # For third-party mailboxes, verification at Google account creation is
-    # not proof of current ownership. Accept Gmail or managed Workspace only.
-    authoritative = email.endswith("@gmail.com") or bool(claims.get("hd"))
-    if claims.get("email_verified") is not True or not authoritative or email not in members:
-        raise HTTPException(403, "This dashboard is restricted to its members.")
-    return claims["sub"]
+app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app.include_router(router)
 
 
 @app.middleware("http")
 async def private_responses(request, call_next):
-    response = await call_next(request)
+    cfg = request.app.state.cfg
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and (
+        request.headers.getlist("origin") != [cfg.origin] or
+        request.headers.getlist("x-dashboard-action") != ["1"]
+    ):
+        response = JSONResponse({"detail": "Same-origin dashboard requests only."}, status_code=403)
+    else:
+        response = await call_next(request)
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
@@ -54,8 +45,8 @@ async def private_responses(request, call_next):
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard():
-    client_id, _ = settings()
+def dashboard(request: Request):
+    client_id = request.app.state.cfg.client
     return (ROOT / "dashboard.html").read_text().replace("GOOGLE_CLIENT_ID", escape(client_id, quote=True))
 
 
@@ -64,7 +55,24 @@ def script():
     return FileResponse(ROOT / "dashboard.js", media_type="text/javascript")
 
 
-@app.get("/api/shared-loans")
-def shared_loans(member: str = Depends(require_member)):
-    # No lender integration yet; never substitute demo balances.
-    return {"loans": []}
+class Login(BaseModel):
+    credential: str = Field(min_length=1, max_length=16384)
+
+
+@app.post("/api/login", status_code=204)
+def login(body: Login, request: Request, response: Response):
+    cfg = request.app.state.cfg
+    email, sub, exp = auth.verified(body.credential, cfg)
+    with transaction(cfg, True) as db:
+        cookie = auth.issue(db, cfg, email, sub, exp, body.credential)
+    response.set_cookie(cfg.cookie, cookie, max_age=auth.TTL, httponly=True,
+                        secure=cfg.secure, samesite="lax", path="/")
+
+
+@app.post("/api/logout", status_code=204)
+def logout(request: Request, response: Response):
+    cfg = request.app.state.cfg
+    with transaction(cfg, True) as db:
+        row = auth.session(db, cfg, request)
+        db.execute("DELETE FROM sessions WHERE digest=?", (row["digest"],))
+    response.delete_cookie(cfg.cookie, secure=cfg.secure, httponly=True, samesite="lax", path="/")

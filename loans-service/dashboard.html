@@ -3,17 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Shared loans</title>
+  <title>Household accounts</title>
   <script src="/dashboard.js" defer></script>
   <script src="https://accounts.google.com/gsi/client" defer></script>
 </head>
 <body>
   <main>
-    <h1>Shared loans</h1>
-    <p id="status" role="status">Sign in to view shared loans.</p>
+    <h1>Household accounts</h1>
+    <p id="status" role="status">Sign in to view accounts.</p>
     <div id="g_id_onload" data-client_id="GOOGLE_CLIENT_ID" data-callback="openDashboard" data-auto_prompt="false"></div>
     <div id="signin" class="g_id_signin" data-type="standard"></div>
     <button id="signout" hidden>Sign out</button>
+    <section id="panel" hidden>
+      <h2>Manual records</h2>
+      <p>These values were entered by a member. They are not live balances.</p>
+      <button id="refresh">Refresh</button>
+      <ul id="records"></ul>
+      <h2 id="heading">Add a private account</h2>
+      <form id="entry">
+        <label>Name <input name="name" maxlength="100" required></label>
+        <label>Amount <input name="amount" inputmode="decimal" placeholder="0.00" required></label>
+        <label>Currency <select name="currency"><option>USD</option><option>CAD</option><option>EUR</option><option>GBP</option></select></label>
+        <label>As of <input name="as_of" type="date" required></label>
+        <button>Save</button><button type="button" id="cancel" hidden>Cancel edit</button>
+      </form>
+    </section>
   </main>
 </body>
 </html>
