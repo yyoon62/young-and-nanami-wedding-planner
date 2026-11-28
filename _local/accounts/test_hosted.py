@@ -754,6 +754,52 @@ class HostedGuard(unittest.TestCase):
         self.assertNotIn(self.SENTINEL, self.db.read_bytes())
 
 
+    def emptied_but_not_clean(self):
+        """Rows deleted (so the row guard passes) but the sentinel remains in the file's free pages."""
+        seed_fictional.seed(self.db)
+        with closing(sqlite3.connect(self.db)) as db, db:
+            checking = db.execute("SELECT id FROM accounts WHERE nickname='Fictional Checking'").fetchone()[0]
+            db.executemany("""INSERT INTO account_transactions (account_id,tx_id,source,posted_date,amount,currency,
+                description,payee,merchant,pending,pending_active) VALUES (?,?,'bulk','2026-01-01','-1.00','USD',
+                'ZZ-SENTINEL-COFFEE','','ZZ-SENTINEL-COFFEE',0,0)""", ((checking, f"b{i}") for i in range(5000)))
+        with closing(sqlite3.connect(self.db)) as db, db:
+            for table in ("account_transactions", "transaction_coverage", "transaction_merchant_rules"):
+                db.execute(f"DELETE FROM {table}")
+        marker = b"ZZ-SENTINEL-COFFEE"
+        self.assertIn(marker, self.db.read_bytes(), "precondition: remnants sit in free pages")
+        return marker
+
+    def test_startup_compaction_removes_remnants_of_deleted_rows(self):
+        """The guard counts rows, so a file whose tables are empty passes; compaction then purges the free pages."""
+        marker = self.emptied_but_not_clean()
+        with closing(sqlite3.connect(self.db)) as db:
+            before = db.execute("SELECT * FROM balance_history ORDER BY 1,2").fetchall()
+        with running(self.db, self.rsa) as server:
+            self.assertGreater(server.reclaimed, 100)
+        self.assertNotIn(marker, self.db.read_bytes())
+        with closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual(db.execute("PRAGMA freelist_count").fetchone(), (0,))
+            self.assertEqual(db.execute("SELECT * FROM balance_history ORDER BY 1,2").fetchall(), before)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM accounts").fetchone(), (6,))
+
+    def test_compaction_is_skipped_when_there_are_no_free_pages_and_logged_once_by_the_cli(self):
+        seed_fictional.seed(self.db, transactions=False)
+        with running(self.db, self.rsa) as server:
+            self.assertEqual(server.reclaimed, 0)
+        self.db.unlink()  # now the same database with remnants, started through the CLI
+        self.emptied_but_not_clean()
+        with hosted_cli(self.db, wait=False) as process:
+            try:
+                self.assertTrue(select.select([process.stdout], [], [], 10)[0], "hosted server did not start")
+                first, second = process.stdout.readline(), process.stdout.readline()
+            finally:
+                process.send_signal(signal.SIGINT)
+                process.wait(timeout=10)
+            self.assertEqual(process.returncode, 0, process.stderr.read())
+        self.assertRegex(first, r"^Hosted startup: compacted the database file \(\d+ free pages removed\)\.$")
+        self.assertIn(f"Open {ORIGIN}/", second)
+
+
 @unittest.skipUnless(HAS_CRYPTO, "install requirements-hosted.txt for hosted acceptance")
 class HostedProjections(unittest.TestCase):
     """L21: /projections POST needs session + exact Origin + CSRF; assumptions are household-shared."""

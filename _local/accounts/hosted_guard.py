@@ -7,7 +7,7 @@ the Pi and out of its encrypted backups.
 
 Honest limit: the guard counts ROWS. Deleted rows can linger in a SQLite file's free pages, so a copied
 file is not proven clean by an empty table. The export builds a fresh file and is the only supported way
-to move data to the host.
+to move data to the host; the hosted start also compacts the file (`reclaim`) as a second line of defence.
 """
 from contextlib import closing
 from pathlib import Path
@@ -78,3 +78,17 @@ def require_clean(path):
         raise Refused(f"{describe(found)}. Transaction data must not be on the host. "
                       f"On the machine that holds your data run {EXPORT_COMMAND} and install that file instead.")
 
+
+
+def reclaim(path):
+    """Compact the database file so deleted rows leave no remnants in its free pages. Returns pages freed.
+
+    Run only after `require_clean` and the app's own migration, under the offline lock, and only when
+    there are free pages. It cannot reach copies of old pages that the filesystem or flash storage may
+    keep outside SQLite's control.
+    """
+    with closing(sqlite3.connect(path)) as db:
+        free = db.execute("PRAGMA freelist_count").fetchone()[0]
+        if free:
+            db.execute("VACUUM")
+        return free
