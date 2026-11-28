@@ -98,10 +98,11 @@ After stopping the fictional smoke listener, run as the service user (adjust uni
 sudo adduser --system --group --shell /bin/bash --home /home/acctdash acctdash   # a system UID is hidden from the login greeter
 sudo loginctl enable-linger acctdash       # starts the user manager now and at boot; needs dbus-user-session
 sudo systemctl --user --machine=acctdash@.host status    # then use this prefix instead of plain `systemctl --user`
-sudo -H -u acctdash journalctl --user -u accounts-dashboard.service   # works while /var/log/journal exists (persistent journal)
+sudo journalctl _SYSTEMD_USER_UNIT=accounts-dashboard.service -o cat   # a system UID has no per-user journal: `journalctl --user` finds nothing
+sudo systemctl --user --machine=acctdash@.host mask --now pipewire.socket pipewire-pulse.socket pipewire.service pipewire-pulse.service wireplumber.service filter-chain.service
 ```
 
-If the user manager does not start for a system UID, recreate the account with a regular UID (`adduser --disabled-password`) and expect it to appear on a graphical login screen. Linger starting the service at boot is untested until the machine is rebooted. The commands below assume you are inside the service user's own session:
+The last command is recommended on Raspberry Pi OS desktop images: starting the service user's manager also starts that user's audio stack (pipewire/wireplumber, which even tries to register Bluetooth profiles). The dashboard does not need any of it. If the user manager does not start for a system UID, recreate the account with a regular UID (`adduser --disabled-password`) and expect it to appear on a graphical login screen (this did not happen in the rehearsal: a system UID worked). Linger starting the service at boot is untested until the machine is rebooted. The commands below assume you are inside the service user's own session:
 
 ```sh
 cd "$HOME/planner/_local/accounts"
@@ -122,7 +123,7 @@ The sign-in page alone permits the GIS script, iframe, stylesheet, and connectio
 ## 4. Encrypted, online SQLite backups
 
 1. Generate a dedicated **passphrase-protected OpenPGP encryption key** on a trusted recovery device, export **only its public key**, and verify the full fingerprint out of band. Retain the private recovery key and passphrase in separate safe places. On the Pi, import the public key (`gpg --import /path/to/recovery-public.asc`) under the service user. The script selects the pinned full fingerprint; it will not fall back to another key or to plaintext. Backups are encrypted, not signed by the Pi, so restore only archives whose custody you trust.
-2. **Warning — silent skip.** `accounts-backup.service` has `ConditionPathIsMountPoint=/mnt/accounts-backup`. If the drive is not mounted, systemd *skips the unit and reports success*: `systemctl --user start` returns 0, `status` says "condition failed", and the timer keeps firing. A healthy-looking timer can therefore mean **no backups at all**. Check recently: `systemctl --user show accounts-backup.service -p ConditionResult` (expect `yes`) and the age of the newest archive, e.g. `find /mnt/accounts-backup/accounts -name 'accounts-*.sqlite3.gpg' -mtime -2 | grep -q . && echo recent || echo STALE`. Do this weekly until a loud-failure follow-up exists.
+2. **Warning — silent skip.** `accounts-backup.service` has `ConditionPathIsMountPoint=/mnt/accounts-backup`. If the drive is not mounted, systemd *skips the unit and reports success*: `systemctl --user start` returns 0, `status` says "condition failed", and the timer keeps firing. A healthy-looking timer can therefore mean **no backups at all**. Check recently: the journal (`Encrypted backup written: …` appears only when it really ran; a skipped run logs nothing) and the age of the newest archive, e.g. `find /mnt/accounts-backup/accounts -name 'accounts-*.sqlite3.gpg' -mtime -2 | grep -q . && echo recent || echo STALE`. Do this weekly until a loud-failure follow-up exists.
 
    Mount a private external POSIX filesystem at `/mnt/accounts-backup` (e.g. a USB drive configured by UUID) and create a service-user-owned `0700` `accounts` directory on the **mounted volume**. The timer checks the mount point to avoid quietly writing to the root disk; confirm mount success and protect the volume from other users. Copy **only encrypted archives** off-device as well if the external drive normally stays plugged into the Pi. Keep multiple generations; monitor available space and last successful archive. There is no automatic retention/pruning.
 3. Create `~/.config/planner-accounts/backup.env` mode `0600`:
@@ -170,3 +171,27 @@ Rehearse with a fictional archive and check exact amounts, dates, history and au
 - Before login, `curl -si "$ORIGIN/"` should return only the sign-in page; `curl -si "$ORIGIN/logo/chase.com"` and requests to `/new`, `/style.css`, `/dashboard.js` should be 401 with `Cache-Control: no-store`. After sign-in test edit/save, view history, and sign out; reload a protected route and ensure it denies access. In HTTPS response headers check session cookie has `__Host-`, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`; check logout clears it with the same attributes.
 - **Pi / systemd / backups:** Verify the units on Pi with `systemd-analyze --user verify`, reboot-test Serve, `systemctl --user` startup and the mounted backup timer, and rehearse a dry-run and encrypted restore with fictional SQLite on the target OS. Confirm rollback steps and recovery key availability.
 - **Real Bridge:** Only after the above checks and explicit approval, provision Bridge separately. Verify a real refresh against source balances/dates and repeat once to check for duplicates; the offline tests do not establish a working account connection.
+
+## 7. Rehearsal record: what was installed, what it proved, how to remove it
+
+A fictional-data rehearsal of sections 1.2, 3, 4 and 5 ran on a shared Raspberry Pi (Debian 12 aarch64, Python 3.11.2, SQLite 3.40.1, GnuPG 2.2.40) from planner commit `c1d6f67` (branch `accounts-pi-rehearsal`). Tailscale stayed off, no Google client, recovery key, Bridge credential, backup drive or real data was involved.
+
+**Installed (all removed afterwards):** a system user `acctdash` (UID 112, home `/home/acctdash`, linger on); under it `~/planner` (code from `git archive`), `~/.local/share/planner-accounts-venv` (`cryptography` 48.0.1, `cffi` 2.1.1, `pycparser` 3.12 from `cp311` aarch64 wheels, 41 MB), `~/.config/planner-accounts/{hosted.env,backup.env}` with fictional values, a fictional database from `deploy/seed_fictional.py`, the two units plus a rehearsal drop-in, and `/tmp/l21-*` (a throwaway GPG home and encrypted archives). **No apt package was installed or upgraded** (everything was already present; blanket `apt install` would have upgraded 17 packages).
+
+**How to remove it (administrator account; narrow sudo only):**
+
+```sh
+M='sudo systemctl --user --machine=acctdash@.host'
+$M disable --now accounts-backup.timer accounts-dashboard.service
+sudo -H -u acctdash sh -c 'export XDG_RUNTIME_DIR=/run/user/$(id -u); for g in /tmp/l21-*/gnupg*; do GNUPGHOME=$g gpgconf --kill all; done; rm -rf /tmp/l21-*'
+sudo loginctl disable-linger acctdash
+sudo loginctl terminate-user acctdash
+sudo userdel -r acctdash              # also removes the matching group
+getent passwd acctdash; getent group acctdash; ls -d /home/acctdash /run/user/* /var/lib/systemd/linger/*   # verify
+```
+
+Do not run `journalctl --rotate` or `--vacuum`: the journal is shared. A system UID has no per-user journal file; only its lines in the shared `system.journal` remain until normal rotation. Comparing before/after captures (listening ports, `tailscaled` state, hashes of `sshd_config`, NetworkManager config, `/etc/hosts`, the dpkg package list, the login user's units including `emacs-tty`) showed no difference after teardown.
+
+**Findings that shaped the units/runbook:** the dashboard unit must not carry `--bridge` (without `bridge.access` it exits 1 immediately); the backup unit silently skips without the mount (verified: `start` returns 0, `ConditionResult=no`, no archive) and works with a drop-in `[Unit]` / `ConditionPathIsMountPoint=` that clears the condition (rehearsal only; never ship it); `systemd-analyze --user verify` is clean (the inert `After=network-online.target` is accepted); two `test_hosted` Startup tests assumed umask 022 and a Git checkout and were fixed; and transaction rows seeded in the database survive backup and restore (the sentinel row was present in the restored copy), so the "never copy the local DB" rule above stands.
+
+**Not verified by the rehearsal (needs Young or real hardware):** reboot and linger-at-boot, the mount-gated backup timer with a real drive, Tailscale Serve and tailnet ACLs, real Google sign-in and the exact `.ts.net` origin, `__Host-`/`Secure` cookie behaviour over HTTPS, a passphrase-protected recovery key (the throwaway key had no passphrase), and a real Bridge refresh.
