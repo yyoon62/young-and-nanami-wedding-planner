@@ -20,6 +20,8 @@ ACCOUNTS = {
     "maple-b": ("Maple Servicing", "Maple Student Loan B", "Student loan", "debt", "3000.00", "2026-11-20", "Young", None),
     "oak-card": ("Oak Bank", "Oak Everyday Card", "Credit card", "debt", "620.00", "2026-11-26", "Joint", None),
     "birch-chk": ("Birch Bank", "Birch Checking", "Checking", "asset", "4000.00", "2026-11-27", "Joint", None),
+    "cedar-sav": ("Cedar Bank", "Cedar High-Yield Savings", "Savings", "asset", "8000.00", "2026-11-26", "Joint",
+                  dict(rate="4.250", rate_kind="variable")),
     "birch-sav": ("Birch Bank", "Birch Savings", "Savings", "asset", "15000.00", "2026-11-27", "Joint", None),
 }
 

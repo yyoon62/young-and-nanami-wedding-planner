@@ -40,6 +40,8 @@ def main(out):
                 page.screenshot(path=str(out / f"projections-debts-{name}.png"), full_page=True)
                 page.locator("section[aria-labelledby=debt-heading]").screenshot(
                     path=str(out / f"projections-debts-section-{name}.png"))
+                page.locator("section[aria-labelledby=asset-heading]").screenshot(
+                    path=str(out / f"projections-cash-apy-section-{name}.png"))
                 page.close()
         chrome.close()
     print(*sorted(p.name for p in out.iterdir()), sep="\n")
