@@ -21,7 +21,8 @@ from bulk import fingerprint, text
 
 
 DAY = 86400
-PAGE = 90 * DAY
+PAGE = 55 * DAY
+INITIAL_LOOKBACK = 90 * DAY
 OVERLAP = 5 * DAY
 VIEWS = ("Household", "Young", "Nanami")
 CURRENCY = re.compile(r"[A-Z]{3}")
@@ -144,6 +145,19 @@ _ERRORS = {"con.auth": "Institution sign-in required", "act.failed": "Account lo
            "gen.api": "Provider API issue"}
 
 
+def _api_reason(entry):
+    msg = (entry.get("msg") or "").lower() if isinstance(entry, dict) and isinstance(entry.get("msg"), str) else ""
+    if any(k in msg for k in ("range", "days", "date", "window", "limit")):
+        if any(k in msg for k in ("rate", "quota", "too many", "request")):
+            return "Approaching SimpleFIN daily request limit"
+        return "Provider rejected requested date range"
+    if any(k in msg for k in ("rate", "quota", "too many", "request")):
+        return "Approaching SimpleFIN daily request limit"
+    if "version" in msg:
+        return "Provider rejected protocol version"
+    return _ERRORS["gen.api"]
+
+
 def _unpack(provider, data, links, start, end, include_pending):
     if not isinstance(data, dict) or not all(isinstance(data.get(k), list)
             for k in ("connections", "accounts", "errlist")) or len(data["accounts"]) > 200:
@@ -152,7 +166,10 @@ def _unpack(provider, data, links, start, end, include_pending):
         reasons = set()
         for e in data["errlist"]:
             code = e.get("code") if isinstance(e, dict) else None
-            reasons.add(_ERRORS.get(code, "Provider error") if isinstance(code, str) else "Provider error")
+            if code == "gen.api":
+                reasons.add(_api_reason(e))
+            else:
+                reasons.add(_ERRORS.get(code, "Provider error") if isinstance(code, str) else "Provider error")
         if data.get("errors", []) != []:
             reasons.add("Provider warning or quota issue")
         raise Problem("; ".join(sorted(reasons)) + "; window held.")
@@ -279,8 +296,7 @@ def sync_transactions(batch, *, include_pending=False, now=None):
             raise Problem("No linked accounts. Sync balances first.")
         end = int(time.time()) if now is None else now
         today = utc_date(end)
-        year_ago = today.replace(year=today.year - 1, day=28 if today.month == 2 and today.day == 29 else today.day)
-        initial = _midnight(year_ago)
+        initial = _midnight(today - timedelta(days=INITIAL_LOOKBACK // DAY))
         start = min(max(1, c[2], c[3] - OVERLAP)
                     if (c := coverage.get(s)) and c[:2] == link else initial
                     for s, link in links.items())

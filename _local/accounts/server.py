@@ -739,8 +739,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(422, page(f'<p class="notice" role="alert">{escape(str(exc))}</p>',
                                                current=TX_PATH, heading="Transactions"))
                 tail = "Caught up." if sync_res.caught_up else "More history available — click Sync again."
-                self.server.notices = [f"Synced transactions ({sync_res.windows} window(s)). {tail}",
-                                       *sync_res.warnings]
+                self.server.notices = [f"Synced transactions ({sync_res.windows} window(s)). {tail}"]
             return self.send(303, "", location=result.location)
         edit = re.fullmatch(r"/edit/([1-9][0-9]{0,17})", target)
         remove = re.fullmatch(r"/remove/([1-9][0-9]{0,17})", target)

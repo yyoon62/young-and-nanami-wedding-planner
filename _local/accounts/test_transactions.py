@@ -117,7 +117,7 @@ class TransactionsTest(unittest.TestCase):
         self.add("Excluded", tx("ignored", "2026-11-12", "-100", "Excluded"))
         self.add("Yen checking", tx("local", "2026-11-09", "-40", "Credit card payment"))
         self.accounts["Provider-only account"] = self.accounts["Joint checking"] | {"id": "unlinked"}
-        self.assertEqual(self.sync().windows, 5)
+        self.assertEqual(self.sync().windows, 2)
         self.assertTrue(all(left[1] - OVERLAP == right[0] < left[1] < right[1]
                             for left, right in zip(self.calls, self.calls[1:])))
         self.assertEqual(self.calls[-1][1], NOW)
@@ -185,15 +185,15 @@ class TransactionsTest(unittest.TestCase):
     def test_history_partial_missing_restart_and_incremental_overlap(self):
         self.account("Bank")
         self.account("Card", "Credit card")
-        self.add("Bank", tx("old", "2025-12-15", "-1", "First included second"),
-                 tx("cut", "2026-03-15", "-2", "Second page boundary"),
+        self.add("Bank", tx("old", "2026-09-16", "-1", "First included second"),
+                 tx("cut", "2026-11-10", "-2", "Second page boundary"),
                  tx("end", "2026-12-15T12:00:00", "-3", "Endpoint exclusive"))
         fail = lambda data: data | {"errlist": [{"code": "act.missingdata", "msg": "<private>"}]}
         self.alter = lambda data: fail(data) if len(self.calls) == 2 else data
         with self.assertRaisesRegex(Problem, "^Incomplete transaction listing; window held\\.$"):
             self.sync()
         first, second = self.calls
-        self.assertEqual(first[0], epoch("2025-12-15"))
+        self.assertEqual(first[0], epoch("2026-09-16"))
         self.assertEqual(first[1] - OVERLAP, second[0])
         self.assertEqual({r[0] for r in self.db.execute("SELECT end_at FROM transaction_coverage")}, {first[1]})
         self.assertEqual(self.db.execute("SELECT count(*) FROM account_transactions").fetchone()[0], 1)
@@ -208,14 +208,14 @@ class TransactionsTest(unittest.TestCase):
         result = self.sync()
         self.assertTrue(result.caught_up)
         self.assertEqual(self.calls[3][0], first[1] - OVERLAP)
-        self.assertEqual(self.row("Second page boundary", "2026-03")["amount"], "-2")
+        self.assertEqual(self.row("Second page boundary", "2026-11")["amount"], "-2")
         self.assertEqual(len(self.snap("2026-12").rows), 0)
         before_repeat = len(self.calls)
         self.assertEqual(self.sync(now=NOW + DAY).windows, 1)
         self.assertEqual(self.calls[before_repeat], (NOW - OVERLAP, NOW + DAY, False))
         self.assertEqual(self.db.execute("SELECT count(*) FROM account_transactions").fetchone()[0], 3)
         self.assertEqual(self.db.execute("SELECT count(*) FROM fetch_attempts").fetchone()[0], len(self.calls))
-        self.assertEqual(self.row("First included second", "2025-12")["amount"], "-1")
+        self.assertEqual(self.row("First included second", "2026-09")["amount"], "-1")
 
     def test_link_only_and_shared_quota_including_failed_calls(self):
         self.account("Unlinked", linked=False)
@@ -239,7 +239,7 @@ class TransactionsTest(unittest.TestCase):
 
     def test_overlap_catches_correction_near_first_pagination_boundary(self):
         self.account("Bank")
-        corrected = tx("boundary", "2026-03-14", "-1", "Boundary purchase")
+        corrected = tx("boundary", "2026-11-09", "-1", "Boundary purchase")
         self.add("Bank", corrected)
 
         def respond(data):
@@ -249,18 +249,20 @@ class TransactionsTest(unittest.TestCase):
 
         self.alter = respond
         self.assertTrue(self.sync().caught_up)
-        self.assertEqual(self.snap("2026-03").totals["USD"].spending, Decimal("1.25"))
-        self.assertEqual(len(self.snap("2026-03").rows), 1)
+        self.assertEqual(self.snap("2026-11").totals["USD"].spending, Decimal("1.25"))
+        self.assertEqual(len(self.snap("2026-11").rows), 1)
 
     def test_fail_closed_on_bad_response_and_no_provider_text_in_errors(self):
         self.account("Bank")
-        self.add("Bank", tx("x", "2025-12-16", "-5", "fictional-secret-NOT-live"))
+        self.add("Bank", tx("x", "2026-09-17", "-5", "fictional-secret-NOT-live"))
         with self.assertRaisesRegex(Problem, "^Unexpected sensitive transaction field"):
             self.sync()
         self.accounts["Bank"]["transactions"][0]["description"] = "Valid"
         for alter, message in [
             (lambda _: (200, b'{"errlist":[],"errlist":[]}'), "unreadable"),
             (lambda d: d | {"errors": ["<provider message>"]}, "warning or quota"),
+            (lambda d: d | {"errlist": [{"code": "gen.api", "msg": "Date range limited <secret>"}]}, "requested date range"),
+            (lambda d: d | {"errlist": [{"code": "gen.api", "msg": "Daily request quota <secret>"}]}, "daily request limit"),
             (lambda d: d | {"accounts": [d["accounts"][0] | {"currency": "JPY"}]}, "currency mismatch"),
             (lambda d: d | {"accounts": [d["accounts"][0] | {"transactions": None}]}, "transaction list"),
             (lambda d: d | {"accounts": [d["accounts"][0]] * 2}, "duplicate"),
