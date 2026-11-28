@@ -8,9 +8,10 @@ from html import escape
 from urllib.parse import parse_qs, urlencode
 
 from history import history_panel
+import projections_ui
 from projections import available_currencies, eligible_accounts
 
-CHARTS = ("history",)   # "projection" is enabled with the panel (L29-2)
+CHARTS = ("history", "projection")
 ANCHOR = "#net-worth"
 KEEP = object()
 
@@ -53,10 +54,7 @@ def parse(query, people):
 
 
 def projection_href(scope):
-    query = {"view": str(scope)}
-    if scope.currency:
-        query["currency"] = scope.currency
-    return "/projections?" + urlencode(query)
+    return scope.url(anchor=True)
 
 
 def _tabs(scope):
@@ -96,12 +94,20 @@ class Net:
         self.links, self.html, self.currencies = links, html, currencies
 
 
-def build(db, scope, people, *, timeline, money, has_backdated):
-    """Everything the Accounts page needs above the table. ValueError(message) if the currency is not in this view."""
+def build(db, scope, people, *, timeline, money, has_backdated, projection=None, form_state=None):
+    """Everything the Accounts page needs above the table. ValueError(message) if the currency is not in this view.
+
+    The Projection panel is built only when that tab is open. `projection` = the server-side inputs it needs
+    (token, section_for, places, today, suggestions); `form_state` = (attempted values, errors) after a refused save."""
     currencies = available_currencies(eligible_accounts(db, scope))
     if scope.currency and scope.currency not in currencies:
         raise ValueError("Currency is unavailable in this view.")
-    panel = history_panel(timeline, money, has_backdated=has_backdated, currency=scope.currency)
+    if scope.chart == "projection":
+        attempted, errors = form_state or (None, None)
+        panel = projections_ui.embed(db, str(scope), scope.currency or currencies[0], attempted=attempted, errors=errors,
+                                     history=(timeline, has_backdated), **projection)
+    else:
+        panel = history_panel(timeline, money, has_backdated=has_backdated, currency=scope.currency)
     html = (f'<div id="net-worth" class="nw"><div class="nw-bar">{_tabs(scope)}{_chips(scope, currencies)}</div>'
             f'{panel}</div>')
     return Net(owner_links(db, scope, people), html, currencies)

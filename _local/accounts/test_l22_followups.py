@@ -128,7 +128,8 @@ class EmojiAndPage(Fixture, unittest.TestCase):
         self.assertRegex(panel, r'<details class="classifier-details"><summary>Privacy details</summary>.*A bare person')
         self.assertIn("Not available when the dashboard is hosted.", panel)
 
-    def test_projection_suggestions_precede_the_chart_in_the_page(self):
+    def test_projection_suggestions_directly_follow_the_chart_in_the_page(self):
+        """L29 reverses the L23-0 default (suggestions above the chart): the chart now sits right under the tab bar."""
         for month in ("2026-08", "2026-09", "2026-10"):
             put_row(self.db, self.chk, self.src, "USD", f"{month}-01", "3000.00", "Payroll Fictional Co")
             put_row(self.db, self.chk, self.src, "USD", f"{month}-05", "-1000.00", "Landlord Rent")
@@ -136,8 +137,9 @@ class EmojiAndPage(Fixture, unittest.TestCase):
             self.db.execute("UPDATE accounts SET balance='100.00', asof='2026-11-01'")
         body = projection_get(self.path, "/projections", page=page, token="t", people=server.PEOPLE,
                               section_for=server.section_for, places=server.places, today=TODAY, suggestions=True)[1]
-        self.assertLess(body.index('id="projection-suggestion"'), body.index('class="history-plot"'))
-        self.assertLess(body.index('id="projection-suggestion"'), body.index('id="projection-heading"'))
+        self.assertLess(body.index('class="history-plot"'), body.index('id="projection-suggestion"'))
+        self.assertLess(body.index('id="projection-heading"'), body.index('id="projection-suggestion"'))
+        self.assertLess(body.index('id="projection-suggestion"'), body.index('class="cards projection-cards"'))
         hosted = projection_get(self.path, "/projections", page=page, token="t", people=server.PEOPLE,
                                 section_for=server.section_for, places=server.places, today=TODAY, suggestions=False)[1]
         self.assertNotIn("projection-suggestion", hosted)

@@ -591,7 +591,8 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_port
         return self.headers.get("Host") in {f"127.0.0.1:{port}", f"localhost:{port}"}
 
-    def render_home(self, view, notices=(), error=None, status=200, open_edit=None, edit_values=None):
+    def render_home(self, view, notices=(), error=None, status=200, open_edit=None, edit_values=None,
+                    form_state=None):
         scope = view if isinstance(view, net_worth_ui.Scope) else net_worth_ui.Scope(view)
         view = str(scope)
         owner_scope = "(? = 'Household' OR owner IN (?, 'Joint'))"
@@ -608,8 +609,11 @@ class Handler(BaseHTTPRequestHandler):
                                    WHERE a.excluded = 0 AND {owner_scope} ORDER BY h.asof, h.account_id""",
                                 (view, view)).fetchall()
             try:
-                net = net_worth_ui.build(db, scope, PEOPLE, timeline=net_worth(points), money=money,
-                                         has_backdated=any(p["asof"] > p["current_asof"] for p in points))
+                net = net_worth_ui.build(
+                    db, scope, PEOPLE, timeline=net_worth(points), money=money, form_state=form_state,
+                    has_backdated=any(p["asof"] > p["current_asof"] for p in points),
+                    projection=dict(token=self.token, section_for=section_for, places=places, today=date.today(),
+                                    suggestions=not self.server.auth))
             except ValueError as exc:
                 return self.send(400, str(exc))
         return self.send(status, dashboard(rows, date.today(), scope, self.token, net,

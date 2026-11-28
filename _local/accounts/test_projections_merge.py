@@ -7,9 +7,11 @@ import sqlite3
 import tempfile
 import unittest
 from urllib.parse import urlencode
+from unittest import mock
 
 import history
 import l29_golden
+import projections_ui
 import server
 from l29_fixture import fetch, running, seed
 
@@ -41,21 +43,88 @@ class Base(unittest.TestCase):
             return db.execute(sql, args).fetchall()
 
 
+def accounts_url(view, currency):
+    query = {"view": view} if view != "Household" else {}
+    return "/?" + urlencode({**query, "currency": currency, "chart": "projection"})
+
+
 class Golden(Base):
     def test_example_9_numbers_equal_the_baseline_projections_page(self):
         """Pinned at 043c5a9 from GET /projections on this fixture: numbers, not layout."""
-        got = l29_golden.collect(self.srv, fetch, projection_url)
+        self.check(projection_url)
+
+    def test_example_9_same_numbers_in_the_accounts_projection_tab(self):
+        self.check(accounts_url)
+
+    def check(self, url):
+        got = l29_golden.collect(self.srv, fetch, url)
         self.assertEqual(sorted(got), sorted(GOLDEN))
         for case in GOLDEN:
             for region in GOLDEN[case]:
                 with self.subTest(case=case, region=region):
-                    self.assertEqual(json.loads(json.dumps(got[case][region])), GOLDEN[case][region])
+                    want, have = GOLDEN[case][region], json.loads(json.dumps(got[case][region]))
+                    # The suggestion card now shows the averages first and the months table inside a collapsed ℹ️.
+                    self.assertEqual(sorted(have) if region == "suggest" else have,
+                                     sorted(want) if region == "suggest" else want)
 
     def test_golden_is_not_vacuous(self):
         household = GOLDEN["Household-USD"]
         for region in ("cards", "annual", "budget", "notes", "suggest", "debt", "asset", "form"):
             self.assertTrue(household[region], region)
         self.assertIn(["Net worth", "Start: USD 980.00", "Year 10: USD 262,935.95"], household["cards"])
+
+
+class Panel(Base):
+    """L29-2: the Projection panel on the Accounts page, built only when that tab is open."""
+
+    def test_default_path_never_builds_the_projection_panel(self):
+        with mock.patch.object(projections_ui, "embed", side_effect=AssertionError("built on History")):
+            for target in ("/", "/?view=Nanami&currency=EUR", "/?chart=history"):
+                self.assertEqual(self.get(target)[0], 200, target)
+        html = self.get("/")[2]
+        self.assertNotIn("projection-heading", html)
+
+    def test_projection_tab_is_marked_and_keeps_view_and_currency(self):
+        _, _, html = self.get("/?view=Nanami&currency=EUR&chart=projection")
+        nav = lambda label: re.findall(r'<a href="([^"]*)"( aria-current="page")?>([^<]*)</a>',
+                                       re.search(rf'aria-label="{label}">(.*?)</nav>', html, re.S)[1])
+        self.assertEqual([(t[2], bool(t[1])) for t in nav("Net worth chart")], [("History", False), ("Projection", True)])
+        self.assertEqual(nav("Net worth chart")[0][0], "/?view=Nanami&amp;currency=EUR#net-worth")
+        self.assertEqual([(t[2], bool(t[1])) for t in nav("Currency")], [("USD", False), ("EUR", True)])  # no "All" here
+        self.assertIn('name="currency" value="EUR"', html)
+        self.assertIn("Nanami EUR Checking", html)                      # the account table is still on the page
+        self.assertEqual(html.count('aria-label="Currency"'), 1)        # one control set, no second picker
+        self.assertNotIn("projection-selector", html)
+
+    def test_default_currency_is_the_view_default_and_only_the_default_chip_is_current(self):
+        _, _, html = self.get("/?chart=projection")
+        self.assertIn('name="currency" value="USD"', html)
+        self.assertRegex(html, r'<a href="/\?currency=USD&amp;chart=projection#net-worth" aria-current="page">USD</a>')
+
+    def test_all_projection_pieces_are_in_the_panel_in_the_requested_order(self):
+        html = self.get("/?chart=projection")[2]
+        order = [html.index(m) for m in ('id="net-worth"', 'class="net-chart"', 'id="projection-suggestion"',
+                                         'class="cards projection-cards"', 'Show annual breakdown', 'id="debt-heading"',
+                                         'id="asset-heading"', 'id="projection-assumptions"')]
+        self.assertEqual(order, sorted(order))
+        for needle in ("Advanced: targets, rates, display units", "Avalanche vs snowball", "rate missing", "Rate missing for",
+                       "Planned only:", "With extra:", "Saved balance dates", "stale", "How this projection works"):
+            self.assertIn(needle, html, needle)
+
+    def test_hosted_inputs_hide_suggestions_and_observed_payments(self):
+        with closing(sqlite3.connect(self.path)) as db:
+            db.row_factory = sqlite3.Row
+            token = dict(token="t", section_for=server.section_for, places=server.places,
+                         today=server.date.today(), suggestions=False)
+            html = projections_ui.embed(db, "Household", "USD", **token)
+        self.assertNotIn("projection-suggestion", html)
+        self.assertNotIn("Observed:", html)
+        self.assertIn("projection-assumptions", html)
+
+    def test_no_duplicate_element_ids_on_the_page(self):
+        for target in ("/", "/?chart=projection", "/?view=Nanami&currency=EUR&chart=projection"):
+            ids = re.findall(r'\bid="([^"]+)"', self.get(target)[2])
+            self.assertEqual([i for i in set(ids) if ids.count(i) > 1], [], target)
 
 
 class Scoping(Base):

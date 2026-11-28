@@ -53,6 +53,8 @@ def main(mode, out):
                             return [document.documentElement.scrollHeight, document.documentElement.scrollWidth,
                                     b ? Math.round(b.bottom + scrollY) : null]; }""")
                         page.screenshot(path=str(out / f"{mode}-{shot}-{label}.png"), full_page=True)
+                        page.evaluate("window.scrollTo(0, 0)")
+                        page.screenshot(path=str(out / f"{mode}-{shot}-{label}-first-screen.png"))
                         print(f"{mode:6} {shot:28} {label:7} scrollHeight={metrics[0]:5} scrollWidth={metrics[1]:4} "
                               f"chartBottom={metrics[2]}")
                     page.close()

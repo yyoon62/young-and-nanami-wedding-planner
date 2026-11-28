@@ -44,6 +44,28 @@ def _scope_error(page, status, message, view="Household"):
                                  f'<p><a href="{escape(projection_url(view))}">Choose a projection</a></p>'), None)
 
 
+def gather(db, view, currency, rows, *, places, today, suggestions, section_for):
+    """Everything one panel needs, read inside the caller's transaction (hosted: no transaction-derived data)."""
+    scale = places(currency)
+    assumptions = load_assumptions(db, view, currency, scale)
+    suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
+    debts = (debt_rows(db, view, currency), load_terms(db), asset_rows(db, view, currency))
+    observed = (observed_payments(db, view, currency, today, [r[0] for r in debts[0]])
+                if suggestions else None)     # transaction-derived: never when hosted
+    return dict(assumptions=assumptions, scale=scale, suggestion=suggestion,
+                debts=(debts[0], debts[1], debts[2], section_for, today), observed=observed,
+                seed=starting_balances(rows, currency, section_for, today))
+
+
+def embed(db, view, currency, *, token, section_for, places, today, suggestions, attempted=None, errors=None,
+          history=None):
+    """The Projection panel for the Accounts page, for one (view, currency); no page chrome, no selector."""
+    rows = eligible_accounts(db, view)
+    g = gather(db, view, currency, rows, places=places, today=today, suggestions=suggestions, section_for=section_for)
+    return _panel(view, currency, g["seed"], g["assumptions"], g["scale"], token, attempted=attempted, errors=errors,
+                  suggestion=g["suggestion"], debts=g["debts"], observed=g["observed"], history=history)
+
+
 def projection_get(db_path, target, *, page, token, people, section_for, places, today, suggestions=False):
     """After the server's GET access gate. Returns (status, text, location)."""
     try:
@@ -62,15 +84,11 @@ def projection_get(db_path, target, *, page, token, people, section_for, places,
         if len(currency) != 1 or currency[0] not in currencies:
             return _scope_error(page, 400, "Currency is unavailable in this view.", view)
         currency = currency[0]
-        assumptions = load_assumptions(db, view, currency, places(currency))
-        suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
-        debts = (debt_rows(db, view, currency), load_terms(db), asset_rows(db, view, currency))
-        observed = (observed_payments(db, view, currency, today, [r[0] for r in debts[0]])
-                    if suggestions else None)     # transaction-derived: never when hosted
-    seed = starting_balances(rows, currency, section_for, today)
-    return 200, _page(page, _panel(view, currency, currencies, people, seed, assumptions,
-                                  places(currency), token, suggestion=suggestion,
-                                  debts=(debts[0], debts[1], debts[2], section_for, today), observed=observed)), None
+        g = gather(db, view, currency, rows, places=places, today=today, suggestions=suggestions,
+                   section_for=section_for)
+    return 200, _page(page, _selector(view, currency, currencies, people) + _panel(
+        view, currency, g["seed"], g["assumptions"], g["scale"], token, suggestion=g["suggestion"],
+        debts=g["debts"], observed=g["observed"])), None
 
 
 def projection_post(db_path, data, *, page, token, people, section_for, places, today, suggestions=False):
@@ -91,15 +109,11 @@ def projection_post(db_path, data, *, page, token, people, section_for, places, 
         if not errors:
             save_assumptions(db, view, currency, assumptions)
             return 303, "", projection_url(view, currency)
-        saved = load_assumptions(db, view, currency, scale)
-        suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
-        debts = (debt_rows(db, view, currency), load_terms(db), asset_rows(db, view, currency))
-        observed = (observed_payments(db, view, currency, today, [r[0] for r in debts[0]])
-                    if suggestions else None)
-    seed = starting_balances(rows, currency, section_for, today)
-    return 422, _page(page, _panel(view, currency, currencies, people, seed, saved, scale, token,
-                                  attempted=data, errors=errors, suggestion=suggestion,
-                                  debts=(debts[0], debts[1], debts[2], section_for, today), observed=observed)), None
+        g = gather(db, view, currency, rows, places=places, today=today, suggestions=suggestions,
+                   section_for=section_for)
+    return 422, _page(page, _selector(view, currency, currencies, people) + _panel(
+        view, currency, g["seed"], g["assumptions"], g["scale"], token, attempted=data, errors=errors,
+        suggestion=g["suggestion"], debts=g["debts"], observed=g["observed"])), None
 
 
 def _apply_suggestion(db, data, view, currency, scale, today, suggestions, page):
@@ -124,13 +138,15 @@ def _apply_suggestion(db, data, view, currency, scale, today, suggestions, page)
 
 
 def _suggestion_card(view, currency, token, suggestion, assumptions, scale):
-    """Dated basis for the suggested income/spending; nothing here is saved by viewing it."""
+    """Dated basis for the suggested income/spending; nothing here is saved by viewing it.
+
+    L29: one visible line + the apply button; the months table, basis and notes are in a collapsed ℹ️ (nothing dropped)."""
     if suggestion is None:
         return ""
     money = lambda value: escape(currency) + " " + tx_money(value, currency)
     if suggestion.income is None:
-        return ('<section aria-labelledby="projection-suggestion"><h2 id="projection-suggestion">'
-                'Suggested from your transactions</h2>'
+        return ('<section class="nw-suggest" aria-labelledby="projection-suggestion"><h2 id="projection-suggestion">'
+                '💡 Suggested from your transactions</h2>'
                 f'<p class="notice" role="note">No suggestion yet: {escape(suggestion.reason)}</p></section>')
     rows = "".join(f'<tr><th scope="row">{escape(month)}</th><td class="num">{money(c)}</td>'
                    f'<td class="num">{money(sp)}</td></tr>' for month, c, sp in suggestion.monthly)
@@ -149,26 +165,27 @@ def _suggestion_card(view, currency, token, suggestion, assumptions, scale):
     notes.append("Loan and card payments leaving checking still count as spending unless marked Transfer. "
                  "Remove debt payments and contributions you model below to avoid counting them twice.")
     same = (assumptions.income == suggestion.income and assumptions.spending == suggestion.spending)
+    apply = ('<p class="history-range">Already saved as your income and spending.</p>' if same else
+             f'<form method="post" action="{PATH}" class="nw-apply"><input type="hidden" name="token" value="{escape(token)}">'
+             f'<input type="hidden" name="view" value="{escape(view)}">'
+             f'<input type="hidden" name="currency" value="{escape(currency)}">'
+             f'<input type="hidden" name="apply" value="suggestion">'
+             f'<input type="hidden" name="suggest_income" value="{format(suggestion.income, "f")}">'
+             f'<input type="hidden" name="suggest_spending" value="{format(suggestion.spending, "f")}">'
+             '<button>Use these as my income and spending</button></form>')
     return (
-        '<section aria-labelledby="projection-suggestion"><h2 id="projection-suggestion">'
-        'Suggested from your transactions</h2>'
+        '<section class="nw-suggest" aria-labelledby="projection-suggestion"><h2 id="projection-suggestion">'
+        '💡 Suggested from your transactions</h2>'
+        f'<p class="nw-sline">Average monthly credits (not verified income): <strong>{money(suggestion.income)}</strong> · '
+        f'Average monthly spending: <strong>{money(suggestion.spending)}</strong></p>{apply}'
+        '<details class="nw-info"><summary>ℹ️ Months, basis and notes</summary>'
         f'<p>Basis: <strong>{escape(suggestion.basis)}</strong> · cash and credit-card accounts only · '
         'transfers excluded. Not applied until you choose to.</p>'
         '<div class="table-wrap"><table class="acct-table"><thead><tr><th scope="col">Month</th>'
         '<th scope="col" class="num">Credits</th><th scope="col" class="num">Spending</th></tr></thead>'
         f'<tbody>{rows}</tbody></table></div>'
-        f'<p>Average monthly credits (not verified income): <strong>{money(suggestion.income)}</strong> · '
-        f'Average monthly spending: <strong>{money(suggestion.spending)}</strong></p>'
         + "".join(f'<p class="history-range">{escape(n)}</p>' for n in notes)
-        + (f'<p class="history-range">Already saved as your income and spending.</p>' if same else
-           f'<form method="post" action="{PATH}"><input type="hidden" name="token" value="{escape(token)}">'
-           f'<input type="hidden" name="view" value="{escape(view)}">'
-           f'<input type="hidden" name="currency" value="{escape(currency)}">'
-           f'<input type="hidden" name="apply" value="suggestion">'
-           f'<input type="hidden" name="suggest_income" value="{format(suggestion.income, "f")}">'
-           f'<input type="hidden" name="suggest_spending" value="{format(suggestion.spending, "f")}">'
-           '<button>Use these as my income and spending</button></form>')
-        + '</section>')
+        + '</details></section>')
 
 
 def _options(choices, selected):
@@ -241,7 +258,7 @@ def _form(view, currency, scale, token, values, errors):
     advanced_open = any(n in errors for n in advanced_names) or any(non_default(n) for n in advanced_names)
     return (
         f'<section aria-labelledby="projection-assumptions"><h2 id="projection-assumptions">Assumptions</h2>{summary}'
-        f'<form class="edit-form projection-form" method="post" action="{PATH}">'
+        f'<form class="edit-form projection-form" method="post" action="{PATH}#projection-assumptions">'
         f'<input type="hidden" name="token" value="{escape(token)}">'
         f'<input type="hidden" name="view" value="{escape(view)}">'
         f'<input type="hidden" name="currency" value="{escape(currency)}">'
@@ -565,8 +582,10 @@ def _debt_section(plan, entries, run, a, currency, scale, money, observed=None):
     return "".join(parts)
 
 
-def _panel(view, currency, currencies, people, seed, assumptions, scale, token, *, attempted=None, errors=None,
-           suggestion=None, debts=None, observed=None):
+def _panel(view, currency, seed, assumptions, scale, token, *, attempted=None, errors=None,
+           suggestion=None, debts=None, observed=None, history=None):
+    """The Projection panel. L29 layout: a short status line, a budget line, one collapsed ℹ️, the whole chart,
+    then warnings, the suggestion, start-vs-projected cards and the long tables. Same numbers as before."""
     money = lambda value: _money(value, currency, scale)
     plan = entries = run = None
     if debts is not None:
@@ -582,23 +601,25 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
         date_range = f'<time>{seed.oldest}</time>'
         if seed.oldest != seed.newest:
             date_range += f' to <time>{seed.newest}</time> (mixed dates)'
-        asof = f'<p>Saved balance dates: {date_range}. {seed.count} included account(s).</p>'
+        asof = f'<p class="nw-line nw-asof">📅 Saved balance dates: {date_range}. {seed.count} included account(s).'
         if seed.stale_count:
-            asof += (f'<p class="history-backdated">{seed.stale_count} included balance(s) are stale '
-                     f'(older than {STALE_DAYS} days).</p>')
+            asof += (f' <span class="nw-stale">⚠️ {seed.stale_count} included balance(s) are stale '
+                     f'(older than {STALE_DAYS} days).</span>')
+        asof += '</p>'
     else:
-        asof = '<p class="history-backdated">No saved balances in this view. This USD scenario starts from zero.</p>'
+        asof = ('<p class="nw-line nw-asof history-backdated">No saved balances in this view. '
+                'This USD scenario starts from zero.</p>')
+    warnings = []
     if seed.unclassified_count:
-        asof += (f'<p class="history-backdated">{seed.unclassified_count} asset account(s) in sections without '
-                 'a modeled asset rate are included in net worth, held flat in nominal terms, '
-                 'and not treated as spendable cash.</p>')
-    gap = ""
+        warnings.append(f'<p class="history-backdated">{seed.unclassified_count} asset account(s) in sections without '
+                        'a modeled asset rate are included in net worth, held flat in nominal terms, '
+                        'and not treated as spendable cash.</p>')
     if points[-1].cumulative_gap:
         first = next(point.month for point in points if point.cumulative_gap)
-        gap = (f'<p class="notice" role="note"><strong>Unfunded spending begins in month {first}:</strong> '
-               f'{money(points[-1].cumulative_gap)} cumulative by year {assumptions.years} (nominal). '
-               'The projection shows account balances, not a funded plan. Unpaid spending is tracked separately '
-               'and is not financed, carried forward as debt or deducted from net worth.</p>')
+        warnings.append(f'<p class="notice" role="note"><strong>Unfunded spending begins in month {first}:</strong> '
+                        f'{money(points[-1].cumulative_gap)} cumulative by year {assumptions.years} (nominal). '
+                        'The projection shows account balances, not a funded plan. Unpaid spending is tracked separately '
+                        'and is not financed, carried forward as debt or deducted from net worth.</p>')
     unit_label = (f"Nominal {currency}" if assumptions.mode == "nominal"
                   else f"Inflation-adjusted {currency} in today’s purchasing power")
     values = assumptions.form_values()
@@ -606,21 +627,36 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
         if not getattr(assumptions, name):
             values[name] = ""
     surplus = assumptions.surplus
-    budget = (f'<p>Monthly take-home income: <strong>{money(assumptions.income)}</strong> · Monthly spending: '
-              f'<strong>{money(assumptions.spending)}</strong> · Monthly net savings before modeled allocations '
-              f'(income minus spending): <strong>{money(surplus)}</strong> (nominal).</p>')
+    budget = (f'<p class="nw-line nw-budget">💰 Monthly take-home income: <strong>{money(assumptions.income)}</strong> · '
+              f'💸 Monthly spending: <strong>{money(assumptions.spending)}</strong> · '
+              f'{"🟢" if surplus >= 0 else "🔴"} Monthly net savings: <strong>{money(surplus)}</strong> · '
+              f'{escape(unit_label)}</p>')
     debt_note = _debt_note(seed.balances.debt if plan is None else plan.pool, assumptions.debt_target, surplus, money)
+    service = ""
+    if debt_note.startswith("<p>"):          # the plain debt-service sentence is fine print; warnings stay visible
+        service, debt_note = f"<li>{debt_note[3:-4]}</li>", ""
+    info = ('<details class="nw-info nw-top-info"><summary>ℹ️ How to read this</summary><ul>'
+            '<li><strong>Illustrative projection only:</strong> not financial advice or a forecast. '
+            'The model uses saved balances; visiting this page does not refresh them.</li>'
+            '<li>One currency at a time; no conversion. The default uses the most included accounts '
+            '(ties: USD first, then alphabetical). Household includes Unspecified and counts Joint once; '
+            'each individual view includes their own and Joint accounts.</li>'
+            '<li>Monthly net savings before modeled allocations (income minus spending), in nominal terms.</li>'
+            f'<li>Units: {escape(unit_label)}.</li>{service}</ul></details>')
+    failed = ('<p class="nw-line nw-failed">⚠️ Not saved: fix the marked fields in '
+              '<a href="#projection-assumptions">Assumptions</a>. Results still use the previous assumptions.</p>'
+              if errors else "")
     debt_section = _debt_section(plan, entries, run, assumptions, currency, scale, money, observed) if plan is not None else ""
     return (
-        _selector(view, currency, currencies, people)
-        + '<p class="notice"><strong>Illustrative projection only:</strong> not financial advice or a forecast. '
-          'The model uses saved balances; visiting this page does not refresh them.</p>'
+        '<section class="history nw-proj" aria-labelledby="projection-heading"><h2 id="projection-heading" class="sr">'
+        'Net worth projection</h2>'
+        + failed + asof + budget + info
+        + '<div class="net-chart">' + _chart(points, money, assumptions.years) + '</div>'
+        + debt_note + "".join(warnings)
+        + '</section>'
         + _suggestion_card(view, currency, token, suggestion, assumptions, scale)
-        + '<section class="history" aria-labelledby="projection-heading"><h2 id="projection-heading">'
-          'Net worth projection</h2>'
-        + asof + budget + debt_note + gap + f'<p>{escape(unit_label)}.</p>'
+        + '<section class="history nw-detail" aria-label="Start and projected balances">'
         + _cards(points[0].display, points[-1].display, assumptions.years, CARD_METRICS + extra_metrics, money)
-        + _chart(points, money, assumptions.years)
         + _annual(points, ANNUAL_METRICS + extra_metrics, money, unit_label)
         + '</section>'
         + debt_section
