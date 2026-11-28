@@ -340,7 +340,7 @@ class TransactionsTest(Fixture, unittest.TestCase):
         rendered = render_transactions(self.db, "month=2026-12&currency=JPY&q=no-such-list-row",
                                        token=TOKEN, allowed_views={"Young"})
         for shown in ("Spending by category", "Uncategorized", "Food", "$42.00", "¥300", "Income",
-                      "includes refunds", "Overspent", "not measured savings", ">partial</span>",
+                      "includes refunds", "Overspent", "not measured savings",
                       "No transactions match"):
             self.assertIn(shown, rendered)
         self.assertIn('<span class="cur" aria-current="page">Young</span>', rendered)

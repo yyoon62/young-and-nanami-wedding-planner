@@ -165,6 +165,37 @@ class BrowserTx(unittest.TestCase):
             expect(page.locator("nav[aria-label=Pending] a[aria-current=page]")).to_have_count(1)
             self.assertEqual(self.errors, [])
 
+    def test_period_tiles_are_links_that_change_totals_list_and_survive_reload_and_old_month_links_work(self):
+        seed_fictional(self.path)
+        with block_network(allow_loopback=True), running(self.path) as origin, self.browser() as page:
+            page.goto(origin + "/transactions")
+            tiles = page.locator("nav[aria-label=Period]")
+            self.assertEqual(tiles.locator("a").all_inner_texts(), ["30d", "90d", "6m", "YTD", "1y", "All"])
+            expect(tiles.locator("a[aria-current=page]")).to_have_text("30d")            # the default
+            self.assertEqual(page.locator("nav.month-nav").count(), 0)                    # no month stepper
+            usd = page.locator("article.tx-card", has=page.locator("small", has_text="USD"))
+            thirty = usd.locator(".tx-sum").inner_text()
+            with page.expect_navigation():
+                tiles.get_by_role("link", name="90d").click()
+            self.assertIn("period=90d", page.url)
+            expect(tiles.locator("a[aria-current=page]")).to_have_text("90d")
+            self.assertNotEqual(usd.locator(".tx-sum").inner_text(), thirty)              # a longer window, bigger totals
+            self.assertEqual(usd.locator("svg.stack").count(), 1)
+            page.reload()
+            expect(page.locator("nav[aria-label=Period] a[aria-current=page]")).to_have_text("90d")
+            with page.expect_navigation():
+                page.locator("nav[aria-label=Period]").get_by_role("link", name="All").click()
+            self.assertGreaterEqual(page.locator("tr.acct-row").count(), 14)
+            page.goto(origin + "/transactions?month=2026-10")                             # an old shared link
+            expect(page.locator("a.tx-monthchip")).to_have_text("📅 Oct 2026 ✕")
+            self.assertEqual(page.locator("nav[aria-label=Period] a[aria-current]").count(), 0)
+            self.assertEqual(page.locator("nav.month-nav").count(), 1)
+            with page.expect_navigation():
+                page.locator("a.tx-monthchip").click()
+            self.assertEqual(page.locator("nav.month-nav").count(), 0)
+            expect(page.locator("nav[aria-label=Period] a[aria-current=page]")).to_have_text("30d")
+            self.assertEqual(page.evaluate("document.documentElement.scrollWidth"), 1280)
+
     def override(self, description):
         with closing(sqlite3.connect(self.path)) as db:
             return db.execute("SELECT owner_override FROM account_transactions WHERE description=?",
@@ -249,8 +280,8 @@ class BrowserTx(unittest.TestCase):
             expect(usd.locator(".tx-sum")).to_contain_text(re.compile(r"💰 Income \$3,000\.00\s+💸 Spending \$2,380\.00"))
             self.assertNotIn("·", usd.locator(".tx-sum").inner_text())      # no dangling text dots at a wrap
             expect(usd.locator(".tx-sum")).to_contain_text("🟢 Saved $620.00")
-            expect(usd.locator(".partial-flag").first).to_have_text("so far, through 28 Nov")
-            self.assertEqual(usd.locator(".partial-flag").count(), 1)             # fetched from Aug 1: not "partial"
+            expect(usd.locator(".partial-flag").first).to_have_text("📅 Month in progress")
+            self.assertEqual(usd.locator(".partial-flag").count(), 1)             # fetched from Aug 1: no "Data from" note
             expect(page.locator("article.tx-card", has=page.locator("small", has_text="EUR")).locator(".tx-confirm")).to_have_count(0)
             total = page.locator("tr.acct-row").count()
             link = usd.get_by_role("link", name=re.compile("2 card payments to confirm · \\$1,500.00"))
@@ -263,7 +294,7 @@ class BrowserTx(unittest.TestCase):
             self.assertEqual(rows.count(), 2)
             for i in range(2):
                 self.assertIn("PAYMENT THANK YOU", rows.nth(i).inner_text())
-            expect(page.locator(".filter-chip")).to_contain_text("Showing card payments to confirm only")
+            expect(page.locator(".filter-chip", has_text="card payments")).to_contain_text("Showing card payments to confirm only")
             with page.expect_navigation():
                 page.get_by_role("link", name="Clear filter").click()
             self.assertNotIn("review=1", page.url)
@@ -282,7 +313,7 @@ class BrowserTx(unittest.TestCase):
             self.assertFalse(page.locator(".tx-info-body").is_visible())
             page.locator("details.tx-info > summary").click()
             expect(page.locator(".tx-info-body")).to_contain_text("the matching bank debit still counts as spending")
-            expect(page.locator(".tx-info-body")).to_contain_text("partial = an account has no or late data")
+            expect(page.locator(".tx-info-body")).to_contain_text("a linked account has no data before that date")
         with block_network(allow_loopback=True), running(self.path) as origin, \
                 self.browser({"width": 390, "height": 844}) as page:
             page.goto(origin + "/transactions?month=2026-11")

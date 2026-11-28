@@ -21,10 +21,16 @@ _GROUPS = (
         "suggestions only.",
         "A manual transfer choice overrides a merchant rule, which overrides automatic classification.")),
     ("Coverage", (
-        "partial = an account has no or late data for this month. “so far, through D Mon” = the month is still in "
-        "progress; nothing is extrapolated.",
-        "Requested windows do not prove institution completeness or retention. Current-month figures are "
-        "provisional. Excluded accounts do not contribute.")),
+        "📅 Data from 30 Aug only = a linked account has no data before that date, so the earlier days are not counted "
+        "and no comparison is shown. 📅 Month in progress = the month is not over; nothing is extrapolated. "
+        "📅 Data through D Mon = an account has not synced since then.",
+        "Requested windows do not prove institution completeness or retention. Current-month figures are provisional. "
+        "Excluded accounts do not contribute.")),
+    ("Periods", (
+        "30d, 90d, 6m, YTD and 1y are the days up to today (UTC); All starts at the first synced day. ▲▼ in a chip's "
+        "tooltip compares with the previous period of the same length, only where every linked account has that whole "
+        "period. An old month link shows that calendar month (✕ removes it). A long list shows the newest "
+        "500 rows; totals use every row.",)),
     ("Owners", (
         "👥 Individual views include joint accounts and any transaction you assigned to that person with the "
         "Young / Nanami pills (↺ resets it). An override survives a sync; on a pending row it is lost if the bank "
@@ -38,7 +44,7 @@ _GROUPS = (
         "excluded. Hover a chip for the comparison with last month (where fully fetched) and the average of up to 3 "
         "full months before it (needs at least two fully fetched months). Click a chip to filter the list.",
         "📅 Dates are the bank's posted date (UTC): an evening transaction in a western timezone, or a "
-        "local-midnight stamp east of UTC, can show a day off, and month filters use the same date.")),
+        "local-midnight stamp east of UTC, can show a day off, and period and month filters use the same date.")),
 )
 SYNC_NOTE = "🔄 Sync refreshes all linked accounts and shares the balance sync quota."
 

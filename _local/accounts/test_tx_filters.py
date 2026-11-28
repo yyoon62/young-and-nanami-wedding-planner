@@ -105,8 +105,8 @@ class Tabs(Fixture, unittest.TestCase):
         form = re.search(r'<form method="get" action="/transactions" class="tx-find" data-autofilter[^>]*>(.*?)</form>',
                          html, re.S).group(1)
         self.assertEqual(re.findall(r'<input type="hidden" name="(\w+)" value="([^"]*)"', form),
-                         [("month", "2026-11"), ("view", "Young"), ("currency", "USD"), ("pending", "0"), ("cat", ""),
-                          ("review", "")])
+                         [("period", "30d"), ("month", "2026-11"), ("view", "Young"), ("currency", "USD"),
+                          ("pending", "0"), ("cat", ""), ("review", "")])
         self.assertIn('<input type="search" name="q" value="shop"', form)
 
     def test_old_query_strings_still_work(self):

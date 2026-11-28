@@ -57,37 +57,37 @@ class Summary(Fixture, unittest.TestCase):
         self.assertNotIn("-$1,852.32", card)
         self.assertIn("⚠️ 1 card payment to confirm · $1,200.00</a>", card)
         self.assertNotIn("payments to confirm", card)
-        self.assertRegex(card, r'<span class="partial-flag"[^>]*>so far, through 15 Dec</span>')
-        self.assertNotIn(">partial</span>", card)             # both accounts are covered through today
+        self.assertRegex(card, r'<span class="partial-flag"[^>]*>📅 Month in progress</span>')
+        self.assertNotIn("Data from", card)                   # both accounts are fetched from before the month began
         for old in ("Net saved estimate", "Card credits under review", "Income / credits"):
             self.assertNotIn(old, card)
 
-    def test_partial_chip_means_missing_coverage_not_just_an_unfinished_month(self):
+    def test_notes_say_exactly_why_the_numbers_may_be_incomplete_and_only_when_it_applies(self):
         self.seed_usd()
-        self.assertNotIn(">partial</span>", self.html())
+        html = self.html()
+        self.assertNotIn("Data from", html[html.index('<div class="cards">'):html.index("<section><h2>Transactions")])
         start = self.db.execute("SELECT start_at FROM transaction_coverage LIMIT 1").fetchone()[0] + 80 * 86400
         with self.db:
             self.db.execute("UPDATE transaction_coverage SET start_at=? WHERE account_id=2", (start,))   # card fetched later
         card = self.card(self.html(), "USD")
-        self.assertRegex(card, r'<span class="partial-flag"[^>]*>so far, through 15 Dec</span>')
-        self.assertRegex(card, r'<span class="partial-flag"[^>]*>partial</span>')
+        self.assertRegex(card, r'<span class="partial-flag"[^>]*>📅 Month in progress</span>')
+        self.assertRegex(card, r'<span class="partial-flag"[^>]*>📅 Data from 5 Dec only</span>')
         with self.db:
             self.db.execute("DELETE FROM transaction_coverage WHERE account_id=2")                      # never fetched
-        self.assertRegex(self.card(self.html(), "USD"), r'<span class="partial-flag"[^>]*>partial</span>')
+        self.assertRegex(self.card(self.html(), "USD"), r'📅 Some accounts have no synced data yet')
 
-    def test_past_month_without_full_coverage_says_partial_and_no_so_far_chip(self):
+    def test_past_month_notes_data_from_only_when_data_starts_inside_it(self):
         self.account("Bank")
         self.add("Bank", tx("n", "2026-11-20", "-12.00", "Nov purchase"), tx("o", "2026-11-25", "5.00", "Nov refund"))
         self.sync()
         card = self.card(self.html("month=2026-11"), "USD")
-        self.assertNotIn("so far", card)
-        self.assertNotIn(">partial</span>", card)                   # fetched from Sep 16 to Dec 15
+        self.assertNotIn("📅", card)                                # fetched from Sep 16 to Dec 15: nothing to say
         with self.db:
             self.db.execute("UPDATE transaction_coverage SET start_at=?", (self.db.execute(
                 "SELECT end_at FROM transaction_coverage").fetchone()[0] - 40 * 86400,))                  # starts Nov 5
         card = self.card(self.html("month=2026-11"), "USD")
-        self.assertRegex(card, r'<span class="partial-flag"[^>]*>partial</span>')
-        self.assertNotIn("so far", card)
+        self.assertRegex(card, r'<span class="partial-flag"[^>]*>📅 Data from 5 Nov only</span>')
+        self.assertNotIn("Month in progress", card)
 
     def test_saved_even_and_plural(self):
         self.seed_usd(credits=("3000.00",), spends=("-1000.00",), reviews=("10.00", "20.50"))

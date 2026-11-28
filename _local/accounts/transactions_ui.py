@@ -17,14 +17,15 @@ from urllib.parse import parse_qsl, urlencode
 
 from html import escape as _esc  # noqa: F401
 from decimal import Decimal
+from tx_range import DEFAULT_PERIOD, PERIODS, comparisons as period_comparisons, earliest_date, resolve_span
 from tx_bars import CURRENT, legend_chip, ordered, stacked_bar, tooltip
-from tx_filters import currency_tabs, find_form, pending_toggle, view_tabs
+from tx_filters import currency_tabs, find_form, pending_toggle, period_tabs, view_tabs
 from tx_info import info_box, notes_html
 from tx_money import fmt, sign_of
 from tx_periods import month_add, month_label, spending_comparison
 from logos import cached_logo, domain_for, fallback_svg
 from transactions import (CURRENCY, VIEWS, _midnight, category_context, edit_transaction, manual_index,
-                          month_dates, monthly_snapshot)
+                          month_dates, period_snapshot)
 from pathlib import Path
 from tx_categories import default_emoji, is_transfer_category, list_categories
 from tx_owners import PEOPLE, effective, effective_owner_of
@@ -35,7 +36,8 @@ from tx_classifier import (enabled as classifier_enabled, get_setting, load_key,
 TRANSACTIONS = "/transactions"
 EDIT = TRANSACTIONS + "/edit"
 SYNC = TRANSACTIONS + "/sync"
-_FILTERS = ("month", "view", "currency", "q", "pending", "cat", "review")
+_FILTERS = ("period", "month", "view", "currency", "q", "pending", "cat", "review")
+ROW_CAP = 500        # a long period (All) lists the newest 500 rows and says so; totals and bars use every row
 _MOVED = re.compile(r"(Young|Nanami|Unspecified)-([1-9][0-9]{0,18})")   # one-shot GET note after an owner click, not a filter
 
 
@@ -65,24 +67,29 @@ def _params(raw, keys):
     return data
 
 
-def _filters(data, allowed_views, default_month):
+def _filters(data, allowed_views, default_month=None):
     view = data.get("view", next((v for v in VIEWS if v in allowed_views), "Household"))
     if view not in VIEWS:
         raise RouteProblem(400, "Unknown account view.")
     if view not in allowed_views:
         raise RouteProblem(403, "Account view not authorized.")
-    month = data.get("month", default_month)
-    try:
-        month_dates(month)
-    except ValueError as exc:
-        raise RouteProblem(400, str(exc)) from None
+    period = data.get("period", DEFAULT_PERIOD)
+    if period not in PERIODS:
+        raise RouteProblem(400, "Unknown period.")
+    month = data.get("month", "")
+    if month:                      # an old link: one calendar month (wins over the period)
+        try:
+            month_dates(month)
+        except ValueError as exc:
+            raise RouteProblem(400, str(exc)) from None
     currency, q, pending, category, review = (data.get(k, default) for k, default in
                                               (("currency", ""), ("q", ""), ("pending", "0"), ("cat", ""), ("review", "")))
     if ((currency and not CURRENCY.fullmatch(currency)) or len(q) > 100
             or (q and not q.isprintable()) or pending not in ("0", "1") or review not in ("", "1")
             or len(category) > 48 or (category and not category.isprintable())):
         raise RouteProblem(400, "Invalid transaction filter.")
-    return dict(month=month, view=view, currency=currency, q=q, pending=pending, cat=category, review=review)
+    return dict(period=period, month=month, view=view, currency=currency, q=q, pending=pending, cat=category,
+                review=review)
 
 
 def _hidden(data, **extra):
@@ -95,7 +102,12 @@ def _option(value, label, chosen):
 
 
 def _location(filters):
-    return TRANSACTIONS + "?" + urlencode(filters)
+    keep = dict(filters)
+    if keep.get("month"):
+        keep.pop("period", None)       # an old month= link: the month decides, no period is written
+    else:
+        keep.pop("month", None)
+    return TRANSACTIONS + "?" + urlencode(keep)
 
 
 def _stamp(stamp):
@@ -281,17 +293,12 @@ def _category_cell(r, f, token, categories, *, up, opened, attempt, error):
             f'{_chip_label(r)} ▾</summary>{menu}</details>')
 
 
-def _summary_card(currency, t, cmp, incomplete, f):
+def _summary_card(currency, t, cmp, f):
     """Opening tag + compact per-currency summary; the caller appends the bars and </article>."""
     net = sign_of(t.net, currency)
     label = "🟢 Saved" if net > 0 else "🔴 Overspent" if net < 0 else "⚪ Even"
-    chips = ""
-    if cmp.partial.startswith("so far"):
-        chips += (f' <span class="partial-flag" title="The month is still in progress; nothing is extrapolated">'
-                  f'{escape(cmp.partial)}</span>')
-    if incomplete:
-        chips += (' <span class="partial-flag" title="Not every linked account has fetched this whole month, '
-                  'so the totals may be incomplete">partial</span>')
+    chips = "".join(f' <span class="partial-flag" title="Only the days with synced data are counted; nothing is '
+                    f'extrapolated">{escape(n)}</span>' for n in cmp.notes)
     line = (f'<div class="tx-sum"><span title="Credits including refunds; not verified income">💰 Income '
             f'<strong>{fmt(t.credits, currency)}</strong></span> '
             f'<span title="Pending, transfers and card credits under review are excluded">💸 Spending '
@@ -312,7 +319,7 @@ def _summary_card(currency, t, cmp, incomplete, f):
 
 def _short_location(f):
     """The page URL with only the non-default filters written (month and view always)."""
-    keep = {k: v for k, v in f.items() if k in ("month", "view") or v not in ("", "0")}
+    keep = {k: v for k, v in f.items() if k == "view" or (v not in ("", "0") and (k != "period" or v != DEFAULT_PERIOD))}
     return f"{TRANSACTIONS}?{urlencode(keep)}"
 
 
@@ -353,18 +360,17 @@ def _moved_note(moved, f, allowed_views):
 
 def _bars(cmp, f, totals):
     """Spending by category: ONE stacked bar, then a legend of filter chips (active one highlighted, ✕ clears it).
-    The comparison with last month / the 3-month mean is in each chip's tooltip."""
+    The comparison with the previous period of the same length is in each chip's tooltip."""
     c = cmp.currency
     if not cmp.current:
         return '<div class="acct-sub">📊 No posted spending reported.</div>'
     total = sum(cmp.current.values(), Decimal(0))
-    prev_label = f"last month ({month_label(cmp.prev_month)})" if cmp.prev is not None else ""
-    avg_label = (f"{len(cmp.avg_months)}-month average" if cmp.avg is not None else "")
+    prev_label = f"vs {cmp.prev_span.label}" if cmp.prev is not None else ""
     chips = []
     for name, amount in ordered(cmp.current):
         active = f["cat"] == name and f["currency"] == c
         chips.append(legend_chip(name, amount, total, c, _location(dict(f, cat=name, currency=c)), active,
-                                 tooltip(name, amount, total, c, cmp.prev, cmp.avg, prev_label, avg_label)))
+                                 tooltip(name, amount, total, c, cmp.prev, None, prev_label, "")))
     if f["cat"] and f["currency"] == c:
         chips.append(f'<a class="tx-leg clear" href="{escape(_location(dict(f, cat="", currency="")))}" '
                      f'title="Show every category again">✕ Clear</a>')
@@ -395,27 +401,31 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
     """Return fragment for parent page()/send(); read DB in a single parent snapshot."""
     today = today or datetime.now(timezone.utc).date()
     data = _params(query, set(_FILTERS) | {"moved", "edit"})
-    f = _filters(data, allowed_views, today.isoformat()[:7])
+    f = _filters(data, allowed_views)
     moved = _moved_note(data.get("moved"), f, allowed_views)
     if open_row is None and re.fullmatch(r"[1-9][0-9]{0,18}", data.get("edit", "")):
         open_row = int(data["edit"])        # the drawer is rendered only for this row: pages stay small
     context = category_context(db)
-    snap = monthly_snapshot(db, f["month"], f["view"], show_pending=f["pending"] == "1",
-                            household_matching="Household" in allowed_views, context=context)
+    span = resolve_span(f, today, earliest_date(db))
+    snap = period_snapshot(db, span.start, span.end, f["view"], show_pending=f["pending"] == "1",
+                           household_matching="Household" in allowed_views, context=context)
     categories, manual = list_categories(db), manual_index(db)
     attempt = attempt or {}
     currencies = sorted({r["currency"] for r in snap.coverage} | ({f["currency"]} - {""}))
-    current_month = today.isoformat()[:7]
-    nav_args = lambda month: _location(dict(f, month=month))
-    next_link = (f'<a class="month-step" href="{escape(nav_args(month_add(f["month"], 1)))}" rel="next">'
-                 f'{escape(month_label(month_add(f["month"], 1)))} →</a>' if f["month"] < current_month
-                 else '<span class="month-step off">Current month</span>')
-    search = (
-        f'<nav class="month-nav" aria-label="Month"><a class="month-step" href="{escape(nav_args(month_add(f["month"], -1)))}" '
-        f'rel="prev">← {escape(month_label(month_add(f["month"], -1)))}</a>'
-        f'<strong>{escape(month_label(f["month"]))}</strong>{next_link}</nav>'
-        '<div class="tx-bar">' + view_tabs(f, allowed_views, _location) + currency_tabs(f, currencies, _location)
-        + pending_toggle(f, _location) + find_form(f, TRANSACTIONS, _hidden) + '</div>')
+    stepper = ""
+    if f["month"]:                         # an old month= link: the month stepper and a removable chip
+        nav_args = lambda month: _location(dict(f, month=month))
+        current_month = today.isoformat()[:7]
+        next_link = (f'<a class="month-step" href="{escape(nav_args(month_add(f["month"], 1)))}" rel="next">'
+                     f'{escape(month_label(month_add(f["month"], 1)))} →</a>' if f["month"] < current_month
+                     else '<span class="month-step off">Current month</span>')
+        stepper = (
+            f'<nav class="month-nav" aria-label="Month"><a class="month-step" href="{escape(nav_args(month_add(f["month"], -1)))}" '
+            f'rel="prev">← {escape(month_label(month_add(f["month"], -1)))}</a>'
+            f'<strong>{escape(month_label(f["month"]))}</strong>{next_link}</nav>')
+    search = (stepper + '<div class="tx-bar">' + period_tabs(f, _location) + view_tabs(f, allowed_views, _location)
+              + currency_tabs(f, currencies, _location) + pending_toggle(f, _location)
+              + find_form(f, TRANSACTIONS, _hidden) + '</div>')
     sync = ""
     if can_sync and "Household" in allowed_views:
         sync = (f'<form method="post" action="{SYNC}" class="drawer-form">'
@@ -433,26 +443,18 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
             state = "Not yet fetched" if r["linked"] else "Not linked; transaction data unavailable"
         coverage.append(f'<li>{escape(r["institution"])} · {escape(r["nickname"])}'
                         f' ({escape(r["currency"])}) — {state}</li>')
-    comparisons = spending_comparison(db, f["month"], f["view"], household_matching="Household" in allowed_views,
-                                      today=today, context=context, snapshot=snap)
+    comparisons = period_comparisons(db, span, f["view"], household_matching="Household" in allowed_views,
+                                     today=today, context=context, snapshot=snap)
     totals = []
     for currency, t in sorted(snap.totals.items()):
-        rows = [r for r in snap.coverage if r["currency"] == currency]
-        if comparisons[currency].partial.startswith("so far"):
-            # An in-progress month is never "covered" (it is not over); that is what the dated chip says. "partial"
-            # is for an account that has not fetched from the first of the month, or not at all.
-            lo = _midnight(month_dates(f["month"])[0])
-            incomplete = any(r["start_at"] is None or r["start_at"] > lo for r in rows)
-        else:
-            incomplete = not all(r["covered"] for r in rows)
-        totals.append(_summary_card(currency, t, comparisons[currency], incomplete, f)
+        totals.append(_summary_card(currency, t, comparisons[currency], f)
                       + _bars(comparisons[currency], f, t) + '</article>')
     if not totals:
         summary = "<p>No posted data with sufficient coverage to report a zero.</p>"
     else:
         summary = '<div class="cards">' + "".join(totals) + "</div>" + notes_html()
     if not any(not r["pending"] for r in snap.rows) and totals:
-        summary += '<p class="acct-sub">No posted transactions reported for this month in this view.</p>'
+        summary += '<p class="acct-sub">No posted transactions reported for this period in this view.</p>'
 
     rows = []
     q = f["q"].casefold().strip()
@@ -469,6 +471,8 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         return f["review"] != "1" or r["flow"] == "Review card credit"
 
     shown_rows = [r for r in snap.rows if listed(r)]
+    hidden_rows = max(0, len(shown_rows) - ROW_CAP)
+    shown_rows = shown_rows[:ROW_CAP]
     for index, r in enumerate(shown_rows):
         when = escape(r["posted_date"] or r["pending_date"])
         when_title = "Pending · provider or observed date" if r["pending"] else "Posted"
@@ -507,6 +511,9 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         '<th>Transaction</th><th>Owner</th><th>Category</th><th class="num">Amount</th>'
         '<th><span class="sr">Edit</span></th></tr></thead><tbody>'
         + "".join(rows) + "</tbody></table></div>" if rows else "<p>No transactions match this list.</p>")
+    if hidden_rows:
+        table += (f'<p class="acct-sub">Showing the newest {ROW_CAP:,} transactions; {hidden_rows:,} older ones are in '
+                  'the totals but not listed. Pick a shorter period or search to narrow it.</p>')
     alert = f'<p class="notice" role="alert">{escape(error)}</p>' if error and open_pick is None else ""
     shown_names = {n for c in comparisons.values() for n in c.current}
     cat_chip = (f'<p class="filter-chip">Category: {escape(f["cat"])} · '
@@ -617,12 +624,14 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     try:
         with db:
             db.execute("BEGIN IMMEDIATE")
-            if not edit_transaction(db, int(row), f["view"], f["month"], action=action,
+            span = resolve_span(f, datetime.now(timezone.utc).date(), earliest_date(db))
+            if not edit_transaction(db, int(row), f["view"], f["month"] or span.month or "2000-01", action=action,
+                                    span=(span.start, span.end),
                                     category=data.get("category", ""), transfer=data.get("transfer", ""),
                                     merchant_transfer=data.get("merchant_transfer", ""),
                                     new_category=data.get("new_category", ""), apply=data.get("apply") == "1",
                                     owner=data.get("owner", "")):
-                raise RouteProblem(404, "Transaction not found in this view and month.")
+                raise RouteProblem(404, "Transaction not found in this view and period.")
             moved = None
             if action in ("owner", "owner_reset") and f["view"] != "Household":
                 now = effective_owner_of(db, int(row))

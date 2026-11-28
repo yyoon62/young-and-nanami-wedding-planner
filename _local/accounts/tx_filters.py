@@ -4,6 +4,8 @@ inputs of the one small search form."""
 from html import escape
 
 from transactions import VIEWS
+from tx_periods import month_label
+from tx_range import NAMES, PERIODS, TILES
 
 PEOPLE = ("Young", "Nanami")
 
@@ -59,3 +61,15 @@ def find_form(f, action, hidden):
     return (f'<form method="get" action="{action}" class="tx-find" data-autofilter role="search">{hidden(keep)}'
             f'<input type="search" name="q" value="{escape(f["q"])}" maxlength="100" placeholder="🔎 Find" '
             'aria-label="Find a merchant, account or category" autocomplete="off"></form>')
+
+
+def period_tabs(f, loc):
+    """30d · 90d · 6m · YTD · 1y · All as links. With an old `month=` link no tile is lit and a removable chip names
+    the month (the stepper above it walks months)."""
+    tabs = "".join(_tab(TILES[key], loc(dict(f, period=key, month="")), not f["month"] and f["period"] == key,
+                        NAMES[key].capitalize()) for key in PERIODS)
+    chip = ""
+    if f["month"]:
+        chip = (f'<a class="filter-chip tx-monthchip" href="{escape(loc(dict(f, month="")))}" '
+                f'title="Back to the rolling periods">📅 {escape(month_label(f["month"]))} ✕</a>')
+    return f'<nav class="owner-tabs tx-tabs tx-periods" aria-label="Period">{tabs}</nav>{chip}'

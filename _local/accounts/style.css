@@ -522,6 +522,7 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
 .tx-tabs .off { color: var(--text-muted); opacity: .55; }
 .tx-tabs .cur { background: var(--rose-bg); color: var(--accent); font-weight: 700; }
 .owner-tabs.tx-tabs a[aria-current] { background: var(--rose-bg); color: var(--accent); font-weight: 700; }
+.tx-monthchip { text-decoration: none; font-size: .84rem; }
 .tx-find { flex: 1 1 11rem; max-width: 20rem; margin: 0 0 0 auto; }
 .tx-find input { min-height: 32px; margin: 0; padding: .2rem .7rem; font-size: .88rem; }
 /* Category chip menu (part 6): the Accounts .inline-pop / .sec-chip / .sec-menu, floated over the table. */

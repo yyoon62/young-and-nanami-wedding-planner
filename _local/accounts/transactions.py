@@ -478,9 +478,15 @@ def category_context(db):
 
 def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=False, context=None):
     """Caller owns a read snapshot and authorizes view/household_matching."""
+    start, end = month_dates(month)
+    return period_snapshot(db, start, end, view, show_pending=show_pending,
+                           household_matching=household_matching, context=context)
+
+
+def period_snapshot(db, start, end, view, *, show_pending=False, household_matching=False, context=None):
+    """The same snapshot over any UTC date range [start, end) (end exclusive); a month is just one range (L26-14)."""
     if view not in VIEWS:
         raise ValueError("Unknown account view.")
-    start, end = month_dates(month)
     scope = "Household" if household_matching else view
     # A competing edge of the other leg may be six days from the displayed row.
     # Three days of query padding can falsely turn an ambiguous edge into a pair.
@@ -643,7 +649,7 @@ ACTIONS = ("category", "rule", "transfer", "transfer_rule", "save", "add_categor
 
 
 def edit_transaction(db, row_id, view, month, *, action, category="", transfer="", merchant_transfer="",
-                     new_category="", apply=False, owner=""):
+                     new_category="", apply=False, owner="", span=None):
     """Apply a validated scoped edit inside the caller's BEGIN IMMEDIATE.
 
     `save` is the drawer's one-shot edit (category, optional new category, apply-to-merchant,
@@ -652,7 +658,7 @@ def edit_transaction(db, row_id, view, month, *, action, category="", transfer="
     """
     if view not in VIEWS:
         raise ValueError("Unknown account view.")
-    start, end = month_dates(month)
+    start, end = span or month_dates(month)       # span: the page's (start, end) dates when it shows a period
     if action not in ACTIONS:
         raise ValueError("Unknown transaction action.")
     if transfer not in ("", "auto", "yes", "no") or merchant_transfer not in ("", "none", "yes", "no"):

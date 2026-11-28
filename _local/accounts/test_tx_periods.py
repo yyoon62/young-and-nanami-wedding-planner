@@ -27,6 +27,10 @@ def contrast(fg, bg="#ffffff"):
     return (a + .05) / (b + .05)
 
 
+def cards(html):
+    return html[html.index('<div class="cards">'):html.index("<section><h2>Transactions")]
+
+
 class Months(Fixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
@@ -70,12 +74,13 @@ class Months(Fixture, unittest.TestCase):
         self.assertEqual(cmp["EUR"].current, {"Uncategorized": Decimal("50")})
         self.assertEqual(usd.partial, "so far, through 28 Nov")
         html = self.html()
-        self.assertRegex(html, r'<span class="partial-flag"[^>]*>so far, through 28 Nov</span>')
-        self.assertEqual(html.count("so far, through 28 Nov"), 2)     # chip on each currency card (USD, EUR)
+        self.assertRegex(html, r'<span class="partial-flag"[^>]*>📅 Month in progress</span>')
+        self.assertEqual(cards(html).count("📅 Month in progress"), 2)   # a note on each currency card (USD, EUR)
         dining = re.search(r'<a class="tx-leg [^"]*"[^>]*title="Dining: [^"]*">.*?</a>', html, re.S).group(0)
-        for text in ("Dining: $300.00", "38% of spending", "last month (Oct 2026): $200.00 (▲ $100.00)",
-                     "3-month average: $250.00 (▲ $50.00)", '<span class="amt">$300</span> · 38%'):
+        for text in ("Dining: $300.00", "38% of spending", "vs Oct 2026: $200.00 (▲ $100.00)",
+                     '<span class="amt">$300</span> · 38%'):
             self.assertIn(text, dining)
+        self.assertNotIn("average", dining)                      # the comparison is with the previous period only
         self.assertIn("Spending <strong>$800.00</strong>", html)
         self.assertIn("Spending <strong>€50.00</strong>", html)
         # Click-to-filter: a plain, reversible GET link; the list shows only that category and currency.
@@ -100,18 +105,11 @@ class Months(Fixture, unittest.TestCase):
         usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
         self.assertEqual(usd.avg_months, ("2026-10", "2026-09"))
         self.assertEqual(usd.avg["Dining"], Decimal("225.00"))
-        self.assertIn("2-month average: $225.00", self.html())
-        cover(self.db, "2026-09-16", "2026-11-28")  # only October is complete: no average, previous still shown
-        usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
-        self.assertIsNone(usd.avg)
-        self.assertEqual(usd.prev["Dining"], Decimal("200"))
-        html = self.html()
-        self.assertIn("last month (Oct 2026): $200.00 (▲ $100.00)", html)
-        self.assertNotIn("-month average", html)
-        cover(self.db, "2026-10-20", "2026-11-28")  # not even October: no comparison at all
-        usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
-        self.assertIsNone(usd.prev)
-        self.assertNotIn("last month (Oct", self.html())
+        self.assertIn("vs Oct 2026: $200.00", self.html())       # October is fully fetched: the comparison stays
+        cover(self.db, "2026-10-20", "2026-11-28")  # not even October: no comparison at all, and no invented zero
+        self.assertNotIn("vs Oct 2026", self.html())
+        cover(self.db, "2026-11-10", "2026-11-28")  # data starts inside the viewed month: the note says so
+        self.assertIn("📅 Data from 10 Nov only", cards(self.html()))
 
     def test_zero_spend_month_counts_and_unlinked_is_reported(self):
         self.put("USD", "2026-09-10", "-300", "Maple Cafe")

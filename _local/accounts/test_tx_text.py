@@ -45,7 +45,7 @@ OLD_SUBSTANCE = (
     "month filters use the same date", "Hover a chip for the comparison with last month", "unmatched card payments are excluded",
     "Click a chip to filter the list", "balance sync quota")
 NEW_SUBSTANCE = ("the matching bank debit still counts as spending until it is matched or marked Transfer too",
-                 "partial = an account has no or late data for this month", "so far, through D Mon",
+                 "📅 Data from 30 Aug only = a linked account has no data before that date", "📅 Month in progress",
                  "on a pending row it is lost if the bank changes the transaction id", "↺ resets it")
 
 
