@@ -18,6 +18,7 @@ from urllib.parse import parse_qsl, urlencode
 from html import escape as _esc  # noqa: F401
 from decimal import Decimal
 from tx_bars import CURRENT, legend_chip, ordered, stacked_bar, tooltip
+from tx_filters import currency_tabs, find_form, pending_toggle, view_tabs
 from tx_info import info_box, notes_html
 from tx_money import fmt, sign_of
 from tx_periods import month_add, month_label, spending_comparison
@@ -403,32 +404,18 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
                             household_matching="Household" in allowed_views, context=context)
     categories, manual = list_categories(db), manual_index(db)
     attempt = attempt or {}
-    views = "".join(_option(v, v, f["view"]) for v in VIEWS if v in allowed_views)
     currencies = sorted({r["currency"] for r in snap.coverage} | ({f["currency"]} - {""}))
-    currencies = _option("", "All currencies", f["currency"]) + "".join(
-        _option(c, c, f["currency"]) for c in currencies)
     current_month = today.isoformat()[:7]
     nav_args = lambda month: _location(dict(f, month=month))
     next_link = (f'<a class="month-step" href="{escape(nav_args(month_add(f["month"], 1)))}" rel="next">'
                  f'{escape(month_label(month_add(f["month"], 1)))} →</a>' if f["month"] < current_month
                  else '<span class="month-step off">Current month</span>')
-    names = "".join(_option(c, c, f["cat"]) for c in list(categories) + ["Uncategorized"]
-                    if c) + ("" if f["cat"] in categories or f["cat"] in ("", "Uncategorized")
-                             else _option(f["cat"], f["cat"], f["cat"]))
     search = (
         f'<nav class="month-nav" aria-label="Month"><a class="month-step" href="{escape(nav_args(month_add(f["month"], -1)))}" '
         f'rel="prev">← {escape(month_label(month_add(f["month"], -1)))}</a>'
         f'<strong>{escape(month_label(f["month"]))}</strong>{next_link}</nav>'
-        f'<form method="get" action="{TRANSACTIONS}" class="drawer-form" data-autofilter><div class="drawer-grid">'
-        f'<label>Month<input type="month" name="month" value="{f["month"]}" required></label>'
-        f'<label>View<select name="view">{views}</select></label>'
-        f'<label>Currency<select name="currency">{currencies}</select></label>'
-        f'<label>Category<select name="cat">{_option("", "All categories", f["cat"])}{names}</select></label>'
-        f'<label>Find<input name="q" maxlength="100" value="{escape(f["q"])}"'
-        ' placeholder="Merchant, account, category" autocomplete="off"></label>'
-        f'<label>Pending<select name="pending">{_option("0", "Hide", f["pending"])}'
-        f'{_option("1", "Show, if fetched", f["pending"])}</select></label>'
-        '<noscript><div class="drawer-left"><button>Apply filters</button></div></noscript></div></form>')
+        '<div class="tx-bar">' + view_tabs(f, allowed_views, _location) + currency_tabs(f, currencies, _location)
+        + pending_toggle(f, _location) + find_form(f, TRANSACTIONS, _hidden) + '</div>')
     sync = ""
     if can_sync and "Household" in allowed_views:
         sync = (f'<form method="post" action="{SYNC}" class="drawer-form">'
@@ -521,6 +508,10 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         '<th><span class="sr">Edit</span></th></tr></thead><tbody>'
         + "".join(rows) + "</tbody></table></div>" if rows else "<p>No transactions match this list.</p>")
     alert = f'<p class="notice" role="alert">{escape(error)}</p>' if error and open_pick is None else ""
+    shown_names = {n for c in comparisons.values() for n in c.current}
+    cat_chip = (f'<p class="filter-chip">Category: {escape(f["cat"])} · '
+                f'<a href="{escape(_location(dict(f, cat="")))}">✕ Clear</a></p>'
+                if f["cat"] and f["cat"] not in shown_names else "")      # an off-legend filter (e.g. an old link)
     review_chip = (f'<p class="filter-chip">Showing card payments to confirm only · '
                    f'<a href="{escape(_location(dict(f, review="", currency="")))}">Clear filter</a></p>'
                    if f["review"] == "1" else "")
@@ -530,7 +521,7 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         + alert + moved + search + sync + '<div class="tx-tools">' + _auto_checkbox(db, f, token)
         + info_box(coverage, can_sync=can_sync and "Household" in allowed_views,
                    categories_html=_categories_info(db, f, token)) + '</div>' + summary
-        + '</section><section><h2>Transactions</h2>' + review_chip + table + '</section>')
+        + '</section><section><h2>Transactions</h2>' + cat_chip + review_chip + table + '</section>')
 
 
 @dataclass(frozen=True)

@@ -140,17 +140,19 @@ class Months(Fixture, unittest.TestCase):
         html = self.html()
         self.assertNotIn("(UTC)</label>", html)
         self.assertNotIn("Month (UTC)", html)
-        self.assertIn("<label>Month<input", html)
+        self.assertNotIn("<label>Month<input", html)
         self.assertEqual(html.count("<button>Filter</button>"), 0)
-        self.assertRegex(html, r"<noscript><div class=\"drawer-left\"><button>Apply filters</button></div></noscript>")
-        self.assertIn("data-autofilter", html)
+        bar = html[html.index('<div class="tx-bar">'):html.index("</div>", html.index('<div class="tx-bar">'))]
+        self.assertNotIn("<select", bar)                                             # no dropdowns (L26-11)
+        self.assertNotIn('type="month"', html)
+        self.assertIn('class="tx-find" data-autofilter', html)                       # only the search box is a form
         self.assertIn('<script defer src="/dashboard.js"></script>', html)
         self.assertRegex(html, r'href="/transactions\?month=2026-10&amp;[^"]*" rel="prev">← Oct 2026')
         self.assertIn("Current month", html)  # no "next" past the current month
         self.assertRegex(self.html("month=2026-10"), r'href="/transactions\?month=2026-11&amp;[^"]*" rel="next">Nov 2026')
         self.assertEqual(month_add("2026-01", -1), "2025-12")
         self.assertEqual(month_add("2026-12", 1), "2027-01")
-        self.assertIn('<option value="Pets"', self.pets())
+        self.assertIn('name="pick" value="Pets"', self.pets())
 
     def pets(self):
         self.cat("Pets")

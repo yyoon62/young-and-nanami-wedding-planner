@@ -343,8 +343,9 @@ class TransactionsTest(Fixture, unittest.TestCase):
                       "includes refunds", "Overspent", "not measured savings", ">partial</span>",
                       "No transactions match"):
             self.assertIn(shown, rendered)
-        self.assertIn('<option value="Young" selected>', rendered)
-        self.assertNotIn('value="Household"', rendered)
+        self.assertIn('<span class="cur" aria-current="page">Young</span>', rendered)
+        self.assertIn('<span class="off" aria-disabled="true">Nanami</span>', rendered)      # Household is not allowed here
+        self.assertNotIn("view=Household", rendered)
         with self.assertRaises(RouteProblem) as caught:
             render_transactions(self.db, "view=Household", token=TOKEN, allowed_views={"Young"})
         self.assertEqual(caught.exception.status, 403)

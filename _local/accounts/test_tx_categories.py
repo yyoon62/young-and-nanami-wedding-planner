@@ -121,7 +121,7 @@ class MaplePath(Fixture, unittest.TestCase):
         row = self.rows("Maple Cafe")[0]
         self.post(row["row_id"], action="add_category", new_category="Pets")
         self.assertIn("Pets", list_categories(self.db))
-        self.assertIn('<option value="Pets">Pets</option>',
+        self.assertIn('name="pick" value="Pets"',
                       render_transactions(self.db, "month=2026-11", token=TOKEN, allowed_views=VIEWS))
         for bad, message in (("pets", "already exists"), ("  ", "Enter a category name"), ("", "Enter a category name"),
                              ("Uncategorized", "reserved"), ("x" * 49, "up to 48"), ("a\x00b", "printable")):

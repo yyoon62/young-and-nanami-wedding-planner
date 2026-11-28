@@ -513,6 +513,17 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
   .tx-table.tx-compact tr.tx-drawer-row { display: block; }
   .tx-table.tx-compact tr.tx-drawer-row > td { display: block; }
 }
+/* Filters as click targets (part 11): Accounts .owner-tabs links, no dropdowns. */
+.tx-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .9rem; margin: .1rem 0 .35rem; }
+.tx-tabs a, .tx-tabs .off, .tx-tabs .cur { display: inline-flex; align-items: center; min-height: 30px; padding: .2rem .8rem; font-size: .88rem; }
+.tx-tabs a { background: var(--pill); }
+.tx-tabs a:hover { background: #e6ddd4; }
+.tx-tabs .off, .tx-tabs .cur { border-radius: 999px; }
+.tx-tabs .off { color: var(--text-muted); opacity: .55; }
+.tx-tabs .cur { background: var(--rose-bg); color: var(--accent); font-weight: 700; }
+.owner-tabs.tx-tabs a[aria-current] { background: var(--rose-bg); color: var(--accent); font-weight: 700; }
+.tx-find { flex: 1 1 11rem; max-width: 20rem; margin: 0 0 0 auto; }
+.tx-find input { min-height: 32px; margin: 0; padding: .2rem .7rem; font-size: .88rem; }
 /* Category chip menu (part 6): the Accounts .inline-pop / .sec-chip / .sec-menu, floated over the table. */
 .table-wrap.tx-wrap { overflow: visible; }
 .tx-table.tx-compact .tx-pick { vertical-align: middle; }

@@ -117,8 +117,10 @@ class BrowserTx(unittest.TestCase):
             find.fill("")
             page.wait_for_url(re.compile(r"q=(&|$)"))
             self.assertEqual(page.locator("tr.acct-row").count(), total)
-            page.locator("form[data-autofilter] select[name=currency]").select_option("EUR")      # a select applies on change
+            self.assertEqual(page.locator("select, input[type=month]").count(), 0)             # no dropdown anywhere
+            page.locator("nav[aria-label=Currency] a", has_text="EUR").click()                  # a plain link
             page.wait_for_url(re.compile(r"currency=EUR"))
+            expect(page.locator("nav[aria-label=Currency] a[aria-current=page]")).to_have_text("EUR")
             expect(page.locator("tr.acct-row")).to_have_count(1)
             page.get_by_role("link", name=re.compile("Oct 2026")).first.click()   # prev month link
             page.wait_for_url(re.compile(r"month=2026-10"))
@@ -135,6 +137,33 @@ class BrowserTx(unittest.TestCase):
             page.get_by_role("link", name="✕ Clear").click()
             page.wait_for_url(re.compile(r"cat=(&|$)"))
             self.assertEqual(page.locator("tr.acct-row").count(), total)
+
+    def test_owner_tabs_pending_toggle_and_find_work_as_links_and_survive_reload(self):
+        seed_fictional(self.path, joint_card=True)
+        with block_network(allow_loopback=True), running(self.path) as origin, self.browser() as page:
+            page.goto(origin + "/transactions?month=2026-11&currency=USD")
+            views = page.locator("nav[aria-label='Whose transactions']")
+            self.assertEqual(views.locator("a[aria-current]").count(), 0)                       # Household: neither lit
+            with page.expect_navigation():
+                views.get_by_role("link", name="Nanami").click()
+            self.assertIn("view=Nanami", page.url)
+            self.assertIn("currency=USD", page.url)
+            expect(views.locator("a[aria-current=page]")).to_have_text("Nanami")
+            rows = page.locator("tr.acct-row")
+            self.assertGreaterEqual(rows.count(), 1)
+            self.assertEqual(page.locator("tr.acct-row", has_text="PAYROLL").count(), 0)         # Young's checking is not Nanami's
+            with page.expect_navigation():
+                views.get_by_role("link", name="Young").click()                               # + Young = Household
+            self.assertIn("view=Household", page.url)
+            self.assertEqual(views.locator("a[aria-current]").count(), 0)
+            expect(page.locator("tr.acct-row", has_text="PAYROLL")).to_have_count(1)
+            with page.expect_navigation():
+                page.get_by_role("link", name="⏳ Pending").click()
+            self.assertIn("pending=1", page.url)
+            expect(page.locator("nav[aria-label=Pending] a[aria-current=page]")).to_have_count(1)
+            page.reload()
+            expect(page.locator("nav[aria-label=Pending] a[aria-current=page]")).to_have_count(1)
+            self.assertEqual(self.errors, [])
 
     def override(self, description):
         with closing(sqlite3.connect(self.path)) as db:
