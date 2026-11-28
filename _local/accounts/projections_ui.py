@@ -487,19 +487,32 @@ def _debt_section(plan, entries, run, a, currency, scale, money, observed=None):
                     rate += (f'<div class="acct-sub">{escape(_pct(d.promo_rate))} promo through '
                              f'{escape(month_label(d.promo_end))}, then {escape(_pct(d.rate))}</div>')
             source = ("planned" if e.terms.planned_payment is not None else "minimum")
-            pay = money(d.payment) + f' <span class="acct-sub">({source})</span>' if d.payment else (
+            with_extra = run.extra > 0
+            label = f"{source} + extra" if with_extra else f"({source})"
+            pay = money(d.payment) + f' <span class="acct-sub">{label}</span>' if d.payment else (
                 '<span class="rate-flag">payment missing</span>')
             if observed is not None:
                 pay += _observed_line(observed.get(d.key), plan, money)
             if out.payoff_month:
                 payoff = f'{escape(_when(plan, out.payoff_month))} <span class="acct-sub">(month {out.payoff_month})</span>'
                 total = money(out.total_interest)
-            elif sched.status == "does_not_cover":
-                payoff, total = '<strong>No payoff date</strong>', "—"
-            elif sched.status == "no_payment":
+            elif sched.status in ("does_not_cover", "no_payment"):
                 payoff, total = '<strong>No payoff date</strong>', "—"
             else:
                 payoff, total = 'Not paid off within 40 years', "—"
+            if with_extra:
+                # The extra payment changes the date and the interest: show the planned-only figures beside them.
+                if sched.status == "paid_off":
+                    p_payoff = (f'{escape(_when(plan, sched.payoff_month))} '
+                                f'<span class="acct-sub">(month {sched.payoff_month})</span>')
+                    p_total = money(sched.total_interest)
+                elif sched.status == "beyond_cap":
+                    p_payoff, p_total = "Not paid off within 40 years", "—"
+                else:
+                    p_payoff, p_total = "<strong>No payoff date</strong>", "—"
+                two = lambda with_, planned_: (f'<div><span class="acct-sub">With extra:</span> {with_}</div>'
+                                               f'<div><span class="acct-sub">Planned only:</span> {planned_}</div>')
+                payoff, total = two(payoff, p_payoff), two(total, p_total)
             notes = []
             if sched.status == "does_not_cover":
                 notes.append(f'<span class="rate-flag">payment does not cover interest</span> '
@@ -537,7 +550,7 @@ def _debt_section(plan, entries, run, a, currency, scale, money, observed=None):
                     f'<tbody>{body}</tbody></table></div>{more}</details>')
         extra = (f'<p class="history-range">Extra payments of {money(run.extra)} a month (debt target beyond planned '
                  'payments, from positive net savings) go to debts without a rate first, then the highest current rate; '
-                 'a paid-off debt’s payment rolls over. The table above includes them.</p>') if run.extra > 0 else ""
+                 'a paid-off debt’s payment rolls over. The table above shows each debt with extra and planned only.</p>') if run.extra > 0 else ""
         parts.append(
             '<div class="table-wrap debt-table stack-table" tabindex="0" role="region" aria-label="Scrollable debt table">'
             '<table class="acct-table"><thead><tr><th scope="col">Account</th><th scope="col" class="num">Balance</th>'

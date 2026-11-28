@@ -94,6 +94,12 @@ class BrowserTerms(unittest.TestCase):
                 expect(section).to_contain_text("0% promo through Apr 2027, then 24.99%")
                 expect(section).to_contain_text("avg of 3 months")
                 expect(section).to_contain_text("1 card(s) assumed paid in full")
+                cedar = section.locator("tbody tr", has_text="Cedar Rewards Card").first
+                expect(cedar).to_contain_text("planned + extra")
+                expect(cedar).to_contain_text("With extra:")
+                expect(cedar).to_contain_text("Planned only:")
+                expect(cedar).to_contain_text("Mar 2028")            # the planned-only date beside the with-extra one
+                expect(cedar).to_contain_text("Aug 2027")
                 expect(section).to_contain_text("Avalanche vs snowball")
                 expect(section).to_contain_text("Stale")
                 section.get_by_text("Schedule: Cedar Rewards Card").click()

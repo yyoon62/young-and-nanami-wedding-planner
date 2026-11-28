@@ -177,5 +177,73 @@ class DebtPage(unittest.TestCase):
         self.assertIn("Planned payments (USD 900.00 a month) exceed monthly net savings (USD 500.00).", self.get())
 
 
+class ExtraAndPlannedColumns(unittest.TestCase):
+    """The table must not show an extra-payment payoff as if it were the planned one."""
+
+    def setUp(self):
+        from terms_demo import seed_terms_demo
+        tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.path = Path(tmp).resolve() / "demo.sqlite3"
+        seed_terms_demo(self.path, complete=True)          # debt target 700 vs planned 550: extra 150
+
+    def body(self):
+        return projection_get(self.path, "/projections", page=page, token="t", people=server.PEOPLE,
+                              section_for=server.section_for, places=server.places, today=TODAY)[1]
+
+    @staticmethod
+    def row(body, name):
+        i = body.index(f'<th scope="row">{name}<')
+        return body[i:body.index("</tr>", i)]
+
+    def test_a_both_figures_per_debt_equal_the_independent_references(self):
+        from test_debt_compare import ref_multi
+        from test_debt_schedule import reference
+        body = self.body()
+        cedar = self.row(body, "Cedar Rewards Card")
+        money = lambda c: f"USD {c // 100:,}.{c % 100:02d}"
+        # Planned only = the debt alone with its own payment (integer-cents reference): Mar 2028, month 17.
+        planned = reference(150000, 2499, 10000, 0, 6)
+        self.assertEqual(len(planned), 17)
+        self.assertIn("Planned only:</span> Mar 2028 <span class=\"acct-sub\">(month 17)</span>", cedar)
+        self.assertIn(f"Planned only:</span> {money(sum(r[1] for r in planned))}", cedar)
+        # With extra = avalanche over all four demo debts, 150.00 extra (independent multi-debt reference).
+        specs = [(840000, 690, None, 0, 25000), (150000, 2499, 0, 6, 10000), (1200000, 550, None, 0, 14000),
+                 (300000, 720, None, 0, 6000)]
+        months, interest = ref_multi(specs, 15000, "avalanche")
+        self.assertEqual((months[1], interest[1]), (10, 4567))
+        self.assertIn("With extra:</span> Aug 2027 <span class=\"acct-sub\">(month 10)</span>", cedar)
+        self.assertIn(f"With extra:</span> {money(interest[1])}", cedar)
+        self.assertIn("USD 100.00 <span class=\"acct-sub\">planned + extra</span>", cedar)
+        for name, i in (("Birch Auto Loan", 0), ("Maple Student Loan A", 2), ("Maple Student Loan B", 3)):
+            row = self.row(body, name)
+            self.assertIn(f"month {months[i]})", row)
+            self.assertIn(f"With extra:</span> {money(interest[i])}", row)
+            only = reference(specs[i][0], specs[i][1], specs[i][4])      # plain fixed-rate planned-only schedule
+            self.assertIn(f"Planned only:</span> {money(sum(r[1] for r in only))}", row)
+
+    def test_b_with_no_extra_only_one_figure_appears_and_acceptance_1_is_unchanged(self):
+        with closing(sqlite3.connect(self.path)) as db, db:
+            save_assumptions(db, "Household", "USD", replace(Assumptions(), years=10, income=D(5200), spending=D(3400),
+                                                           debt_target=D(550)))
+        body = self.body()
+        section = body[body.index('id="debt-heading"'):]
+        self.assertNotIn("With extra", section)
+        self.assertNotIn("Planned only", section)
+        self.assertNotIn("planned + extra", section)
+        self.assertIn("USD 100.00 <span class=\"acct-sub\">(planned)</span>", self.row(body, "Cedar Rewards Card"))
+        self.assertIn("Mar 2028", self.row(body, "Cedar Rewards Card"))
+
+    def test_c_interest_this_month_and_the_monthly_cost_do_not_depend_on_extra(self):
+        with_extra = self.body()
+        with closing(sqlite3.connect(self.path)) as db, db:
+            save_assumptions(db, "Household", "USD", replace(Assumptions(), years=10, income=D(5200), spending=D(3400),
+                                                           debt_target=D(550)))
+        without = self.body()
+        for body in (with_extra, without):
+            self.assertIn("Current monthly interest cost of these debts: <strong>USD 121.30</strong>", body)
+            self.assertIn('data-label="Interest this month">USD 48.30</td>', self.row(body, "Birch Auto Loan"))
+            self.assertIn('data-label="Interest this month">USD 0.00</td>', self.row(body, "Cedar Rewards Card"))
+
+
 if __name__ == "__main__":
     unittest.main()
