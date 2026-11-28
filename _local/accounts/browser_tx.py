@@ -279,7 +279,7 @@ class BrowserTx(unittest.TestCase):
             usd = page.locator("article.tx-card", has=page.locator("small", has_text="USD"))
             expect(usd.locator(".tx-sum")).to_contain_text(re.compile(r"💰 Income \$3,000\.00\s+💸 Spending \$2,380\.00"))
             self.assertNotIn("·", usd.locator(".tx-sum").inner_text())      # no dangling text dots at a wrap
-            expect(usd.locator(".tx-sum")).to_contain_text("🟢 Saved $620.00")
+            expect(usd.locator(".tx-sum")).to_contain_text("🟢 Net saved $620.00")
             expect(usd.locator(".partial-flag").first).to_have_text("📅 Month in progress")
             self.assertEqual(usd.locator(".partial-flag").count(), 1)             # fetched from Aug 1: no "Data from" note
             expect(page.locator("article.tx-card", has=page.locator("small", has_text="EUR")).locator(".tx-confirm")).to_have_count(0)
@@ -312,7 +312,7 @@ class BrowserTx(unittest.TestCase):
                 self.assertLessEqual(box["height"], 30, blocks.nth(i).inner_text())      # one line at 1280 px
             self.assertFalse(page.locator(".tx-info-body").is_visible())
             page.locator("details.tx-info > summary").click()
-            expect(page.locator(".tx-info-body")).to_contain_text("the matching bank debit still counts as spending")
+            expect(page.locator(".tx-info-body")).to_contain_text("the matching bank payment still counts as spending")
             expect(page.locator(".tx-info-body")).to_contain_text("a linked account has no data before that date")
         with block_network(allow_loopback=True), running(self.path) as origin, \
                 self.browser({"width": 390, "height": 844}) as page:

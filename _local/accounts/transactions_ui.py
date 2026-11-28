@@ -296,22 +296,22 @@ def _category_cell(r, f, token, categories, *, up, opened, attempt, error):
 def _summary_card(currency, t, cmp, f):
     """Opening tag + compact per-currency summary; the caller appends the bars and </article>."""
     net = sign_of(t.net, currency)
-    label = "🟢 Saved" if net > 0 else "🔴 Overspent" if net < 0 else "⚪ Even"
+    label = "🟢 Net saved" if net > 0 else "🔴 Net overspent" if net < 0 else "⚪ Net even"
     chips = "".join(f' <span class="partial-flag" title="Only the days with synced data are counted; nothing is '
                     f'extrapolated">{escape(n)}</span>' for n in cmp.notes)
-    line = (f'<div class="tx-sum"><span title="Credits including refunds; not verified income">💰 Income '
-            f'<strong>{fmt(t.credits, currency)}</strong></span> '
-            f'<span title="Pending, transfers and card credits under review are excluded">💸 Spending '
-            f'<strong>{fmt(t.spending, currency)}</strong></span> '
-            f'<span title="Income minus spending: cash flow, not measured savings">{label} '
+    line = (f'<div class="tx-sum"><span title="Money in, refunds included; not verified income. Transfers between your '
+            f'own accounts are left out">💰 Income <strong>{fmt(t.credits, currency)}</strong></span> '
+            f'<span title="Money out. Pending items, transfers between your own accounts and card payments are left '
+            f'out">💸 Spending <strong>{fmt(t.spending, currency)}</strong></span> '
+            f'<span title="Income minus spending for this period; not measured savings">{label} '
             f'<strong>{fmt(t.net, currency, absolute=True)}</strong></span></div>')
     confirm = ""
     if t.review_count:
         n = t.review_count
         active = f["review"] == "1" and f["currency"] == currency
         confirm = (f'<div class="tx-confirm"><a href="{escape(_location(dict(f, review="1", currency=currency)))}"'
-                   f'{CURRENT if active else ""} title="Unmatched card payment credits; '
-                   f'click to list them">⚠️ {n} card payment{"" if n == 1 else "s"} to confirm · '
+                   f'{CURRENT if active else ""} title="Payments that arrived on a card with no '
+                   f'matching payment from your bank yet; click to list them">⚠️ {n} card payment{"" if n == 1 else "s"} to confirm · '
                    f'{fmt(t.review, currency)}</a></div>')
     return (f'<article class="card tx-card"><div class="tx-card-head"><small>{escape(currency)}</small>{chips}</div>'
             + line + confirm)
@@ -437,10 +437,10 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
     coverage = []
     for r in snap.coverage:
         if r["end_at"] is not None:
-            state = ("Window requested" if r["covered"] else "Partial or outside requested window")
-            state += f' · {_stamp(r["start_at"])} through {_stamp(r["end_at"])} (end exclusive)'
+            state = ("Synced for the whole period" if r["covered"] else "Synced for only part of this period")
+            state += f' · {_stamp(r["start_at"])[:10]} to {_stamp(r["end_at"] - 1)[:10]} (UTC dates)'
         else:
-            state = "Not yet fetched" if r["linked"] else "Not linked; transaction data unavailable"
+            state = "Not synced yet" if r["linked"] else "Not linked; transaction data unavailable"
         coverage.append(f'<li>{escape(r["institution"])} · {escape(r["nickname"])}'
                         f' ({escape(r["currency"])}) — {state}</li>')
     comparisons = period_comparisons(db, span, f["view"], household_matching="Household" in allowed_views,

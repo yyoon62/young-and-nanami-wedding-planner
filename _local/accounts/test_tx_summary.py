@@ -53,7 +53,7 @@ class Summary(Fixture, unittest.TestCase):
         card = self.card(self.html(), "USD")
         self.assertIn("💰 Income <strong>$3,000.00</strong>", card)
         self.assertIn("💸 Spending <strong>$4,852.32</strong>", card)
-        self.assertIn("🔴 Overspent <strong>$1,852.32</strong>", card)
+        self.assertIn("🔴 Net overspent <strong>$1,852.32</strong>", card)
         self.assertNotIn("-$1,852.32", card)
         self.assertIn("⚠️ 1 card payment to confirm · $1,200.00</a>", card)
         self.assertNotIn("payments to confirm", card)
@@ -89,16 +89,31 @@ class Summary(Fixture, unittest.TestCase):
         self.assertRegex(card, r'<span class="partial-flag"[^>]*>📅 Data from 5 Nov only</span>')
         self.assertNotIn("Month in progress", card)
 
+    def test_the_card_and_the_notes_under_it_use_no_jargon(self):
+        self.seed_usd()
+        with self.db:
+            self.db.execute("UPDATE transaction_coverage SET start_at=start_at + ?", (80 * 86400,))   # data starts late: a note shows
+        html = self.html()
+        top = html[html.index('<div class="cards">'):html.index("<section><h2>Transactions")]
+        text = re.sub(r"<[^>]+>", " ", top) + " ".join(re.findall(r'title="([^"]*)"', top))
+        for jargon in ("signed cash flow", "cash flow", "credits", "credit ", "coverage", "under review", "partial",
+                       "Net saved estimate"):
+            self.assertNotIn(jargon, text, jargon)
+        for label in ("💰 Income", "💸 Spending", "🔴 Net overspent"):
+            self.assertIn(label, top)
+        self.assertRegex(top, r"📅 Data from \d{1,2} [A-Z][a-z]{2} only")
+        self.assertIn("⚠️ 1 card payment to confirm · $1,200.00", top)
+
     def test_saved_even_and_plural(self):
         self.seed_usd(credits=("3000.00",), spends=("-1000.00",), reviews=("10.00", "20.50"))
         card = self.card(self.html(), "USD")
-        self.assertIn("🟢 Saved <strong>$2,000.00</strong>", card)
+        self.assertIn("🟢 Net saved <strong>$2,000.00</strong>", card)
         self.assertIn("⚠️ 2 card payments to confirm · $30.50</a>", card)
 
     def test_even_and_no_confirm_line_when_nothing_to_confirm(self):
         self.seed_usd(credits=("100.00",), spends=("-100.00",), reviews=())
         card = self.card(self.html(), "USD")
-        self.assertIn("⚪ Even <strong>$0.00</strong>", card)
+        self.assertIn("⚪ Net even <strong>$0.00</strong>", card)
         self.assertNotIn("to confirm", card)
         self.assertNotIn("tx-confirm", card)
 
@@ -146,7 +161,7 @@ class Summary(Fixture, unittest.TestCase):
         html = self.html()
         self.assertIn("💰 Income <strong>$1,234,567.89</strong>", self.card(html, "USD"))
         self.assertIn("💸 Spending <strong>€1,500.50</strong>", self.card(html, "EUR"))
-        self.assertIn("🔴 Overspent <strong>€1,500.50</strong>", self.card(html, "EUR"))
+        self.assertIn("🔴 Net overspent <strong>€1,500.50</strong>", self.card(html, "EUR"))
         self.assertIn("💸 Spending <strong>¥123,456</strong>", self.card(html, "JPY"))
         self.assertIn("💸 Spending <strong>CHF\u00a04,321.10</strong>", self.card(html, "CHF"))
         self.assertNotIn("¥123,456.00", html)

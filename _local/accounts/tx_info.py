@@ -5,17 +5,17 @@ bullets. The page shows at most two short notes plus this summary line.
 """
 from html import escape
 
-NOTES = ("💡 Income includes refunds; Saved / Overspent is cash flow, not savings.",
-         "🔁 Pending, transfers and unmatched card payments are left out of the totals.")
+NOTES = ("💡 Income includes refunds. Net = income minus spending, not measured savings.",
+         "🔁 Pending items, transfers and card payments are left out of the totals.")
 
 _GROUPS = (
     ("Totals", (
-        "💰 Income is credits including refunds; it is not verified income.",
-        "🟢 Saved / 🔴 Overspent is signed cash flow (income minus spending), not measured savings.",
-        "Pending, transfers and explicit unmatched card-payment credits are outside totals; unmatched bank "
-        "debits remain spending.",
-        "⚠️ A card payment to confirm is a card-account credit that looks like a payment but has no matching bank "
-        "debit yet. Marking it Transfer clears it from the list, but the matching bank debit still counts as "
+        "💰 Income is money in, including refunds; it is not verified income.",
+        "🟢 Net saved / 🔴 Net overspent is income minus spending for the period, not measured savings.",
+        "Pending items, transfers between your own accounts and unmatched card payments are left out of the "
+        "totals; a bank payment that is not matched or marked as a transfer stays in spending.",
+        "⚠️ A card payment to confirm is a payment that arrived on a card but has no matching payment from your "
+        "bank yet. Marking it Transfer clears it from the list, but the matching bank payment still counts as "
         "spending until it is matched or marked Transfer too.",
         "Automatic card matching requires corroboration on both available legs. Checking and savings matches are "
         "suggestions only.",

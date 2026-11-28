@@ -34,8 +34,8 @@ class Language(Fixture, unittest.TestCase):
 
 
 OLD_SUBSTANCE = (
-    "including refunds; it is not verified income", "signed cash flow", "not measured savings",
-    "Pending, transfers and explicit unmatched card-payment credits are outside totals; unmatched bank debits remain spending",
+    "including refunds; it is not verified income", "income minus spending for the period", "not measured savings",
+    "unmatched card payments are left out of the totals; a bank payment that is not matched or marked as a transfer stays in spending",
     "Automatic card matching requires corroboration on both available legs", "Checking and savings matches are suggestions only",
     "A manual transfer choice overrides a merchant rule, which overrides automatic classification",
     "Requested windows do not prove institution completeness or retention", "Current-month figures are provisional",
@@ -44,7 +44,7 @@ OLD_SUBSTANCE = (
     "a category you set on one row by hand always wins over a rule", "posted date (UTC)", "local-midnight stamp east of UTC",
     "month filters use the same date", "Hover a chip for the comparison with last month", "unmatched card payments are excluded",
     "Click a chip to filter the list", "balance sync quota")
-NEW_SUBSTANCE = ("the matching bank debit still counts as spending until it is matched or marked Transfer too",
+NEW_SUBSTANCE = ("the matching bank payment still counts as spending until it is matched or marked Transfer too",
                  "📅 Data from 30 Aug only = a linked account has no data before that date", "📅 Month in progress",
                  "on a pending row it is lost if the bank changes the transaction id", "↺ resets it")
 

@@ -283,7 +283,7 @@ class TransactionsTest(Fixture, unittest.TestCase):
                      "Not linked; transaction data unavailable", TOKEN, 'action="/transactions/edit"'):
             self.assertIn(safe, rendered)
         self.assertNotIn("&lt;script&gt;", html("q=no-such-merchant"))
-        self.assertIn("Overspent <strong>$10.12</strong>", html("q=no-such-merchant"))  # list filter, not totals
+        self.assertIn("Net overspent <strong>$10.12</strong>", html("q=no-such-merchant"))  # list filter, not totals
         self.assertIn("No posted transactions reported", html("month=2026-10"))
         self.assertIn("No posted data with sufficient coverage", html("month=2024-10"))
         for expected, fields in [(403, {"token": "incorrect"}), (404, {"view": "Nanami"}),
@@ -340,7 +340,7 @@ class TransactionsTest(Fixture, unittest.TestCase):
         rendered = render_transactions(self.db, "month=2026-12&currency=JPY&q=no-such-list-row",
                                        token=TOKEN, allowed_views={"Young"})
         for shown in ("Spending by category", "Uncategorized", "Food", "$42.00", "¥300", "Income",
-                      "includes refunds", "Overspent", "not measured savings",
+                      "includes refunds", "overspent", "not measured savings",
                       "No transactions match"):
             self.assertIn(shown, rendered)
         self.assertIn('<span class="cur" aria-current="page">Young</span>', rendered)
