@@ -103,17 +103,26 @@ class Pick(Fixture, unittest.TestCase):
         self.assertNotIn('name="pick"', first)
         self.assertIn('class="sr"', first)
 
-    def test_transfer_item_marks_this_row_or_the_merchant_and_a_category_pick_undoes_it(self):
+    def test_not_spending_categories_leave_spending_and_a_spending_pick_undoes_them(self):
         before = self.snap().totals["USD"].spending
-        self.post(self.fuel, pick_transfer="1")
+        self.post(self.fuel, pick="Loan payment")
         self.assertEqual(self.snap().totals["USD"].spending, before - Decimal("41.30"))
-        self.post(self.fuel, pick="Transport")                     # choosing a category undoes the manual transfer mark
+        self.assertTrue(self.me()["effective_transfer"])
+        self.post(self.fuel, pick="Transport")                     # choosing a spending category undoes it
         self.assertEqual(self.snap().totals["USD"].spending, before)
-        self.post(self.fuel, pick_transfer="1", apply="1")          # with the toggle: the merchant on this account
-        self.assertEqual(self.db.execute("SELECT merchant, is_transfer FROM transaction_merchant_rules").fetchall(),
-                         [("harbor fuel", 1)])
+        self.post(self.fuel, pick="Transfer", apply="1")            # with the toggle: the merchant on this account
+        self.assertEqual(self.db.execute("SELECT merchant, category FROM transaction_merchant_rules").fetchall(),
+                         [("harbor fuel", "Transfer")])
         fuel = [r for r in self.snap().rows if r["description"] == "Harbor Fuel"]
         self.assertTrue(all(r["effective_transfer"] for r in fuel))
+
+    def test_the_menu_groups_the_four_not_spending_categories_and_has_no_separate_transfer_flag_item(self):
+        page = self.html()
+        template = page[page.index('<template id="tx-pick-tpl">'):page.index("</template>")]
+        after = template[template.index('class="tx-group"'):]
+        for name in ("Card payment", "Loan payment", "Savings &amp; investing", "Transfer"):
+            self.assertIn(f'name="pick" value="{name}"', after)
+        self.assertNotIn("pick_transfer", template)
 
     def test_pending_rows_cannot_make_rules_and_do_not_offer_the_toggle(self):
         pending = next(r for r in self.snap(show_pending=True).rows if r["pending"])

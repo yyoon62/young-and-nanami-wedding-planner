@@ -517,6 +517,7 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
 .tx-pick .sec-menu { position: absolute; right: 0; top: 100%; z-index: 30; width: 22rem; max-width: 86vw; white-space: normal;
   margin-top: .2rem; max-height: 26rem; overflow-y: auto; }
 .tx-pick.up .sec-menu { top: auto; bottom: 100%; margin: 0 0 .2rem; }
+.tx-menu .tx-group { flex: 1 1 100%; margin: .2rem 0 0; font-size: .7rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); }
 .tx-menu .tx-new { display: flex; gap: 4px; flex: 1 1 100%; margin-top: .15rem; }
 .tx-menu .tx-new input { flex: 1; min-width: 0; min-height: 28px; margin: 0; padding: .1rem .5rem; font-size: .82rem; }
 .tx-menu .tx-apply { flex: 1 1 100%; display: block; line-height: 1.5; font-size: .8rem; color: var(--text-secondary); margin: .1rem 0 0; }

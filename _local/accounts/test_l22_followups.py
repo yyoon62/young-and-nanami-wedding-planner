@@ -12,7 +12,7 @@ import server
 import tx_classifier as C
 from projections_ui import projection_get
 from transactions_ui import render_transactions
-from tx_categories import (BUILTIN, CUSTOM_EMOJI, DEFAULT_EMOJI, TRANSFER_EMOJI, UNCATEGORIZED_EMOJI,
+from tx_categories import (BUILTIN, CUSTOM_EMOJI, DEFAULT_EMOJI, TRANSFER_EMOJI, TRANSFER_LIKE, UNCATEGORIZED_EMOJI,
                            builtin_categories, default_emoji, list_categories, resolve)
 from tx_fixture import Fixture, TOKEN, VIEWS, cover, put_row, source_of
 
@@ -53,7 +53,7 @@ class Income(unittest.TestCase):
             with closing(sqlite3.connect(path)) as db:
                 self.assertIn("Income", list_categories(db))
                 self.assertEqual(db.execute("SELECT builtin FROM transaction_categories WHERE name='Income'").fetchone(), (1,))
-                self.assertEqual(builtin_categories(db), list(BUILTIN))
+                self.assertEqual(builtin_categories(db), list(BUILTIN) + list(TRANSFER_LIKE))
                 allowed = builtin_categories(db)
         reply = json.dumps({"stop_reason": "tool_use", "content": [{"type": "tool_use", "name": C.TOOL, "input": {
             "results": [dict(id="m1", category="Income", emoji="💵", confidence=0.99)]}}]})
@@ -98,7 +98,7 @@ class EmojiAndPage(Fixture, unittest.TestCase):
     def test_every_row_shows_an_emoji_and_defaults_are_single_graphemes(self):
         for value in (*DEFAULT_EMOJI.values(), TRANSFER_EMOJI, UNCATEGORIZED_EMOJI, CUSTOM_EMOJI):
             self.assertTrue(C.one_emoji(value), value)
-        self.assertEqual({*DEFAULT_EMOJI} - {*BUILTIN}, {"Income"})
+        self.assertEqual({*DEFAULT_EMOJI} - {*BUILTIN}, {"Income", *TRANSFER_LIKE})
         self.assertEqual(default_emoji("dining"), DEFAULT_EMOJI["Dining"])
         self.assertEqual(default_emoji("Pets"), CUSTOM_EMOJI)
         html = self.html()

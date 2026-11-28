@@ -19,7 +19,7 @@ import tx_classifier as C
 from server import init_db
 from transactions import monthly_snapshot
 from transactions_ui import RouteProblem, render_transactions
-from tx_categories import BUILTIN, add_category
+from tx_categories import BUILTIN, TRANSFER_LIKE, add_category
 from tx_fixture import Fixture, TOKEN, VIEWS, block_network, cover, put_row, source_of
 from test_tx_categories import PRE_L22_DDL
 
@@ -147,7 +147,7 @@ class Acceptance(Base, unittest.TestCase):
         self.assertNotIn("temperature", body)  # rejected by claude-haiku-5-5 (HTTP 400)
         self.assertEqual(body["tool_choice"], {"type": "tool", "name": "record_categories"})
         schema = body["tools"][0]["input_schema"]["properties"]["results"]["items"]["properties"]
-        self.assertEqual(schema["category"]["enum"], list(BUILTIN))
+        self.assertEqual(schema["category"]["enum"], list(BUILTIN) + list(TRANSFER_LIKE))
         self.assertNotIn("Income", schema["category"]["enum"])
         wire = json.dumps(body)
         for private in ("12.34", "11.34", "-7.00", "2026-11", "2026-", "Bank", "Young", "Fictional institution",

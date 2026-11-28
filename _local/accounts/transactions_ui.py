@@ -24,7 +24,7 @@ from logos import cached_logo, domain_for, fallback_svg
 from transactions import (CURRENCY, VIEWS, _midnight, category_context, edit_transaction, manual_index,
                           month_dates, monthly_snapshot)
 from pathlib import Path
-from tx_categories import default_emoji, list_categories
+from tx_categories import default_emoji, is_transfer_category, list_categories
 from tx_owners import PEOPLE, effective, effective_owner_of
 from tx_classifier import enabled as classifier_enabled, load_key, model_name, run_classifier, set_setting, stats as classifier_stats
 
@@ -190,9 +190,12 @@ def _pick_menu(f, token, categories, current, *, row="", who="", rule=True, atte
     category button posts it (no Save). The default button (first in tree order, so Enter in the name field) is
     the hidden "Add", never the first category."""
     attempt = attempt or {}
-    buttons = "".join(
-        f'<button type="submit" name="pick" value="{escape(c)}" class="sec-opt{" active" if c == current else ""}">'
-        f'{default_emoji(c)} {escape(c)}</button>' for c in categories)
+    def button(c):
+        return (f'<button type="submit" name="pick" value="{escape(c)}" class="sec-opt{" active" if c == current else ""}">'
+                f'{default_emoji(c)} {escape(c)}</button>')
+    spend = [c for c in categories if not is_transfer_category(c)]
+    moves = [c for c in categories if is_transfer_category(c)]
+    buttons = "".join(button(c) for c in spend)
     none = (f'<button type="submit" name="pick" value="" class="sec-opt{" active" if current == "" else ""}">'
             '🏷️ Uncategorized</button>')
     problem = f'<p class="tx-menu-err" role="alert">{escape(error)}</p>' if error else ""
@@ -203,9 +206,9 @@ def _pick_menu(f, token, categories, current, *, row="", who="", rule=True, atte
             + _hidden(f, token=token, row=row)
             + '<button type="submit" name="pick_new" value="1" class="sr" tabindex="-1" aria-hidden="true">Add</button>'
             + buttons + none
-            + '<button type="submit" name="pick_transfer" value="1" class="sec-opt" title="Money between your own '
-            'accounts; not counted as spending">↔️ Transfer</button>'
-            f'<span class="tx-new"><input name="new_category" maxlength="48" autocomplete="off" '
+            + '<span class="tx-group" title="Money between your own accounts; not counted as spending">'
+            'Not spending</span>' + "".join(button(c) for c in moves)
+            + f'<span class="tx-new"><input name="new_category" maxlength="48" autocomplete="off" '
             f'placeholder="+ New category" aria-label="New category name" '
             f'value="{escape(attempt.get("new_category", ""))}">'
             '<button type="submit" name="pick_new" value="1" class="sec-opt">Add</button></span>'
@@ -532,7 +535,7 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
         raise RouteProblem(400, "Invalid transaction form.") from None
     keys = set(_FILTERS) | {"token"} | ({"row", "category", "new_category", "apply", "transfer",
                                          "merchant_transfer", "action", "enabled", "owner", "act",
-                                         "pick", "pick_new", "pick_transfer"}
+                                         "pick", "pick_new"}
                                         if path == EDIT else {"include_pending"})
     data = _params(raw, keys)
     if not token or not secrets.compare_digest(data.get("token", "").encode("utf-8"), token.encode("utf-8")):
@@ -556,13 +559,13 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
         return PostResult(_location(f), True, pending == "1")
     if data.get("action") in ("classifier", "classify_now"):
         return _classifier_action(db, data, f)
-    picked = [k for k in ("pick", "pick_new", "pick_transfer") if k in data]
+    picked = [k for k in ("pick", "pick_new") if k in data]
     if picked:
         # The row chip's menu (one click saves). One choice per post; a typed name is only used by "Add".
-        if len(picked) != 1 or "action" in data or data.get("pick_new", "1") != "1" or data.get("pick_transfer", "1") != "1":
+        if len(picked) != 1 or "action" in data or data.get("pick_new", "1") != "1":
             raise RouteProblem(400, "Invalid category choice.")
         kind, value = picked[0], data[picked[0]]
-        data = {k: v for k, v in data.items() if k not in ("pick", "pick_new", "pick_transfer")}
+        data = {k: v for k, v in data.items() if k not in ("pick", "pick_new")}
         data["action"] = kind
         if kind == "pick":
             data["category"] = value
@@ -596,7 +599,7 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     except ValueError as exc:
         message = str(exc) or "Enter a printable category of up to 48 characters."
         try:
-            picking = action in ("pick", "pick_new", "pick_transfer")
+            picking = action in ("pick", "pick_new")
             body = render_transactions(db, urlencode(f), token=token, allowed_views=allowed_views,
                                        can_sync=can_sync, open_row=None if picking else int(row),
                                        open_pick=int(row) if picking else None, attempt=data, error=message)
