@@ -16,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode
 
 from html import escape as _esc  # noqa: F401
 from decimal import Decimal
+from tx_info import info_box, notes_html
 from tx_money import fmt, sign_of
 from tx_periods import month_add, month_label, spending_comparison
 from logos import cached_logo, domain_for, fallback_svg
@@ -249,7 +250,7 @@ def _bars(cmp, f, totals):
     """Spending by category for the viewed month vs last month and the 3-month mean."""
     c = cmp.currency
     if not cmp.current:
-        return '<div>No posted spending reported.</div>'
+        return '<div class="acct-sub">📊 No posted spending reported.</div>'
     zero = Decimal(0)
     peak = max([*cmp.current.values(), *(cmp.prev or {}).values(), *(cmp.avg or {}).values()] or [Decimal(1)])
     rows = []
@@ -282,10 +283,14 @@ def _bars(cmp, f, totals):
     if f["cat"] and f["currency"] == c:
         clear = (f'<p class="filter-chip">Showing {escape(f["cat"])} only ({escape(c)}) · '
                  f'<a href="{escape(_location(dict(f, cat="", currency="")))}">Clear filter</a></p>')
-    return (f'<section class="bars" aria-label="Spending by category in {escape(c)}">'
-            f'<h3>Spending by category</h3>{clear}<ul class="bar-list">{"".join(rows)}</ul>'
-            f'<p class="acct-sub">{basis}Bar = this month; ticks = last month and average. Transfers, pending '
-            'and card credits under review are excluded. Click a category to filter the list.</p></section>')
+    top = "".join(f'<span>{escape(name)} <strong>{fmt(amount, c)}</strong></span> '
+                  for name, amount in sorted(cmp.current.items(), key=lambda kv: (-kv[1], kv[0].casefold()))[:3])
+    opened = bool(f["cat"]) and f["currency"] in ("", c)
+    return (f'<section class="bars" aria-label="Spending by category in {escape(c)}"><details class="bars-det"'
+            f'{" open" if opened else ""}><summary title="Bar = this month; ticks = last month and the average. '
+            f'Click a category to filter the list."><span class="bars-title">📊 Spending by category</span> '
+            f'<span class="bars-top">{top}</span></summary>{clear}'
+            f'<ul class="bar-list">{"".join(rows)}</ul><p class="acct-sub">{basis.strip()}</p></details></section>')
 
 
 def _amount(r):
@@ -348,10 +353,10 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
     if can_sync and "Household" in allowed_views:
         sync = (f'<form method="post" action="{SYNC}" class="drawer-form">'
                 + _hidden(f, token=token)
-                + '<div class="drawer-left"><button>Sync transactions</button>'
+                + '<div class="drawer-left"><button title="Refreshes all linked accounts. Shares the balance sync '
+                'quota.">Sync transactions</button>'
                 '<label><input type="checkbox" name="include_pending" value="1">'
-                ' Request pending as well</label></div></form>'
-                '<p class="acct-sub">Refreshes all linked accounts. Shares the balance sync quota.</p>')
+                ' Request pending as well</label></div></form>')
     coverage = []
     for r in snap.coverage:
         if r["end_at"] is not None:
@@ -378,11 +383,9 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
     if not totals:
         summary = "<p>No posted data with sufficient coverage to report a zero.</p>"
     else:
-        summary = ('<div class="cards">' + "".join(totals) + "</div>"
-                   '<p>Income includes refunds; it is not verified income. '
-                   'Saved / Overspent is signed cash flow, not measured savings.</p>')
+        summary = '<div class="cards">' + "".join(totals) + "</div>" + notes_html()
     if not any(not r["pending"] for r in snap.rows) and totals:
-        summary += "<p>No posted transactions reported for this month in this view.</p>"
+        summary += '<p class="acct-sub">No posted transactions reported for this month in this view.</p>'
 
     rows = []
     q = f["q"].casefold().strip()
@@ -430,19 +433,8 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         '<script defer src="/dashboard.js"></script>'
         '<section class="history" aria-labelledby="cash-flow"><h2 id="cash-flow">Monthly cash flow</h2>'
         + alert + moved + search + sync + _classifier_panel(db, f, token) + summary
-        + '<p>Pending, transfers and explicit unmatched card-payment credits are outside totals; unmatched bank '
-        'debits remain spending. Automatic card matching requires corroboration on both available legs. '
-        'Checking and savings matches are suggestions only. A manual transfer choice overrides a merchant '
-        'rule, which overrides automatic classification.</p>'
-        '<details><summary>Coverage and dates</summary><p>Requested windows do not prove institution '
-        'completeness or retention. Current-month figures are provisional. Excluded accounts do not contribute. '
-        'Individual views include joint accounts. List filters do not change totals. Merchant rules match the '
-        'cleaned merchant name (dates, store and reference numbers removed) on the same account and currency; '
-        'a category you set on one row by hand always wins over a rule. Dates are the bank\'s posted date (UTC): '
-        'an evening transaction in a western timezone, or a local-midnight stamp east of UTC, can show a day '
-        'off, and month filters use the same date.</p>'
-        + ("<ul>" + "".join(coverage) + "</ul>" if coverage else "<p>No included accounts in this view.</p>")
-        + '</details></section><section><h2>Transactions</h2>' + review_chip + table + '</section>')
+        + info_box(coverage, can_sync=can_sync and "Household" in allowed_views)
+        + '</section><section><h2>Transactions</h2>' + review_chip + table + '</section>')
 
 
 @dataclass(frozen=True)

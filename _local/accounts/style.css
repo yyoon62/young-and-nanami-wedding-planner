@@ -417,6 +417,24 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
 .tx-reset { font-size: .95rem; vertical-align: middle; }
 .tx-ovr { margin-left: .2rem; font-style: italic; }
 .tx-form small.tx-hint { display: block; margin: .1rem 0 .55rem; color: var(--text-muted); }
+/* Spending by category: one collapsed line with the top 3; the full bars open on click (or when a category is set). */
+.bars { margin-top: .35rem; }
+.history .bars-det > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem .8rem; width: auto;
+  margin: .2rem 0 0; font-size: .9rem; color: #2b2320; }
+.bars-det > summary::before { flex: none; color: var(--accent-strong); }
+.bars-title { font-weight: 700; }
+.bars-top { display: inline-flex; flex-wrap: wrap; gap: 0 .9rem; color: var(--text-secondary); font-weight: 400; }
+.bars-det[open] > summary { margin-bottom: .35rem; }
+.card .bars-top strong, .card .bar-nums strong { display: inline; font: inherit; font-weight: 700; margin: 0; }
+.bars-det .bar-row { padding: .1rem .3rem; }
+.tx-notes { list-style: none; margin: .1rem 0 .3rem; padding: 0; color: var(--text-secondary); font-size: .86rem; line-height: 1.5; }
+.tx-info { margin: 0 0 .5rem; }
+.tx-info > summary { margin-top: .1rem; font-size: .88rem; }
+.tx-info-body { margin: .3rem 0 0; padding: .1rem .9rem .5rem; background: #fcf9f5; border: 1px solid var(--border);
+  border-radius: 10px; font-size: .86rem; color: var(--text-secondary); }
+.tx-info-body h4 { margin: .6rem 0 .15rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.tx-info-body ul { margin: 0; padding-left: 1.1rem; }
+.tx-info-body li { margin: .1rem 0; }
 .tx-card .tx-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
 .tx-card .tx-card-head .partial-flag { margin-left: 0; }
 .card .tx-sum { color: #2b2320; font-size: 1rem; line-height: 1.55; margin: .15rem 0 .2rem; }

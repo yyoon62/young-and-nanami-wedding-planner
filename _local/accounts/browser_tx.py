@@ -114,6 +114,8 @@ class BrowserTx(unittest.TestCase):
             page.get_by_role("link", name=re.compile("Oct 2026")).first.click()   # prev month link
             page.wait_for_url(re.compile(r"month=2026-10"))
             page.goto(origin + "/transactions?month=2026-11")
+            self.assertFalse(page.locator("a.bar-row").first.is_visible())          # bars start collapsed
+            page.locator("article.tx-card", has=page.locator("small", has_text="USD")).locator("details.bars-det > summary").click()
             page.locator("a.bar-row", has_text="Dining").click()
             page.wait_for_url(re.compile(r"cat=Dining"))
             rows = page.locator("tr.acct-row")
@@ -228,6 +230,28 @@ class BrowserTx(unittest.TestCase):
                 page.get_by_role("link", name="Clear filter").click()
             self.assertNotIn("review=1", page.url)
             self.assertEqual(page.locator("tr.acct-row").count(), total)
+
+    def test_default_page_has_at_most_three_one_line_text_blocks_and_the_info_box_opens(self):
+        seed_fictional(self.path, joint_card=True)
+        with block_network(allow_loopback=True), running(self.path) as origin, self.browser() as page:
+            page.goto(origin + "/transactions?month=2026-11")
+            blocks = page.locator("section.history > p:not(.notice):not(.filter-chip), .tx-notes li, details.tx-info > summary")
+            self.assertEqual(blocks.count(), 3)
+            for i in range(3):
+                box = blocks.nth(i).bounding_box()
+                self.assertIsNotNone(box)
+                self.assertLessEqual(box["height"], 30, blocks.nth(i).inner_text())      # one line at 1280 px
+            self.assertFalse(page.locator(".tx-info-body").is_visible())
+            self.assertFalse(page.locator("a.bar-row").first.is_visible())
+            page.locator("details.tx-info > summary").click()
+            expect(page.locator(".tx-info-body")).to_contain_text("the matching bank debit still counts as spending")
+            expect(page.locator(".tx-info-body")).to_contain_text("partial = an account has no or late data")
+        with block_network(allow_loopback=True), running(self.path) as origin, \
+                self.browser({"width": 390, "height": 844}) as page:
+            page.goto(origin + "/transactions?month=2026-11")
+            self.assertEqual(page.evaluate("document.documentElement.scrollWidth"), 390)
+            summary = page.locator("details.bars-det > summary").first
+            self.assertLessEqual(summary.bounding_box()["x"] + summary.bounding_box()["width"], 390)
 
     def test_projections_apply_one_click_then_advanced_toggles(self):
         seed_fictional(self.path)
