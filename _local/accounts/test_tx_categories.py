@@ -43,7 +43,10 @@ CREATE TABLE transaction_merchant_rules (account_id INTEGER NOT NULL, source TEX
 
 
 def dump(db, tables):
-    return {t: db.execute(f"SELECT * FROM {t} ORDER BY 1,2,3").fetchall() for t in tables}
+    """Rows of the tables as they were before L22, ignoring columns added later (L26 owner_override)."""
+    def columns(table):
+        return ",".join(c[1] for c in db.execute(f"PRAGMA table_info({table})") if c[1] != "owner_override")
+    return {t: db.execute(f"SELECT {columns(t)} FROM {t} ORDER BY 1,2,3").fetchall() for t in tables}
 
 
 class MaplePath(Fixture, unittest.TestCase):
@@ -104,10 +107,13 @@ class MaplePath(Fixture, unittest.TestCase):
         bank = [r for r in self.rows("Maple Cafe") if r["nickname"] == "Bank"]
         row = bank[0]
         self.post(bank[1]["row_id"], action="save", category="Dining")
-        html = render_transactions(self.db, "month=2026-11", token=TOKEN, allowed_views=VIEWS)
+        plain = render_transactions(self.db, "month=2026-11", token=TOKEN, allowed_views=VIEWS)
+        self.assertEqual(plain.count('name="action" value="save"'), 0)            # no drawer per row: pages stay small
+        self.assertGreaterEqual(plain.count('class="sec-chip tx-edit"'), len(self.snap().rows))   # one Edit link per row
+        html = render_transactions(self.db, "month=2026-11&edit=%d" % row["row_id"], token=TOKEN, allowed_views=VIEWS)
         self.assertIn("Apply to this merchant on this account (USD) matching “maple cafe”", html)
-        self.assertEqual(html.count("1 other row(s) with a category you set by hand will not change"), 3)
-        self.assertEqual(html.count('name="action" value="save"'), len(self.snap().rows))
+        self.assertEqual(html.count("1 other row(s) with a category you set by hand will not change"), 1)
+        self.assertEqual(html.count('name="action" value="save"'), 1)             # exactly the one open drawer
         self.assertNotIn('name="action" value="category"', html)  # per-row button forms are gone
         self.assertIn('id="tx-%d"' % row["row_id"], html)
 
@@ -115,7 +121,7 @@ class MaplePath(Fixture, unittest.TestCase):
         row = self.rows("Maple Cafe")[0]
         self.post(row["row_id"], action="add_category", new_category="Pets")
         self.assertIn("Pets", list_categories(self.db))
-        self.assertIn('<option value="Pets">Pets</option>',
+        self.assertIn('name="pick" value="Pets"',
                       render_transactions(self.db, "month=2026-11", token=TOKEN, allowed_views=VIEWS))
         for bad, message in (("pets", "already exists"), ("  ", "Enter a category name"), ("", "Enter a category name"),
                              ("Uncategorized", "reserved"), ("x" * 49, "up to 48"), ("a\x00b", "printable")):
@@ -223,7 +229,7 @@ class Migration(unittest.TestCase):
                                  "maple cafe")  # legacy exact rule gains a cleaned key
                 names = [r[0] for r in db.execute("SELECT name FROM transaction_categories ORDER BY name")]
                 self.assertIn("Legacy Free Text", names)  # existing free text joins the list, not lost
-                self.assertEqual(len(names), len(BUILTIN) + 2)  # builtins + built-in Income + the legacy free text
+                self.assertEqual(len(names), len(BUILTIN) + 4 + 2)  # builtins + 4 transfer-like + built-in Income + the legacy free text
                 tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
                 self.assertEqual(len(tables), len(set(tables)))
                 self.assertEqual(monthly_snapshot(db, "2026-11", "Household").rows[0]["category"], "Legacy Free Text")

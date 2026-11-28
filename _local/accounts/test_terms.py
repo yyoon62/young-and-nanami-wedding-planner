@@ -298,11 +298,13 @@ class Migration(unittest.TestCase):
                 db.execute("INSERT INTO classifier_settings VALUES ('enabled','0')")
             with closing(sqlite3.connect(path)) as db:
                 self.assertNotIn("account_terms", [r[0] for r in db.execute("SELECT name FROM sqlite_master")])
-                before = {t: db.execute(f"SELECT * FROM {t} ORDER BY 1,2").fetchall() for t in self.TABLES}
+                cols = {t: ",".join(r[1] for r in db.execute(f"PRAGMA table_info({t})")) for t in self.TABLES}
+                before = {t: db.execute(f"SELECT {cols[t]} FROM {t} ORDER BY 1,2").fetchall() for t in self.TABLES}
             init_db(path)
             init_db(path)
             with closing(sqlite3.connect(path)) as db:
-                after = {t: db.execute(f"SELECT * FROM {t} ORDER BY 1,2").fetchall() for t in self.TABLES}
+                # Compare the pre-existing columns only: later parts add columns (e.g. L26 owner_override) additively.
+                after = {t: db.execute(f"SELECT {cols[t]} FROM {t} ORDER BY 1,2").fetchall() for t in self.TABLES}
                 self.assertEqual(after, before)
                 names = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE name LIKE 'account_terms%'")]
                 self.assertEqual(sorted(names), ["account_terms", "account_terms_delete"])

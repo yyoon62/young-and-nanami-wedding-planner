@@ -12,7 +12,7 @@ import server
 import tx_classifier as C
 from projections_ui import projection_get
 from transactions_ui import render_transactions
-from tx_categories import (BUILTIN, CUSTOM_EMOJI, DEFAULT_EMOJI, TRANSFER_EMOJI, UNCATEGORIZED_EMOJI,
+from tx_categories import (BUILTIN, CUSTOM_EMOJI, DEFAULT_EMOJI, TRANSFER_EMOJI, TRANSFER_LIKE, UNCATEGORIZED_EMOJI,
                            builtin_categories, default_emoji, list_categories, resolve)
 from tx_fixture import Fixture, TOKEN, VIEWS, cover, put_row, source_of
 
@@ -53,7 +53,7 @@ class Income(unittest.TestCase):
             with closing(sqlite3.connect(path)) as db:
                 self.assertIn("Income", list_categories(db))
                 self.assertEqual(db.execute("SELECT builtin FROM transaction_categories WHERE name='Income'").fetchone(), (1,))
-                self.assertEqual(builtin_categories(db), list(BUILTIN))
+                self.assertEqual(builtin_categories(db), list(BUILTIN) + list(TRANSFER_LIKE))
                 allowed = builtin_categories(db)
         reply = json.dumps({"stop_reason": "tool_use", "content": [{"type": "tool_use", "name": C.TOOL, "input": {
             "results": [dict(id="m1", category="Income", emoji="💵", confidence=0.99)]}}]})
@@ -98,7 +98,7 @@ class EmojiAndPage(Fixture, unittest.TestCase):
     def test_every_row_shows_an_emoji_and_defaults_are_single_graphemes(self):
         for value in (*DEFAULT_EMOJI.values(), TRANSFER_EMOJI, UNCATEGORIZED_EMOJI, CUSTOM_EMOJI):
             self.assertTrue(C.one_emoji(value), value)
-        self.assertEqual({*DEFAULT_EMOJI} - {*BUILTIN}, {"Income"})
+        self.assertEqual({*DEFAULT_EMOJI} - {*BUILTIN}, {"Income", *TRANSFER_LIKE})
         self.assertEqual(default_emoji("dining"), DEFAULT_EMOJI["Dining"])
         self.assertEqual(default_emoji("Pets"), CUSTOM_EMOJI)
         html = self.html()
@@ -120,13 +120,15 @@ class EmojiAndPage(Fixture, unittest.TestCase):
         self.assertIn(f'>{DEFAULT_EMOJI["Dining"]}</span> Maple', html)
         self.assertIn(">🧶</span> Totally Unknown", html)        # effective source is "suggested"
 
-    def test_privacy_is_one_line_with_the_full_statement_in_details(self):
+    def test_privacy_statement_lives_in_the_info_box_only(self):
         html = self.html()
-        panel = html[html.index('<details class="classifier"'):]
-        panel = panel[:panel.index('<h2')] if '<h2' in panel else panel
-        self.assertIn("Only cleaned merchant names (no amounts, dates or accounts) are sent, once each.", panel)
-        self.assertRegex(panel, r'<details class="classifier-details"><summary>Privacy details</summary>.*A bare person')
-        self.assertIn("Not available when the dashboard is hosted.", panel)
+        self.assertNotIn('class="classifier"', html)
+        box = html[html.index('<details class="tx-info">'):]
+        self.assertIn("Only cleaned merchant names (no amounts, dates or accounts) are sent, once each.", box)
+        self.assertIn("A bare person’s name or an employer in a description cannot be recognised", box)
+        self.assertIn("Not available when the dashboard is hosted.", box)
+        self.assertIn("↻ Refresh categories", box)
+        self.assertEqual(html.count("↻ Refresh categories"), 1)
 
     def test_projection_suggestions_directly_follow_the_chart_in_the_page(self):
         """L29 reverses the L23-0 default (suggestions above the chart): the chart now sits right under the tab bar."""

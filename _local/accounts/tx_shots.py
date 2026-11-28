@@ -1,4 +1,4 @@
-"""Desktop and phone screenshots of /transactions and /projections from the fictional demo DB (L22).
+"""Desktop and phone screenshots of /transactions (top, full, chip menu, drawer) and /projections from the fictional demo DB (L22, L26).
 
     python tx_shots.py OUT_DIR
 
@@ -45,12 +45,15 @@ def main(out):
         for name, width, height in (("desktop", 1280, 900), ("phone", 390, 844)):
             page = chrome.new_page(viewport={"width": width, "height": height})
             page.goto(origin + "/transactions?month=2026-11")
+            page.screenshot(path=str(out / f"transactions-{name}-top.png"))
             page.screenshot(path=str(out / f"transactions-{name}.png"), full_page=True)
-            page.locator("details.classifier > summary").click()      # collapsed by default; open it for this shot
-            page.locator("details.classifier").screenshot(path=str(out / f"transactions-classifier-{name}.png"))
-            page.locator("details.classifier > summary").click()
             row = page.locator("tr.acct-row", has_text="Metro Transit")
-            row.locator("summary", has_text="Edit").click()
+            row.locator("details.tx-pick > summary").click()          # L26 category chip menu
+            page.wait_for_timeout(250)
+            page.screenshot(path=str(out / f"transactions-menu-{name}.png"))
+            page.keyboard.press("Escape")
+            row.get_by_role("link", name="Edit").click()      # reloads with this row's drawer open
+            row = page.locator("tr.acct-row", has_text="Metro Transit")
             row.scroll_into_view_if_needed()
             page.screenshot(path=str(out / f"transactions-drawer-{name}.png"))
             page.goto(origin + "/projections")

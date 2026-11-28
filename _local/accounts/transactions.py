@@ -19,8 +19,10 @@ from urllib.parse import urlencode
 from bridge import Bridge, Problem, unique_fields
 from bulk import daily_guard_problem, fingerprint, text
 from tx_classifier import install_classifier
-from tx_categories import (clean_merchant, add_category, canonical, install_categories, list_categories,
-                           load_cache, load_rules, resolve)
+from tx_owners import OWNERS, apply_owner
+from tx_categories import (clean_merchant, add_category, canonical, install_categories, is_transfer_category,
+                           list_categories, load_cache, load_rules, resolve)
+from tx_transfers import card_issuer_terms
 
 
 DAY = 86400
@@ -43,8 +45,13 @@ def install_transactions(db):
         pending_active INTEGER NOT NULL CHECK(pending_active IN (0,1)),
         category TEXT NOT NULL DEFAULT '', category_manual INTEGER NOT NULL DEFAULT 0,
         is_transfer INTEGER NOT NULL DEFAULT 0, transfer_manual INTEGER NOT NULL DEFAULT 0,
+        owner_override TEXT CHECK(owner_override IN ('Young','Nanami','Joint')),
         CHECK((pending=1 AND posted_date IS NULL) OR (pending=0 AND posted_date IS NOT NULL)),
         UNIQUE(account_id, tx_id))""")
+    if "owner_override" not in {r[1] for r in db.execute("PRAGMA table_info(account_transactions)")}:
+        # L26: per-transaction owner; NULL follows the account. The sync upsert never lists it, so it survives re-fetches.
+        db.execute("""ALTER TABLE account_transactions
+                      ADD COLUMN owner_override TEXT CHECK(owner_override IN ('Young','Nanami','Joint'))""")
     db.execute("""CREATE INDEX IF NOT EXISTS account_transactions_posted
                   ON account_transactions(posted_date)""")
     db.execute("""CREATE INDEX IF NOT EXISTS account_transactions_pending
@@ -382,7 +389,7 @@ def _match_transfers(rows):
         if _card_credit(r):
             card.append(r)
         elif (r["kind"].lower() in _BANK_KINDS and amount < 0
-              and _signal(r, _BANK_PAYMENT)):
+              and (_signal(r, _BANK_PAYMENT) or r.get("category") == "Card payment")):
             bank[(r["currency"], amount.copy_abs(), r["posted_date"])].append(r["row_id"])
     sole_partner, bank_degree = {}, defaultdict(int)
     for credit in card:
@@ -436,7 +443,9 @@ def _internal_suggestions(rows):
 
 _VISIBLE = """FROM account_transactions t JOIN accounts a ON a.id=t.account_id
     JOIN source_links l ON l.local=a.id AND l.source=t.source"""
-_SCOPE = """WHERE a.excluded=0 AND t.currency=a.currency AND (?='Household' OR a.owner IN (?,'Joint'))"""
+# Effective owner: the transaction's own override, else its account's owner (L26).
+_EFF = "COALESCE(t.owner_override, a.owner)"
+_SCOPE = f"""WHERE a.excluded=0 AND t.currency=a.currency AND (?='Household' OR {_EFF} IN (?,'Joint'))"""
 
 
 @dataclass
@@ -445,6 +454,7 @@ class Totals:
     spending: Decimal = Decimal(0)
     net: Decimal = Decimal(0)
     review: Decimal = Decimal(0)
+    review_count: int = 0    # card credits under review (L26: the "to confirm" line)
     category_spending: dict = field(default_factory=dict)
     category_suggested: dict = field(default_factory=dict)  # category -> cleaned merchants suggested by the classifier
 
@@ -468,13 +478,19 @@ def category_context(db):
 
 def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=False, context=None):
     """Caller owns a read snapshot and authorizes view/household_matching."""
+    start, end = month_dates(month)
+    return period_snapshot(db, start, end, view, show_pending=show_pending,
+                           household_matching=household_matching, context=context)
+
+
+def period_snapshot(db, start, end, view, *, show_pending=False, household_matching=False, context=None):
+    """The same snapshot over any UTC date range [start, end) (end exclusive); a month is just one range (L26-14)."""
     if view not in VIEWS:
         raise ValueError("Unknown account view.")
-    start, end = month_dates(month)
     scope = "Household" if household_matching else view
     # A competing edge of the other leg may be six days from the displayed row.
     # Three days of query padding can falsely turn an ambiguous edge into a pair.
-    rows = _dicts(db.execute(f"""SELECT t.*, a.kind, a.owner, a.nickname, a.institution, a.logo_domain,
+    rows = _dicts(db.execute(f"""SELECT t.*, a.kind, a.owner, {_EFF} AS eff_owner, a.nickname, a.institution, a.logo_domain,
         r.is_transfer AS merchant_transfer {_VISIBLE}
         LEFT JOIN transaction_merchant_rules r ON r.account_id=t.account_id AND r.source=t.source
             AND r.currency=t.currency AND r.merchant=t.merchant
@@ -484,23 +500,26 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
         (scope, scope, str(start - timedelta(days=6)), str(end + timedelta(days=6)),
          show_pending, str(start), str(end))))
     rules, cache, canon = context or category_context(db)
+    issuers = card_issuer_terms(db)
     for r in rows:
         r["category_stored"] = r["category"]
-        r["category"], r["category_source"] = resolve(r, rules, cache, canon)
+        r["category"], r["category_source"] = resolve(r, rules, cache, canon, issuers)
         r["clean_key"] = clean_merchant(r["merchant"])
         hit = cache.get(r["clean_key"]) if r["category_source"] == "suggested" else None
         r["emoji"] = hit[2] if hit else ""
     matched = _match_transfers(rows)
     # Suggestions never depend on the presence of a counterpart outside the
     # selected view, even if the viewer is authorized to switch to Household.
-    suggested = _internal_suggestions(r for r in rows if view == "Household" or r["owner"] in (view, "Joint"))
+    suggested = _internal_suggestions(r for r in rows if view == "Household" or r["eff_owner"] in (view, "Joint"))
     result = Snapshot()
     result.coverage = _dicts(db.execute("""SELECT a.nickname, a.currency, a.institution,
         l.source IS NOT NULL AS linked, c.start_at, c.end_at
         FROM accounts a LEFT JOIN source_links l ON l.local=a.id
         LEFT JOIN transaction_coverage c ON c.source=l.source AND c.account_id=a.id AND c.currency=a.currency
-        WHERE a.excluded=0 AND (?='Household' OR a.owner IN (?,'Joint'))
-        ORDER BY a.institution, a.nickname, a.id""", (view, view)))
+        WHERE a.excluded=0 AND (?='Household' OR a.owner IN (?,'Joint')
+            OR EXISTS (SELECT 1 FROM account_transactions o WHERE o.account_id=a.id
+                       AND o.owner_override IN (?,'Joint')))
+        ORDER BY a.institution, a.nickname, a.id""", (view, view, view)))
     for c in result.coverage:
         c["covered"] = (c["start_at"] is not None and c["start_at"] <= _midnight(start)
                         and c["end_at"] >= _midnight(end))
@@ -515,7 +534,7 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
         # digits. Allow both, plus up to 19 digits of SQLite row count.
         ctx.prec = 150
         for r in rows:
-            if view != "Household" and r["owner"] not in (view, "Joint"):
+            if view != "Household" and r["eff_owner"] not in (view, "Joint"):
                 continue
             if not str(start) <= (r["posted_date"] or r["pending_date"]) < str(end):
                 continue
@@ -526,12 +545,15 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
                 r["flow"] = "Transfer (manual)" if override else "Cash flow (manual)"
             elif override is not None:
                 r["flow"] = "Transfer (merchant rule)" if override else "Cash flow (merchant rule)"
+            elif is_transfer_category(r["category"]):
+                r["flow"] = "Transfer (category)"
             elif r["row_id"] in matched:
                 r["flow"] = "Matched transfer"
             else:
                 r["flow"] = "Review card credit" if _card_credit(r) else "Cash flow"
             r["effective_transfer"] = not r["pending"] and (
-                bool(override) if override is not None else r["row_id"] in matched)
+                bool(override) if override is not None
+                else is_transfer_category(r["category"]) or r["row_id"] in matched)
             r["suggested_transfer"] = r["row_id"] in suggested and not r["effective_transfer"]
             result.rows.append(r)
             if r["pending"]:
@@ -539,6 +561,7 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
             totals = result.totals.setdefault(r["currency"], Totals())
             if r["flow"] == "Review card credit":
                 totals.review += Decimal(r["amount"])
+                totals.review_count += 1
             elif not r["effective_transfer"]:
                 amount = Decimal(r["amount"])
                 if amount > 0:
@@ -601,11 +624,32 @@ def manual_index(db):
     return index
 
 
-ACTIONS = ("category", "rule", "transfer", "transfer_rule", "save", "add_category")
+def _reconcile_transfer(db, row, row_id):
+    """After a chip pick: choosing a spending category undoes a transfer mark (a manual one, or a rule / matched pair
+    by an explicit "not a transfer"); choosing a transfer-like category undoes an earlier "not a transfer"."""
+    rules, cache, canon = category_context(db)
+    fresh = _dicts(db.execute("SELECT * FROM account_transactions WHERE row_id=?", (row_id,)))[0]
+    fresh["kind"], fresh["institution"] = row.get("kind", ""), row.get("institution", "")
+    category, _ = resolve(fresh, rules, cache, canon, card_issuer_terms(db))
+    if is_transfer_category(category):
+        if row["transfer_manual"] and not row["is_transfer"]:
+            _set_transfer(db, row_id, "auto")
+        return
+    if row["transfer_manual"] and row["is_transfer"]:
+        _set_transfer(db, row_id, "auto")
+    day = (row["posted_date"] or row["pending_date"])[:7]
+    snap = monthly_snapshot(db, day, "Household", show_pending=bool(row["pending"]), household_matching=True)
+    now = next((r for r in snap.rows if r["row_id"] == row_id), None)
+    if now is not None and now["effective_transfer"]:
+        _set_transfer(db, row_id, "no")
+
+
+ACTIONS = ("category", "rule", "transfer", "transfer_rule", "save", "add_category", "owner", "owner_reset",
+           "pick", "pick_new")
 
 
 def edit_transaction(db, row_id, view, month, *, action, category="", transfer="", merchant_transfer="",
-                     new_category="", apply=False):
+                     new_category="", apply=False, owner="", span=None):
     """Apply a validated scoped edit inside the caller's BEGIN IMMEDIATE.
 
     `save` is the drawer's one-shot edit (category, optional new category, apply-to-merchant,
@@ -614,25 +658,27 @@ def edit_transaction(db, row_id, view, month, *, action, category="", transfer="
     """
     if view not in VIEWS:
         raise ValueError("Unknown account view.")
-    start, end = month_dates(month)
+    start, end = span or month_dates(month)       # span: the page's (start, end) dates when it shows a period
     if action not in ACTIONS:
         raise ValueError("Unknown transaction action.")
     if transfer not in ("", "auto", "yes", "no") or merchant_transfer not in ("", "none", "yes", "no"):
         raise ValueError("Choose a valid transfer setting.")
+    if action == "owner" and owner not in OWNERS:
+        raise ValueError("Choose Young or Nanami.")
     if action == "transfer" and not transfer:
         raise ValueError("Choose a transfer setting.")
     if action == "transfer_rule" and not merchant_transfer:
         raise ValueError("Choose a merchant transfer rule setting.")
     category = category.strip() if isinstance(category, str) else ""
-    if action in ("category", "rule", "save"):
+    if action in ("category", "rule", "save", "pick", "pick_new"):
         if category:
             _optional_text(category, 48)
             category = canonical(db, category)
             if category is None:
                 raise ValueError("Choose a category from the list, or add it first.")
-        if (action == "rule" or (action == "save" and apply)) and not (category or new_category.strip()):
+        if (action == "rule" or (action in ("save", "pick") and apply)) and not (category or new_category.strip()):
             raise ValueError("Choose a category to apply to this merchant.")
-    found = _dicts(db.execute(f"""SELECT t.* {_VISIBLE} {_SCOPE} AND t.row_id=?
+    found = _dicts(db.execute(f"""SELECT t.*, a.owner AS account_owner, a.kind, a.institution {_VISIBLE} {_SCOPE} AND t.row_id=?
         AND coalesce(t.posted_date,t.pending_date)>=? AND coalesce(t.posted_date,t.pending_date)<?
         AND (t.pending=0 OR t.pending_active=1)""", (view, view, row_id, str(start), str(end))))
     if not found:
@@ -640,6 +686,9 @@ def edit_transaction(db, row_id, view, month, *, action, category="", transfer="
     row = found[0]
     key = (row["account_id"], row["source"], row["currency"], row["merchant"])
     clean = clean_merchant(row["merchant"])
+    if action in ("owner", "owner_reset"):
+        apply_owner(db, row, owner if action == "owner" else None)
+        return True
     if action == "add_category":
         add_category(db, new_category)
         return True
@@ -652,6 +701,22 @@ def edit_transaction(db, row_id, view, month, *, action, category="", transfer="
         _set_merchant_transfer(db, key, clean, merchant_transfer)
         return True
     apply = apply or action == "rule"
+    if action in ("pick", "pick_new"):
+        # One click from the row chip. The choice is the user's: it is always stored on the row as manual (even when
+        # it equals the current one, which pins an AI/rule category), or as a live merchant rule with the toggle.
+        # Choosing a category undoes a manual transfer mark on this row.
+        if action == "pick_new" or new_category.strip():
+            category = add_category(db, new_category)       # blank or duplicate raises: "Enter a category name." / exists
+        if apply:
+            if row["pending"] or not row["merchant"]:
+                raise ValueError("A merchant rule needs a posted transaction with a merchant.")
+            _set_category_rule(db, key, clean, category)
+            db.execute("UPDATE account_transactions SET category='', category_manual=0 WHERE row_id=?", (row_id,))
+        else:
+            db.execute("UPDATE account_transactions SET category=?, category_manual=1 WHERE row_id=?",
+                       (category, row_id))
+        _reconcile_transfer(db, row, row_id)
+        return True
     if action in ("category", "rule", "save"):
         if new_category.strip():
             category = add_category(db, new_category)

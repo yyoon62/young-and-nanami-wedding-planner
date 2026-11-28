@@ -19,7 +19,7 @@ import tx_classifier as C
 from server import init_db
 from transactions import monthly_snapshot
 from transactions_ui import RouteProblem, render_transactions
-from tx_categories import BUILTIN, add_category
+from tx_categories import BUILTIN, TRANSFER_LIKE, add_category
 from tx_fixture import Fixture, TOKEN, VIEWS, block_network, cover, put_row, source_of
 from test_tx_categories import PRE_L22_DDL
 
@@ -101,9 +101,9 @@ class Acceptance(Base, unittest.TestCase):
             notices = C.after_sync(self.path, transport=spy)
         self.assertEqual((spy.calls, result.sent, notices), ([], 0, []))
         html = self.page()
-        self.assertIn("Merchant names are sent to Anthropic.", html)
-        self.assertIn("Category suggestions (off by default)", html)
-        self.assertNotIn('name="enabled" value="1" checked', html)
+        self.assertIn("Auto-categorize is off", html)
+        self.assertNotIn("Category suggestions", html)                 # no panel in the main view (L26-7)
+        self.assertNotIn(" checked> ✨", html)                           # the one checkbox starts unticked
         self.enable()
         result = self.run_it(spy, environ={})
         self.assertEqual((spy.calls, result.sent), ([], 0))
@@ -147,7 +147,7 @@ class Acceptance(Base, unittest.TestCase):
         self.assertNotIn("temperature", body)  # rejected by claude-haiku-5-5 (HTTP 400)
         self.assertEqual(body["tool_choice"], {"type": "tool", "name": "record_categories"})
         schema = body["tools"][0]["input_schema"]["properties"]["results"]["items"]["properties"]
-        self.assertEqual(schema["category"]["enum"], list(BUILTIN))
+        self.assertEqual(schema["category"]["enum"], list(BUILTIN) + list(TRANSFER_LIKE))
         self.assertNotIn("Income", schema["category"]["enum"])
         wire = json.dumps(body)
         for private in ("12.34", "11.34", "-7.00", "2026-11", "2026-", "Bank", "Young", "Fictional institution",
@@ -162,11 +162,12 @@ class Acceptance(Base, unittest.TestCase):
         bakery = next(r for r in snap.rows if r["description"].startswith("SQ *FRESH BAKERY"))
         self.assertEqual((bakery["category"], bakery["category_source"], bakery["emoji"]), ("Dining", "suggested", "🥐"))
         html = self.page()
-        self.assertIn('<span class="badge" title="Suggested by the classifier; not confirmed">suggested</span>', html)
+        self.assertNotIn('class="badge"', html)                       # an AI category is a normal chip ...
         self.assertIn("🥐", html)
-        self.assertIn("includes 3 suggested", html)                   # Dining: two cached + fresh bakery
-        self.assertIn("includes 2 suggested", html)                   # Shopping: fresh books + dormant shop (not the ruled one)
-        self.assertIn("Needs review", html)                            # the withheld person-like merchant
+        self.assertIn("Change category · ✨ suggested by AI", html)    # ... with a ✨ in its tooltip
+        self.assertNotIn("includes 3 suggested", html)
+        self.assertNotIn("Needs review", html)                         # the withheld person-like merchant is Uncategorized
+        self.assertIn("🏷️ Uncategorized ▾", html)
         # A second run sends nothing.
         again = self.run_it(fake)
         self.assertEqual((len(fake.calls), again.sent), (1, 0))
@@ -206,8 +207,9 @@ class Acceptance(Base, unittest.TestCase):
         self.assertNotIn("<img src=x", html)
         self.assertNotIn('onerror=alert(1)>', html.replace("&lt;img src=x onerror=alert(1)&gt;", ""))
         self.assertIn("&lt;img src=x onerror=alert(1)&gt;", html)
-        self.assertIn("Needs review", html)
-        self.assertEqual(html.count('class="badge"'), 1)                # only "Good Shop" is a (valid) suggestion
+        self.assertNotIn("Needs review", html)
+        self.assertEqual(html.count("✨ suggested by AI"), 1)           # only "Good Shop" is a (valid) suggestion
+        self.assertEqual(html.count("🏷️ Uncategorized ▾"), 3)           # the three low-confidence/invalid ones
 
     # ---- 12 ----
     def test_failures_keep_valid_items_retry_with_backoff_and_never_break_the_page(self):
@@ -222,7 +224,7 @@ class Acceptance(Base, unittest.TestCase):
             result = self.run_it(fake)
             self.assertIn(text, result.status)
             self.assertEqual((self.cache(), self.setting("failures"), self.setting("next_try_at")), ({}, "1", str(NOW + 300)))
-            self.assertIn("Category suggestions", self.page())                  # no error wall
+            self.assertIn("How these numbers work", self.page())               # no error wall
         # Backoff doubles, caps at six hours, and blocks calls until due.
         fake = Fake(C.TransportError(500))
         with self.db:
@@ -406,7 +408,6 @@ class Candidates(Base, unittest.TestCase):
             os.environ.pop("ANTHROPIC_API_KEY", None)
             self.enable()
             html = self.page()
-            self.assertIn('<details class="classifier" open>', html)                 # needs attention: shown open
             self.assertIn("No key found. Nothing is sent without a key.", html)
             self.assertIn("On, but nothing is sent until a usable key is found.", html)
             self.assertNotIn("Key found", html)
@@ -414,17 +415,53 @@ class Candidates(Base, unittest.TestCase):
         with mock.patch.dict(os.environ, ENV):
             html = self.page()
             self.assertIn("Key found (environment).", html)
-            self.assertIn('<details class="classifier"><summary>Category suggestions · on</summary>', html)
             self.assertNotIn("No key found", html)
             self.enable("0")
             html = self.page()
-            self.assertIn("<br>Off.<br>", html)
+            self.assertIn("Auto-categorize is off", html)
+
+    def test_main_view_has_one_checkbox_and_nothing_else_about_the_classifier(self):
+        self.put("2026-11-03", "-12.40", "Maple Cafe")
+        with mock.patch.dict(os.environ, ENV):
+            html = self.page()
+            outside = html[:html.index('<details class="tx-info">')] + html[html.index("</details>", html.index('<details class="tx-info">')):]
+            form = re.search(r'<form[^>]*class="tx-auto"[^>]*>.*?</form>', outside, re.S).group(0)
+            self.assertIn('title="Sends merchant names only to Anthropic"', form)
+            self.assertIn("✨ Auto-categorize with AI", form)
+            self.assertNotIn(" checked", form)                               # off until the user ticks it
+            self.assertNotIn("tx-warn", form)                                # nothing wrong while it is off
+            for gone in ("Category suggestions", "Key found", "Model:", "Merchants so far", "Last run", "Privacy details",
+                         "Classify now", "sent to Anthropic.", "Only cleaned merchant"):
+                self.assertNotIn(gone, outside)
+            self.assertEqual(html.count('name="enabled"'), 1)
+            self.assertEqual(html.count("↻ Refresh categories"), 1)           # only inside the ℹ️ box
+            self.post(action="classifier", enabled="1")
+            self.assertIn(' checked> ✨ Auto-categorize', self.page())
+            self.assertNotIn("tx-warn", self.page())                         # key present, no errors: no warning
+
+    def test_warning_only_while_something_is_wrong_no_key_or_paused_after_errors(self):
+        self.put("2026-11-03", "-12.40", "Maple Cafe")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            self.assertNotIn("tx-warn", self.page())                         # off: no warning even with no key
+            self.enable()
+            html = self.page()
+            self.assertRegex(html, r'<span class="tx-warn"[^>]*title="No key found\. Nothing is sent without a key\."')
+        with mock.patch.dict(os.environ, ENV):
+            self.assertNotIn("tx-warn", self.page())                         # key found again: gone
+            with self.db:
+                C.set_setting(self.db, "failures", 2)
+                C.set_setting(self.db, "next_try_at", int(__import__("time").time()) + 3600)
+                C.set_setting(self.db, "status", "Anthropic rejected the key (HTTP 401). Check the key; classification paused.")
+            self.assertRegex(self.page(), r'<span class="tx-warn"[^>]*title="Anthropic rejected the key')
+            with self.db:
+                C.set_setting(self.db, "next_try_at", 0)                     # pause over: warning gone
+            self.assertNotIn("tx-warn", self.page())
 
     def test_toggle_and_classify_now_through_the_edit_route(self):
         self.put("2026-11-03", "-12.40", "Maple Cafe")
         self.post(action="classifier", enabled="1")
         self.assertTrue(C.enabled(self.db))
-        self.assertIn('name="enabled" value="1" checked', self.page())
         self.post(action="classifier")                      # unchecked checkbox sends nothing
         self.assertFalse(C.enabled(self.db))
         for bad in (dict(action="classifier", enabled="2"), dict(action="classify_now", enabled="1")):

@@ -12,23 +12,33 @@ from datetime import datetime, timezone
 from html import escape
 import re
 import secrets
+import time
 from urllib.parse import parse_qsl, urlencode
 
 from html import escape as _esc  # noqa: F401
 from decimal import Decimal
-from tx_periods import month_add, month_label, money, spending_comparison
+from tx_range import DEFAULT_PERIOD, PERIODS, comparisons as period_comparisons, earliest_date, resolve_span
+from tx_bars import CURRENT, legend_chip, ordered, stacked_bar, tooltip
+from tx_filters import currency_tabs, find_form, pending_toggle, period_tabs, view_tabs
+from tx_info import info_box, notes_html
+from tx_money import fmt, fmt_exact, sign_of
+from tx_periods import month_add, month_label, spending_comparison
 from logos import cached_logo, domain_for, fallback_svg
-from transactions import (CURRENCY, VIEWS, category_context, edit_transaction, manual_index, month_dates,
-                          monthly_snapshot)
+from transactions import (CURRENCY, VIEWS, _midnight, category_context, edit_transaction, manual_index,
+                          month_dates, period_snapshot)
 from pathlib import Path
-from tx_categories import default_emoji, list_categories
-from tx_classifier import enabled as classifier_enabled, load_key, model_name, run_classifier, set_setting, stats as classifier_stats
+from tx_categories import default_emoji, is_transfer_category, list_categories
+from tx_owners import PEOPLE, effective, effective_owner_of
+from tx_classifier import (enabled as classifier_enabled, get_setting, load_key, model_name, run_classifier, set_setting,
+                           stats as classifier_stats)
 
 
 TRANSACTIONS = "/transactions"
 EDIT = TRANSACTIONS + "/edit"
 SYNC = TRANSACTIONS + "/sync"
-_FILTERS = ("month", "view", "currency", "q", "pending", "cat")
+_FILTERS = ("period", "month", "view", "currency", "q", "pending", "cat", "review")
+ROW_CAP = 500        # a long period (All) lists the newest 500 rows and says so; totals and bars use every row
+_MOVED = re.compile(r"(Young|Nanami|Unspecified)-([1-9][0-9]{0,18})")   # one-shot GET note after an owner click, not a filter
 
 
 class RouteProblem(Exception):
@@ -57,24 +67,29 @@ def _params(raw, keys):
     return data
 
 
-def _filters(data, allowed_views, default_month):
+def _filters(data, allowed_views, default_month=None):
     view = data.get("view", next((v for v in VIEWS if v in allowed_views), "Household"))
     if view not in VIEWS:
         raise RouteProblem(400, "Unknown account view.")
     if view not in allowed_views:
         raise RouteProblem(403, "Account view not authorized.")
-    month = data.get("month", default_month)
-    try:
-        month_dates(month)
-    except ValueError as exc:
-        raise RouteProblem(400, str(exc)) from None
-    currency, q, pending, category = (data.get(k, default) for k, default in
-                                      (("currency", ""), ("q", ""), ("pending", "0"), ("cat", "")))
+    period = data.get("period", DEFAULT_PERIOD)
+    if period not in PERIODS:
+        raise RouteProblem(400, "Unknown period.")
+    month = data.get("month", "")
+    if month:                      # an old link: one calendar month (wins over the period)
+        try:
+            month_dates(month)
+        except ValueError as exc:
+            raise RouteProblem(400, str(exc)) from None
+    currency, q, pending, category, review = (data.get(k, default) for k, default in
+                                              (("currency", ""), ("q", ""), ("pending", "0"), ("cat", ""), ("review", "")))
     if ((currency and not CURRENCY.fullmatch(currency)) or len(q) > 100
-            or (q and not q.isprintable()) or pending not in ("0", "1")
+            or (q and not q.isprintable()) or pending not in ("0", "1") or review not in ("", "1")
             or len(category) > 48 or (category and not category.isprintable())):
         raise RouteProblem(400, "Invalid transaction filter.")
-    return dict(month=month, view=view, currency=currency, q=q, pending=pending, cat=category)
+    return dict(period=period, month=month, view=view, currency=currency, q=q, pending=pending, cat=category,
+                review=review)
 
 
 def _hidden(data, **extra):
@@ -87,18 +102,36 @@ def _option(value, label, chosen):
 
 
 def _location(filters):
-    return TRANSACTIONS + "?" + urlencode(filters)
+    keep = dict(filters)
+    if keep.get("month"):
+        keep.pop("period", None)       # an old month= link: the month decides, no period is written
+    else:
+        keep.pop("month", None)
+    return TRANSACTIONS + "?" + urlencode(keep)
 
 
 def _stamp(stamp):
     return datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-_SOURCES = {"suggested": ' <span class="badge" title="Suggested by the classifier; not confirmed">suggested</span>',
-            "manual": ' <span class="acct-sub">(set by you)</span>',
-            "rule": ' <span class="acct-sub">(merchant rule)</span>',
-            "stamp": ' <span class="acct-sub">(saved rule)</span>',
-            "default": ' <span class="acct-sub">(built-in default)</span>'}
+_ORIGIN = {"manual": "(set by you)", "rule": "(merchant rule)", "stamp": "(saved rule)", "default": "(built-in default)",
+           "suggested": "✨ suggested by AI"}
+# Plain wording for the internal flow values (they stay as they are: Projections reads them). "Cash flow*" has no
+# wording at all: an ordinary row carries no label, only transfers (↔️), card payments to confirm and pending do.
+_FLOW_WORDS = {"Transfer (manual)": "marked as a transfer by you", "Transfer (merchant rule)": "transfer by merchant rule",
+               "Transfer (category)": "transfer by category", "Matched transfer": "matched with its other side",
+               "Review card credit": "card payment credit to confirm", "Pending": "pending"}
+
+
+def _flow_label(r):
+    """The one short visible label of a row, or ''. The chip already says it for a category-less transfer."""
+    if r["flow"] == "Review card credit":
+        return "⚠️ to confirm"
+    if r["flow"] == "Pending":
+        return "pending"
+    if r["effective_transfer"] and r["category"] and not is_transfer_category(r["category"]):
+        return "↔️ transfer"
+    return ""
 
 
 def _data_dir(db):
@@ -106,41 +139,60 @@ def _data_dir(db):
     return Path(row[2]).parent if row and row[2] else None
 
 
-def _classifier_panel(db, f, token):
+def _auto_problem(db):
+    """'' unless auto-categorize is on and something is actually wrong: no usable key, or paused after errors."""
+    if not classifier_enabled(db):
+        return ""
+    key, _, problem = load_key(_data_dir(db))
+    if key is None:
+        return (problem or "No key found.") + " Nothing is sent without a key."
+    if int(get_setting(db, "failures", "0") or 0) > 0 and int(get_setting(db, "next_try_at", "0") or 0) > time.time():
+        return get_setting(db, "status", "") or "Paused after errors; will retry later."
+    return ""
+
+
+def _auto_checkbox(db, f, token):
+    """The classifier's whole presence in the main view: one optional checkbox. It saves as it changes (a plain
+    form submit without JS), and a small ⚠️ appears next to it only while something is wrong."""
+    on, problem = classifier_enabled(db), _auto_problem(db)
+    warn = (f' <span class="tx-warn" role="img" aria-label="Problem" title="{escape(problem)}">⚠️</span>' if problem else "")
+    return (f'<form method="post" action="{EDIT}" class="tx-auto" data-autosubmit>'
+            + _hidden(f, token=token, action="classifier")
+            + f'<label title="Sends merchant names only to Anthropic"><input type="checkbox" name="enabled" value="1"'
+            f'{" checked" if on else ""}> ✨ Auto-categorize with AI</label>{warn}'
+            '<noscript><button class="button secondary">Save</button></noscript></form>')
+
+
+def _categories_info(db, f, token):
+    """The classifier's only home on the page: a section of the ℹ️ box with the privacy facts, the key/status
+    lines and the "↻ Refresh categories" action (its own form: it must not carry the toggle's checkbox)."""
     on, st = classifier_enabled(db), classifier_stats(db)
     key, source, problem = load_key(_data_dir(db))
     key_line = (f"Key found ({source})." if key else (problem or "No key found.") + " Nothing is sent without a key.")
     if not on:
-        status = "Off."
+        status = "Auto-categorize is off (tick ✨ Auto-categorize with AI to turn it on)."
     elif key is None:
         status = "On, but nothing is sent until a usable key is found."   # never next to a stale "last run" line
     else:
-        status = st["status"] or "On, waiting for the next sync or Classify now."
-    form = (f'<form method="post" action="{EDIT}" class="drawer-form classifier-form">'
-            + _hidden(f, token=token)
-            + '<label class="check"><input type="checkbox" name="enabled" value="1"'
-            + (" checked" if on else "") + '> Suggest categories and an emoji with Claude Haiku. '
-            '<strong>Merchant names are sent to Anthropic.</strong></label>'
-            '<div class="drawer-left"><button name="action" value="classifier">Save</button></div></form>')
-    # Its own form: sharing the checkbox form would post "enabled" with classify_now, which the route rejects.
-    now_form = (f'<form method="post" action="{EDIT}" class="drawer-form classifier-form">'
-                + _hidden(f, token=token)
-                + '<div class="drawer-left"><button class="button secondary" name="action" '
-                'value="classify_now">Classify now</button></div></form>' if on else "")
-    form += now_form
-    totals = f'{st["suggested"]} suggested · {st["review"]} need review · {st["pending"]} waiting'
-    title = "Category suggestions · on" if on else "Category suggestions (off by default)"
-    return (f'<details class="classifier"{" open" if on and key is None else ""}><summary>{title}</summary>'
-            + form +
-            f'<p class="acct-sub">{escape(key_line)} Model: {escape(model_name())}.<br>'
-            f'{escape(status)}<br>Merchants so far: {totals}.</p>'
-            '<p class="acct-sub">Only cleaned merchant names (no amounts, dates or accounts) are sent, once each.</p>'
-            '<details class="classifier-details"><summary>Privacy details</summary>'
-            '<p class="acct-sub">Only cleaned merchant text (for example “maple cafe”) leaves this computer, once per '
-            'merchant: never amounts, dates, accounts, owners or ids. Descriptions that look like Zelle, Venmo, '
-            'payroll, transfers or checks are not sent. A bare person’s name or an employer in a description '
-            'cannot be recognised and would be sent. Suggestions are labelled, never override anything you set, '
-            'and are not counted as confirmed. Not available when the dashboard is hosted.</p></details></details>')
+        status = st["status"] or "On, waiting for the next sync or a refresh."
+    refresh = (f'<form method="post" action="{EDIT}" class="drawer-form tx-refresh">'
+               + _hidden(f, token=token)
+               + '<button class="button secondary" name="action" value="classify_now">↻ Refresh categories</button>'
+               '</form>')
+    bullets = (
+        "✨ A category suggested by AI looks like any other chip (✨ in its tooltip). A category you choose is never "
+        "overwritten or re-sent; a low-confidence guess shows as Uncategorized for you to pick.",
+        "Only cleaned merchant names (no amounts, dates or accounts) are sent, once each.",
+        "Only cleaned merchant text (for example “maple cafe”) leaves this computer, once per merchant: never amounts, "
+        "dates, accounts, owners or ids.",
+        "Descriptions that look like Zelle, Venmo, payroll, transfers or checks are not sent. A bare person’s name or "
+        "an employer in a description cannot be recognised and would be sent.",
+        "Suggestions never override anything you set and are not counted as confirmed. Not available when the "
+        "dashboard is hosted.",
+        f"{key_line} Model: {model_name()}.",
+        status,
+        f'Merchants so far: {st["suggested"]} suggested · {st["review"]} uncategorized · {st["pending"]} waiting.')
+    return ("<h4>Categories</h4><ul>" + "".join(f"<li>{escape(t)}</li>" for t in bullets) + "</ul>" + refresh)
 
 
 def _drawer(r, f, token, categories, manual, attempt, error):
@@ -150,7 +202,7 @@ def _drawer(r, f, token, categories, manual, attempt, error):
     cats = _option("", "Uncategorized", chosen) + "".join(_option(c, c, chosen) for c in names)
     transfer = attempt.get("transfer") or (("yes" if r["is_transfer"] else "no") if r["transfer_manual"] else "auto")
     choices = "".join(_option(value, label, transfer) for value, label in
-                      (("auto", "Automatic"), ("yes", "Transfer"), ("no", "Not a transfer")))
+                      (("auto", "Automatic"), ("yes", "Yes, a transfer"), ("no", "No, not a transfer")))
     can_rule = not r["pending"] and bool(r["merchant"])
     rules = ""
     if can_rule:
@@ -161,75 +213,176 @@ def _drawer(r, f, token, categories, manual, attempt, error):
         note = (f" {others} other row(s) with a category you set by hand will not change." if others > 0 else "")
         rule_choice = attempt.get("merchant_transfer") or {None: "none", 1: "yes", 0: "no"}[r["merchant_transfer"]]
         rule_choices = "".join(_option(value, label, rule_choice) for value, label in
-                               (("none", "No rule"), ("yes", "Transfer"), ("no", "Not a transfer")))
+                               (("none", "No rule"), ("yes", "Yes, always a transfer"), ("no", "No, never a transfer")))
+        who = escape((key or r["description"] or r["merchant"])[:40])
         rules = (f'<label class="check"><input type="checkbox" name="apply" value="1"'
                  f'{" checked" if attempt.get("apply") == "1" else ""}> Apply to this merchant on this account '
                  f'({escape(r["currency"])}){scope}.</label><small>{note.strip()}</small>'
-                 f'<label>Merchant transfer rule<select name="merchant_transfer">{rule_choices}</select></label>')
+                 f'<label>Always treat “{who}” on this account as a transfer'
+                 f'<select name="merchant_transfer">{rule_choices}</select></label>')
     problem = f'<p class="notice" role="alert">{escape(error)}</p>' if error else ""
     return (
-        f'<details class="inline-pop tx-drawer"{" open" if error else ""}><summary class="sec-chip">Edit</summary>'
+        f'<details class="inline-pop tx-drawer" open><summary class="sec-chip">Edit</summary>'
         f'<form method="post" action="{EDIT}" class="drawer-form tx-form">{problem}'
         + _hidden(f, token=token, row=r["row_id"])
         + f'<div class="tx-grid"><label>Category<select name="category">{cats}</select></label>'
         f'<label>New category<input name="new_category" maxlength="48" autocomplete="off" '
         f'value="{escape(attempt.get("new_category", ""))}" placeholder="e.g. Pets"></label>'
         '<button class="button secondary" name="action" value="add_category">Add category</button>'
-        f'<label>Transfer<select name="transfer">{choices}</select></label></div>'
-        + rules + '<div class="drawer-left"><button name="action" value="save">Save</button></div>'
+        f'<label>Is this transaction a transfer?<select name="transfer">{choices}</select></label></div>'
+        '<small class="tx-hint">Transfer = money between your own accounts; not counted as spending.</small>'
+        + rules + '<div class="drawer-left"><button name="action" value="save">Save</button>'
+        f'<a class="button secondary" href="{escape(_short_location(f))}#tx-{r["row_id"]}">Cancel</a></div>'
         '</form></details>')
 
 
+DATA_UP = 'data-up="1" '
+
+
+def _pick_menu(f, token, categories, current, *, row="", who="", rule=True, attempt=None, error=""):
+    """The category menu of a row's chip, in the Accounts `.sec-menu` / `.sec-opt` look. One click on an emoji +
+    category button posts it (no Save). The default button (first in tree order, so Enter in the name field) is
+    the hidden "Add", never the first category."""
+    attempt = attempt or {}
+    def button(c):
+        return (f'<button type="submit" name="pick" value="{escape(c)}" class="sec-opt{" active" if c == current else ""}">'
+                f'{default_emoji(c)} {escape(c)}</button>')
+    spend = [c for c in categories if not is_transfer_category(c)]
+    moves = [c for c in categories if is_transfer_category(c)]
+    buttons = "".join(button(c) for c in spend)
+    none = (f'<button type="submit" name="pick" value="" class="sec-opt{" active" if current == "" else ""}">'
+            '🏷️ Uncategorized</button>')
+    problem = f'<p class="tx-menu-err" role="alert">{escape(error)}</p>' if error else ""
+    apply = (f'<label class="check tx-apply"><input type="checkbox" name="apply" value="1"'
+             f'{" checked" if attempt.get("apply") == "1" else ""}> Apply to all <strong class="tx-apply-who">'
+             f'{escape(who)}</strong> on this account</label>') if rule else ""
+    return (f'<form method="post" action="{EDIT}" class="sec-menu tx-menu">'
+            + _hidden(f, token=token, row=row)
+            + '<button type="submit" name="pick_new" value="1" class="sr" tabindex="-1" aria-hidden="true">Add</button>'
+            + buttons + none
+            + '<span class="tx-group" title="Money between your own accounts; not counted as spending">'
+            'Not spending</span>' + "".join(button(c) for c in moves)
+            + f'<span class="tx-new"><input name="new_category" maxlength="48" autocomplete="off" '
+            f'placeholder="+ New category" aria-label="New category name" '
+            f'value="{escape(attempt.get("new_category", ""))}">'
+            '<button type="submit" name="pick_new" value="1" class="sec-opt">Add</button></span>'
+            + apply + problem + '</form>')
+
+
+def _chip_label(r):
+    category = r["category"]
+    if category:
+        return f'{default_emoji(category)} {escape(category)}'
+    if r["effective_transfer"]:
+        return "↔️ Transfer"
+    return "🏷️ Uncategorized"
+
+
+def _category_cell(r, f, token, categories, *, up, opened, attempt, error):
+    """The row's category chip + its popover (the menu itself is cloned from one <template> on open)."""
+    can_rule = not r["pending"] and bool(r["merchant"])
+    who = (r["clean_key"] or r["description"] or r["merchant"])[:40]
+    tip = " · ".join(x for x in ("Change category", _ORIGIN.get(r["category_source"]),
+                                 _FLOW_WORDS.get(r["flow"], "")) if x)
+    menu = (_pick_menu(f, token, categories, r["category"], row=r["row_id"], who=who, rule=can_rule,
+                       attempt=attempt, error=error) if opened else "")
+    return (f'<details class="inline-pop tx-pick{" up" if up else ""}"{" open" if opened else ""} '
+            f'{DATA_UP if up else ""}data-row="{r["row_id"]}" data-cat="{escape(r["category"])}" data-who="{escape(who)}" '
+            f'data-rule="{1 if can_rule else 0}"><summary class="sec-chip tx-chip'
+            f'{"" if r["category"] or r["effective_transfer"] else " is-none"}" title="{escape(tip)}">'
+            f'{_chip_label(r)} ▾</summary>{menu}</details>')
+
+
+def _summary_card(currency, t, cmp, f):
+    """Opening tag + compact per-currency summary; the caller appends the bars and </article>."""
+    net = sign_of(t.net, currency)
+    label = "🟢 Net saved" if net > 0 else "🔴 Net overspent" if net < 0 else "⚪ Net even"
+    chips = "".join(f' <span class="partial-flag" title="Only the days with synced data are counted; nothing is '
+                    f'extrapolated">{escape(n)}</span>' for n in cmp.notes)
+    line = (f'<div class="tx-sum"><span title="Money in, refunds included; not verified income. Transfers between your '
+            f'own accounts are left out">💰 Income <strong>{fmt(t.credits, currency)}</strong></span> '
+            f'<span title="Money out. Pending items, transfers between your own accounts and card payments are left '
+            f'out">💸 Spending <strong>{fmt(t.spending, currency)}</strong></span> '
+            f'<span title="Income minus spending for this period; not measured savings">{label} '
+            f'<strong>{fmt(t.net, currency, absolute=True)}</strong></span></div>')
+    confirm = ""
+    if t.review_count:
+        n = t.review_count
+        active = f["review"] == "1" and f["currency"] == currency
+        confirm = (f'<div class="tx-confirm"><a href="{escape(_location(dict(f, review="1", currency=currency)))}"'
+                   f'{CURRENT if active else ""} title="Payments that arrived on a card with no '
+                   f'matching payment from your bank yet; click to list them">⚠️ {n} card payment{"" if n == 1 else "s"} to confirm · '
+                   f'{fmt(t.review, currency)}</a></div>')
+    return (f'<article class="card tx-card"><div class="tx-card-head"><small>{escape(currency)}</small>{chips}</div>'
+            + line + confirm)
+
+
+def _short_location(f):
+    """The page URL with only the non-default filters written (month and view always)."""
+    keep = {k: v for k, v in f.items() if k == "view" or (v not in ("", "0") and (k != "period" or v != DEFAULT_PERIOD))}
+    return f"{TRANSACTIONS}?{urlencode(keep)}"
+
+
+def _edit_href(f, row_id):
+    """Short link that reopens this page with the row's drawer."""
+    return f"{_short_location(f)}&edit={row_id}#tx-{row_id}"
+
+
+def _owner_cell(r):
+    """Young / Nanami pills with the Accounts classes; both active = Joint. Buttons belong to the page's one shared
+    form (#tx-act) so a row costs a few hundred bytes, not a form. A click toggles this transaction only."""
+    eff = r["eff_owner"]
+    overridden = r["owner_override"] is not None and r["owner_override"] != r["owner"]
+    pills = "".join(
+        f'<button type="submit" form="tx-act" name="act" value="owner-{r["row_id"]}-{p}"'
+        f' class="pill-btn{" active" if eff in (p, "Joint") else ""}"'
+        f' aria-pressed="{"true" if eff in (p, "Joint") else "false"}">{p}</button>' for p in PEOPLE)
+    cell = (f'<span class="inline-form owner-pills" title="Owner of this transaction (account owner: '
+            f'{escape(r["owner"])})">{pills}</span>')
+    if overridden:
+        cell += (f' <button type="submit" form="tx-act" name="act" value="reset-{r["row_id"]}" class="icon-btn tx-reset"'
+                 f' title="Overridden for this transaction. Reset to the account owner ({escape(r["owner"])})"'
+                 f' aria-label="Reset owner to the account owner">↺</button>'
+                 ' <span class="acct-sub tx-ovr">overridden</span>')
+    return f'<td class="owner-cell">{cell}</td>'
+
+
+def _moved_note(moved, f, allowed_views):
+    """One line after an owner click that took the row out of the current view (validated, fixed wording)."""
+    found = _MOVED.fullmatch(moved or "")
+    if not found or f["view"] == "Household" or found[1] == f["view"]:
+        return ""
+    show = (f' · <a href="{escape(_location(dict(f, view="Household")) + "#tx-" + found[2])}">Show in Household</a>'
+            if "Household" in allowed_views else "")
+    where = "Now unassigned (no owner)" if found[1] == "Unspecified" else f"Moved to {found[1]}\'s view"
+    return f'<p class="notice" role="status">{where}{show}</p>'
+
+
 def _bars(cmp, f, totals):
-    """Spending by category for the viewed month vs last month and the 3-month mean."""
+    """Spending by category: ONE stacked bar, then a legend of filter chips (active one highlighted, ✕ clears it).
+    The comparison with the previous period of the same length is in each chip's tooltip."""
     c = cmp.currency
     if not cmp.current:
-        return '<div>No posted spending reported.</div>'
-    zero = Decimal(0)
-    peak = max([*cmp.current.values(), *(cmp.prev or {}).values(), *(cmp.avg or {}).values()] or [Decimal(1)])
-    rows = []
-    for name, amount in sorted(cmp.current.items(), key=lambda kv: (-kv[1], kv[0].casefold())):
-        prev = None if cmp.prev is None else cmp.prev.get(name, zero)
-        avg = None if cmp.avg is None else cmp.avg.get(name, zero)
-        scale = lambda value: float(min(Decimal(100), value * 100 / peak)) if peak else 0.0
-        marks = "".join(f'<line class="{cls}" x1="{scale(v):.2f}" x2="{scale(v):.2f}" y1="0" y2="10"/>'
-                        for cls, v in (("tick-prev", prev), ("tick-avg", avg)) if v is not None)
+        return '<div class="acct-sub">📊 No posted spending reported.</div>'
+    total = sum(cmp.current.values(), Decimal(0))
+    prev_label = f"vs {cmp.prev_span.label}" if cmp.prev is not None else ""
+    chips = []
+    for name, amount in ordered(cmp.current):
         active = f["cat"] == name and f["currency"] == c
-        href = _location(dict(f, cat=name, currency=c))
-        current = ' aria-current="true"' if active else ""  # no backslash in f-string expressions (Python 3.11 on the Pi)
-        rows.append(
-            f'<li><a class="bar-row{" is-active" if active else ""}" href="{escape(href)}"'
-            f'{current} title="Show only {escape(name)} ({escape(c)})">'
-            f'<span class="bar-name">{escape(name)}</span>'
-            f'<svg class="bar-svg" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="'
-            f'{escape(name)}: {money(amount, c)}"><rect class="bar-fill" width="{scale(amount):.2f}" height="10"/>'
-            f'{marks}</svg>'
-            f'<span class="bar-nums"><strong>{money(amount, c)}</strong>'
-            f' <span class="bar-cmp">last month {money(prev, c) if prev is not None else "—"}'
-            f' · {len(cmp.avg_months) or ""}{"-mo avg" if cmp.avg is not None else "3-mo avg"} '
-            f'{money(avg, c) if avg is not None else "—"}'
-            + (f' · includes {cmp.suggested[name]} suggested' if cmp.suggested.get(name) else "")
-            + '</span></span></a></li>')
-    basis = (f'Compared with {escape(month_label(cmp.prev_month))} and the average of '
-             f'{len(cmp.avg_months)} full month(s) before {escape(month_label(cmp.month))}. ' if cmp.avg is not None
-             else f'Compared with {escape(month_label(cmp.prev_month))} where fully fetched; averages need at least '
-                  'two fully fetched months before this one. ')
-    flag = f' <span class="partial-flag">{escape(cmp.partial)}</span>' if cmp.partial else ""
-    clear = ""
+        chips.append(legend_chip(name, amount, total, c, _location(dict(f, cat=name, currency=c)), active,
+                                 tooltip(name, amount, total, c, cmp.prev, None, prev_label, "")))
     if f["cat"] and f["currency"] == c:
-        clear = (f'<p class="filter-chip">Showing {escape(f["cat"])} only ({escape(c)}) · '
-                 f'<a href="{escape(_location(dict(f, cat="", currency="")))}">Clear filter</a></p>')
-    return (f'<section class="bars" aria-label="Spending by category in {escape(c)}">'
-            f'<h3>Spending by category{flag}</h3>{clear}<ul class="bar-list">{"".join(rows)}</ul>'
-            f'<p class="acct-sub">{basis}Bar = this month; ticks = last month and average. Transfers, pending '
-            'and card credits under review are excluded. Click a category to filter the list.</p></section>')
+        chips.append(f'<a class="tx-leg clear" href="{escape(_location(dict(f, cat="", currency="")))}" '
+                     f'title="Show every category again">✕ Clear</a>')
+    return (f'<section class="bars" aria-label="Spending by category in {escape(c)}">{stacked_bar(cmp.current, c)}'
+            f'<div class="legend">{"".join(chips)}</div></section>')
 
 
 def _amount(r):
     value = Decimal(r["amount"])
+    shown = escape(fmt_exact(value, r["currency"]))
     if value == 0:
-        return f'<span class="amt-zero">{escape(format(value, ",f"))}</span>'
-    shown = escape(format(value, "+,f"))
+        return f'<span class="amt-zero">{shown}</span>'
     if r["effective_transfer"] or r["pending"]:
         return f'<span class="amt-neutral">{shown}</span>'
     return f'<span class="{"amt-in" if value > 0 else "amt-out"}">{shown}</span>'
@@ -244,131 +397,138 @@ def _logo(r, logo_dir):
 
 
 def render_transactions(db, query, *, token, allowed_views, can_sync=False, today=None,
-                        open_row=None, attempt=None, error=None, logo_dir=None):
+                        open_row=None, open_pick=None, attempt=None, error=None, logo_dir=None):
     """Return fragment for parent page()/send(); read DB in a single parent snapshot."""
     today = today or datetime.now(timezone.utc).date()
-    f = _filters(_params(query, set(_FILTERS)), allowed_views, today.isoformat()[:7])
+    data = _params(query, set(_FILTERS) | {"moved", "edit"})
+    f = _filters(data, allowed_views)
+    moved = _moved_note(data.get("moved"), f, allowed_views)
+    if open_row is None and re.fullmatch(r"[1-9][0-9]{0,18}", data.get("edit", "")):
+        open_row = int(data["edit"])        # the drawer is rendered only for this row: pages stay small
     context = category_context(db)
-    snap = monthly_snapshot(db, f["month"], f["view"], show_pending=f["pending"] == "1",
-                            household_matching="Household" in allowed_views, context=context)
+    span = resolve_span(f, today, earliest_date(db))
+    snap = period_snapshot(db, span.start, span.end, f["view"], show_pending=f["pending"] == "1",
+                           household_matching="Household" in allowed_views, context=context)
     categories, manual = list_categories(db), manual_index(db)
     attempt = attempt or {}
-    views = "".join(_option(v, v, f["view"]) for v in VIEWS if v in allowed_views)
     currencies = sorted({r["currency"] for r in snap.coverage} | ({f["currency"]} - {""}))
-    currencies = _option("", "All currencies", f["currency"]) + "".join(
-        _option(c, c, f["currency"]) for c in currencies)
-    current_month = today.isoformat()[:7]
-    nav_args = lambda month: _location(dict(f, month=month))
-    next_link = (f'<a class="month-step" href="{escape(nav_args(month_add(f["month"], 1)))}" rel="next">'
-                 f'{escape(month_label(month_add(f["month"], 1)))} →</a>' if f["month"] < current_month
-                 else '<span class="month-step off">Current month</span>')
-    names = "".join(_option(c, c, f["cat"]) for c in list(categories) + ["Uncategorized"]
-                    if c) + ("" if f["cat"] in categories or f["cat"] in ("", "Uncategorized")
-                             else _option(f["cat"], f["cat"], f["cat"]))
-    search = (
-        f'<nav class="month-nav" aria-label="Month"><a class="month-step" href="{escape(nav_args(month_add(f["month"], -1)))}" '
-        f'rel="prev">← {escape(month_label(month_add(f["month"], -1)))}</a>'
-        f'<strong>{escape(month_label(f["month"]))}</strong>{next_link}</nav>'
-        f'<form method="get" action="{TRANSACTIONS}" class="drawer-form" data-autofilter><div class="drawer-grid">'
-        f'<label>Month<input type="month" name="month" value="{f["month"]}" required></label>'
-        f'<label>View<select name="view">{views}</select></label>'
-        f'<label>Currency<select name="currency">{currencies}</select></label>'
-        f'<label>Category<select name="cat">{_option("", "All categories", f["cat"])}{names}</select></label>'
-        f'<label>Find<input name="q" maxlength="100" value="{escape(f["q"])}"'
-        ' placeholder="Merchant, account, category" autocomplete="off"></label>'
-        f'<label>Pending<select name="pending">{_option("0", "Hide", f["pending"])}'
-        f'{_option("1", "Show, if fetched", f["pending"])}</select></label>'
-        '<noscript><div class="drawer-left"><button>Apply filters</button></div></noscript></div></form>')
+    stepper = ""
+    if f["month"]:                         # an old month= link: the month stepper and a removable chip
+        nav_args = lambda month: _location(dict(f, month=month))
+        current_month = today.isoformat()[:7]
+        next_link = (f'<a class="month-step" href="{escape(nav_args(month_add(f["month"], 1)))}" rel="next">'
+                     f'{escape(month_label(month_add(f["month"], 1)))} →</a>' if f["month"] < current_month
+                     else '<span class="month-step off">Current month</span>')
+        stepper = (
+            f'<nav class="month-nav" aria-label="Month"><a class="month-step" href="{escape(nav_args(month_add(f["month"], -1)))}" '
+            f'rel="prev">← {escape(month_label(month_add(f["month"], -1)))}</a>'
+            f'<strong>{escape(month_label(f["month"]))}</strong>{next_link}</nav>')
+    search = (stepper + '<div class="tx-bar">' + period_tabs(f, _location) + view_tabs(f, allowed_views, _location)
+              + currency_tabs(f, currencies, _location) + pending_toggle(f, _location)
+              + find_form(f, TRANSACTIONS, _hidden) + '</div>')
     sync = ""
     if can_sync and "Household" in allowed_views:
         sync = (f'<form method="post" action="{SYNC}" class="drawer-form">'
                 + _hidden(f, token=token)
-                + '<div class="drawer-left"><button>Sync transactions</button>'
+                + '<div class="drawer-left"><button title="Refreshes all linked accounts. Shares the balance sync '
+                'quota.">Sync transactions</button>'
                 '<label><input type="checkbox" name="include_pending" value="1">'
-                ' Request pending as well</label></div></form>'
-                '<p class="acct-sub">Refreshes all linked accounts. Shares the balance sync quota.</p>')
+                ' Request pending as well</label></div></form>')
     coverage = []
     for r in snap.coverage:
         if r["end_at"] is not None:
-            state = ("Window requested" if r["covered"] else "Partial or outside requested window")
-            state += f' · {_stamp(r["start_at"])} through {_stamp(r["end_at"])} (end exclusive)'
+            state = ("Synced for the whole period" if r["covered"] else "Synced for only part of this period")
+            state += f' · {_stamp(r["start_at"])[:10]} to {_stamp(r["end_at"] - 1)[:10]} (UTC dates)'
         else:
-            state = "Not yet fetched" if r["linked"] else "Not linked; transaction data unavailable"
+            state = "Not synced yet" if r["linked"] else "Not linked; transaction data unavailable"
         coverage.append(f'<li>{escape(r["institution"])} · {escape(r["nickname"])}'
                         f' ({escape(r["currency"])}) — {state}</li>')
-    comparisons = spending_comparison(db, f["month"], f["view"], household_matching="Household" in allowed_views,
-                                      today=today, context=context, snapshot=snap)
+    comparisons = period_comparisons(db, span, f["view"], household_matching="Household" in allowed_views,
+                                     today=today, context=context, snapshot=snap)
     totals = []
     for currency, t in sorted(snap.totals.items()):
-        qualifier = ("" if all(r["covered"] for r in snap.coverage if r["currency"] == currency)
-                     else " · partial coverage")
-        totals.append(f'<article class="card"><small>{escape(currency)}{qualifier}</small>'
-                      f'<strong>{t.net:f}</strong><div>Net saved estimate · signed cash flow</div>'
-                      f'<div>Income / credits {t.credits:f} · Spending {t.spending:f}</div>'
-                      + (f'<div>Card credits under review: {t.review:f}</div>' if t.review else "")
+        totals.append(_summary_card(currency, t, comparisons[currency], f)
                       + _bars(comparisons[currency], f, t) + '</article>')
     if not totals:
         summary = "<p>No posted data with sufficient coverage to report a zero.</p>"
     else:
-        summary = ('<div class="cards">' + "".join(totals) + "</div>"
-                   '<p>Income / credits includes refunds; it is not verified income. '
-                   'The net saved estimate is signed cash flow, not measured savings.</p>')
+        summary = '<div class="cards">' + "".join(totals) + "</div>" + notes_html()
     if not any(not r["pending"] for r in snap.rows) and totals:
-        summary += "<p>No posted transactions reported for this month in this view.</p>"
+        summary += '<p class="acct-sub">No posted transactions reported for this period in this view.</p>'
 
     rows = []
     q = f["q"].casefold().strip()
-    for r in snap.rows:
+
+    def listed(r):
         if f["currency"] and f["currency"] != r["currency"]:
-            continue
+            return False
         if q and not any(q in r[k].casefold() for k in
-                         ("description", "payee", "category", "nickname", "institution", "flow")):
-            continue
+                         ("description", "payee", "category", "nickname", "institution")) \
+                and q not in _flow_label(r).casefold():
+            return False
         if f["cat"] and (r["category"] or "Uncategorized").casefold() != f["cat"].casefold():
-            continue
-        category = escape(r["category"])
-        drawer = _drawer(r, f, token, categories, manual, attempt if open_row == r["row_id"] else {},
-                         error if open_row == r["row_id"] else None)
+            return False
+        return f["review"] != "1" or r["flow"] == "Review card credit"
+
+    shown_rows = [r for r in snap.rows if listed(r)]
+    hidden_rows = max(0, len(shown_rows) - ROW_CAP)
+    shown_rows = shown_rows[:ROW_CAP]
+    for index, r in enumerate(shown_rows):
         when = escape(r["posted_date"] or r["pending_date"])
-        label = "Pending · provider or observed date" if r["pending"] else "Posted"
-        payee = f'<div class="acct-sub">Payee: {escape(r["payee"])}</div>' if r["payee"] else ""
-        suggestion = ('<div class="acct-sub">Possible internal transfer · still counted. '
-                      'If confirmed, mark each leg as Transfer.</div>' if r["suggested_transfer"] else "")
-        origin = _SOURCES.get(r["category_source"], "")
-        # A transfer is not spending, so it needs no category; say so instead of "Needs review".
-        label_cell = category or ("" if r["effective_transfer"] else
-                                  "Needs review" if r["category_source"] == "review" else "Uncategorized")
+        when_title = "Pending · provider or observed date" if r["pending"] else "Posted"
+        payee = f' title="Payee: {escape(r["payee"])}"' if r["payee"] else ""
+        marker = ('<span class="acct-sub tx-flag" title="Possible internal transfer · still counted. '
+                  'If confirmed, mark each leg as Transfer.">↔️ possible transfer</span>' if r["suggested_transfer"] else "")
+        label = _flow_label(r)
+        flow = f'<span class="acct-sub tx-flow">{escape(label)}</span>' if label else ""
+        shown = _category_cell(r, f, token, categories, up=index >= len(shown_rows) - 3,
+                               opened=open_pick == r["row_id"], attempt=attempt, error=error if open_pick == r["row_id"] else "")
+        drawer_row = ""
+        if open_row == r["row_id"]:
+            # The drawer opens in a row of its own below this one (like the Accounts drawer): the one-line row stays intact.
+            edit = (f'<a class="sec-chip tx-edit" title="Close the editor" '
+                    f'href="{escape(_short_location(f))}#tx-{r["row_id"]}">Close</a>')
+            drawer_row = (f'<tr class="tx-drawer-row"><td colspan="6">'
+                          f'{_drawer(r, f, token, categories, manual, attempt, error)}</td></tr>')
+        else:
+            edit = (f'<a class="sec-chip tx-edit" rel="nofollow" title="Edit this transaction" '
+                    f'href="{escape(_edit_href(f, r["row_id"]))}">Edit</a>')
         rows.append(
-            f'<tr class="acct-row" id="tx-{r["row_id"]}"><td class="date-cell"><time datetime="{when}">{when}</time>'
-            f'<div class="acct-sub">{label}</div></td><th scope="row" class="acct-cell">'
+            f'<tr class="acct-row" id="tx-{r["row_id"]}"><td class="date-cell" title="{when_title}">'
+            f'<time datetime="{when}">{when}</time></td><th scope="row" class="acct-cell">'
             f'<div class="acct-with-logo">{_logo(r, logo_dir)}<div class="acct-info">'
-            f'<span class="acct-name"><span class="tx-emoji" aria-hidden="true">{escape(r["emoji"] or default_emoji(r["category"], r["effective_transfer"]))}</span> {escape(r["description"] or "No description")}</span>{payee}'
-            f'<div class="acct-sub">SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}</div>'
-            f'</div></div></th>'
-            f'<td class="num"><span class="cur">{escape(r["currency"])}</span> {_amount(r)}</td>'
-            f'<td>{label_cell + origin + " · " if label_cell else ""}{escape(r["flow"])}{suggestion} {drawer}</td></tr>')
+            f'<span class="acct-name"{payee}><span class="tx-emoji" aria-hidden="true">{escape(r["emoji"] or default_emoji(r["category"], r["effective_transfer"]))}</span> {escape(r["description"] or "No description")}</span>'
+            f'<span class="acct-sub tx-acct" title="SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}">'
+            f'{escape(r["nickname"])}</span></div></div></th>'
+            + _owner_cell(r) +
+            f'<td class="cat-cell">{shown}{flow}{marker}</td>'
+            f'<td class="num" title="{escape(r["currency"])}">{_amount(r)}</td>'
+            f'<td class="act-cell">{edit}</td></tr>{drawer_row}')
+    shared = (f'<form id="tx-act" method="post" action="{EDIT}" hidden>' + _hidden(f, token=token) + '</form>'
+              + '<template id="tx-pick-tpl">' + _pick_menu(f, token, categories, None) + '</template>')
     table = (
-        '<div class="table-wrap"><table class="acct-table tx-table"><thead><tr><th>Date</th><th>Transaction</th>'
-        '<th class="num">Amount</th><th>Category</th></tr></thead><tbody>'
+        shared + '<div class="table-wrap tx-wrap"><table class="acct-table tx-table tx-compact"><thead><tr><th>Date</th>'
+        '<th>Transaction</th><th>Owner</th><th>Category</th><th class="num">Amount</th>'
+        '<th><span class="sr">Edit</span></th></tr></thead><tbody>'
         + "".join(rows) + "</tbody></table></div>" if rows else "<p>No transactions match this list.</p>")
-    alert = f'<p class="notice" role="alert">{escape(error)}</p>' if error else ""
+    if hidden_rows:
+        table += (f'<p class="acct-sub">Showing the newest {ROW_CAP:,} transactions; {hidden_rows:,} older ones are in '
+                  'the totals but not listed. Pick a shorter period or search to narrow it.</p>')
+    alert = f'<p class="notice" role="alert">{escape(error)}</p>' if error and open_pick is None else ""
+    shown_names = {n for c in comparisons.values() for n in c.current}
+    cat_chip = (f'<p class="filter-chip">Category: {escape(f["cat"])} · '
+                f'<a href="{escape(_location(dict(f, cat="")))}">✕ Clear</a></p>'
+                if f["cat"] and f["cat"] not in shown_names else "")      # an off-legend filter (e.g. an old link)
+    review_chip = (f'<p class="filter-chip">Showing card payments to confirm only · '
+                   f'<a href="{escape(_location(dict(f, review="", currency="")))}">Clear filter</a></p>'
+                   if f["review"] == "1" else "")
     return (
         '<script defer src="/dashboard.js"></script>'
         '<section class="history" aria-labelledby="cash-flow"><h2 id="cash-flow">Monthly cash flow</h2>'
-        + alert + search + sync + _classifier_panel(db, f, token) + summary
-        + '<p>Pending, transfers and explicit unmatched card-payment credits are outside totals; unmatched bank '
-        'debits remain spending. Automatic card matching requires corroboration on both available legs. '
-        'Checking and savings matches are suggestions only. A manual transfer choice overrides a merchant '
-        'rule, which overrides automatic classification.</p>'
-        '<details><summary>Coverage and dates</summary><p>Requested windows do not prove institution '
-        'completeness or retention. Current-month figures are provisional. Excluded accounts do not contribute. '
-        'Individual views include joint accounts. List filters do not change totals. Merchant rules match the '
-        'cleaned merchant name (dates, store and reference numbers removed) on the same account and currency; '
-        'a category you set on one row by hand always wins over a rule. Dates are the bank\'s posted date (UTC): '
-        'an evening transaction in a western timezone, or a local-midnight stamp east of UTC, can show a day '
-        'off, and month filters use the same date.</p>'
-        + ("<ul>" + "".join(coverage) + "</ul>" if coverage else "<p>No included accounts in this view.</p>")
-        + '</details></section><section><h2>Transactions</h2>' + table + '</section>')
+        + alert + moved + search + sync + '<div class="tx-tools">' + _auto_checkbox(db, f, token)
+        + info_box(coverage, can_sync=can_sync and "Household" in allowed_views,
+                   categories_html=_categories_info(db, f, token)) + '</div>' + summary
+        + '</section><section><h2>Transactions</h2>' + cat_chip + review_chip + table + '</section>')
 
 
 @dataclass(frozen=True)
@@ -413,7 +573,8 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     except UnicodeError:
         raise RouteProblem(400, "Invalid transaction form.") from None
     keys = set(_FILTERS) | {"token"} | ({"row", "category", "new_category", "apply", "transfer",
-                                         "merchant_transfer", "action", "enabled"}
+                                         "merchant_transfer", "action", "enabled", "owner", "act",
+                                         "pick", "pick_new"}
                                         if path == EDIT else {"include_pending"})
     data = _params(raw, keys)
     if not token or not secrets.compare_digest(data.get("token", "").encode("utf-8"), token.encode("utf-8")):
@@ -421,6 +582,13 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     if "view" not in data:
         raise RouteProblem(400, "Choose an account view.")
     f = _filters(data, allowed_views, None)
+    if "act" in data and path == EDIT:
+        # A button of the page's shared form: "owner-<row>-<Person>" or "reset-<row>". Never mixed with row fields.
+        act = re.fullmatch(r"(?:(owner)-([1-9][0-9]{0,18})-(Young|Nanami)|(reset)-([1-9][0-9]{0,18}))", data["act"])
+        if not act or {"row", "action", "owner"} & data.keys():
+            raise RouteProblem(400, "Invalid transaction action.")
+        data = {k: v for k, v in data.items() if k != "act"} | (
+            dict(action="owner", row=act[2], owner=act[3]) if act[1] else dict(action="owner_reset", row=act[5]))
     if path == SYNC:
         if not can_sync or "Household" not in allowed_views:
             raise RouteProblem(403, "Transaction sync not authorized or unavailable.")
@@ -430,6 +598,19 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
         return PostResult(_location(f), True, pending == "1")
     if data.get("action") in ("classifier", "classify_now"):
         return _classifier_action(db, data, f)
+    picked = [k for k in ("pick", "pick_new") if k in data]
+    if picked:
+        # The row chip's menu (one click saves). One choice per post; a typed name is only used by "Add".
+        if len(picked) != 1 or "action" in data or data.get("pick_new", "1") != "1":
+            raise RouteProblem(400, "Invalid category choice.")
+        kind, value = picked[0], data[picked[0]]
+        data = {k: v for k, v in data.items() if k not in ("pick", "pick_new")}
+        data["action"] = kind
+        if kind == "pick":
+            data["category"] = value
+            data.pop("new_category", None)
+        elif kind == "pick_new":
+            data.setdefault("new_category", "")
     row = data.get("row", "")
     if not re.fullmatch(r"[1-9][0-9]{0,18}", row) or int(row) > 2**63 - 1:
         raise RouteProblem(400, "Invalid transaction row.")
@@ -437,22 +618,33 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     if ((action in ("category", "rule") and "category" not in data)
             or (action == "transfer" and "transfer" not in data)
             or (action == "transfer_rule" and "merchant_transfer" not in data)
+            or (action == "owner" and "owner" not in data)
             or data.get("apply", "1") != "1"):
         raise RouteProblem(400, "Incomplete transaction edit.")
     try:
         with db:
             db.execute("BEGIN IMMEDIATE")
-            if not edit_transaction(db, int(row), f["view"], f["month"], action=action,
+            span = resolve_span(f, datetime.now(timezone.utc).date(), earliest_date(db))
+            if not edit_transaction(db, int(row), f["view"], f["month"] or span.month or "2000-01", action=action,
+                                    span=(span.start, span.end),
                                     category=data.get("category", ""), transfer=data.get("transfer", ""),
                                     merchant_transfer=data.get("merchant_transfer", ""),
-                                    new_category=data.get("new_category", ""), apply=data.get("apply") == "1"):
-                raise RouteProblem(404, "Transaction not found in this view and month.")
+                                    new_category=data.get("new_category", ""), apply=data.get("apply") == "1",
+                                    owner=data.get("owner", "")):
+                raise RouteProblem(404, "Transaction not found in this view and period.")
+            moved = None
+            if action in ("owner", "owner_reset") and f["view"] != "Household":
+                now = effective_owner_of(db, int(row))
+                if now not in (f["view"], "Joint"):
+                    moved = f"&moved={now}-{row}"      # the row left this view: say so on the next page
     except ValueError as exc:
         message = str(exc) or "Enter a printable category of up to 48 characters."
         try:
+            picking = action in ("pick", "pick_new")
             body = render_transactions(db, urlencode(f), token=token, allowed_views=allowed_views,
-                                       can_sync=can_sync, open_row=int(row), attempt=data, error=message)
+                                       can_sync=can_sync, open_row=None if picking else int(row),
+                                       open_pick=int(row) if picking else None, attempt=data, error=message)
         except Exception:
             body = None
         raise RouteProblem(422, message, body=body) from None
-    return PostResult(_location(f) + f"#tx-{row}")
+    return PostResult(_location(f) + (moved or "") + f"#tx-{row}")

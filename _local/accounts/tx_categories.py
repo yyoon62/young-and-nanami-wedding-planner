@@ -5,23 +5,30 @@ merchant rule > legacy stamp > built-in default (positive payroll = Income) > cl
 `classifier_cache`; it is never written onto `account_transactions`.
 """
 from decimal import Decimal, InvalidOperation
+from tx_transfers import names_card_issuer
 import re
 import unicodedata
 
 BUILTIN = ("Groceries", "Dining", "Transport", "Housing", "Utilities", "Shopping", "Entertainment",
            "Health", "Travel", "Subscriptions", "Insurance", "Education", "Gifts & Donations",
            "Personal Care", "Fees & Taxes", "Other")
+# Money moving between your own accounts is not spending. These are built in (and may be picked by the classifier
+# for clearly payment-like text); a transaction whose effective category is one of them is a transfer: it is left out
+# of income, spending and the category bar.
+TRANSFER_LIKE = ("Card payment", "Loan payment", "Savings & investing", "Transfer")
+TRANSFER_EMOJIS = {"Card payment": "↔️", "Loan payment": "🏦", "Savings & investing": "📈", "Transfer": "🔁"}
 INCOME = "Income"
 # Categories the classifier may never assign: Income changes totals, so only the user (or the
 # deterministic payroll default below) can set it. Kept out of BUILTIN so the model's list is unchanged.
 NEVER_ASSIGNED = frozenset((INCOME,))
 DEFAULT_EMOJI = {
     "Groceries": "🛒", "Dining": "🍽️", "Transport": "🚇", "Housing": "🏠", "Utilities": "💡",
-    "Shopping": "🛍️", "Entertainment": "🎬", "Health": "🩺", "Travel": "✈️", "Subscriptions": "🔁",
+    "Shopping": "🛍️", "Entertainment": "🎬", "Health": "🩺", "Travel": "✈️", "Subscriptions": "📺",
     "Insurance": "🛡️", "Education": "🎓", "Gifts & Donations": "🎁", "Personal Care": "🧴",
     "Fees & Taxes": "🧾", "Other": "📦", INCOME: "💵",
+    **TRANSFER_EMOJIS,
 }
-TRANSFER_EMOJI, UNCATEGORIZED_EMOJI, CUSTOM_EMOJI = "🔄", "❔", "🏷️"
+TRANSFER_EMOJI, UNCATEGORIZED_EMOJI, CUSTOM_EMOJI = "🔄", "🏷️", "📌"
 PAYROLL = re.compile(r"\b(?:payroll|direct dep(?:osit)?|dir dep)\b")
 RESERVED = frozenset(("uncategorized", "needs review"))
 MAX_CATEGORIES = 60
@@ -87,6 +94,10 @@ def install_categories(db):
                (INCOME, len(BUILTIN)))
     db.execute("UPDATE transaction_categories SET name=?, builtin=1, sort=? WHERE name=? AND builtin=0",
                (INCOME, len(BUILTIN), INCOME))
+    for i, name in enumerate(TRANSFER_LIKE):      # L26: built-in transfer-like categories (an old custom one is promoted)
+        db.execute("INSERT OR IGNORE INTO transaction_categories(name, builtin, sort) VALUES (?,1,?)", (name, 100 + i))
+        db.execute("UPDATE transaction_categories SET name=?, builtin=1, sort=? WHERE name=? AND builtin=0",
+                   (name, 100 + i, name))
     legacy = {r[0] for r in db.execute("""SELECT category FROM account_transactions WHERE category<>''
         UNION SELECT category FROM transaction_merchant_rules WHERE category<>''""")}
     for name in sorted(legacy, key=str.casefold):
@@ -107,6 +118,13 @@ def builtin_categories(db):
     """Categories the classifier may assign: built in, minus NEVER_ASSIGNED."""
     return [r[0] for r in db.execute(
         "SELECT name FROM transaction_categories WHERE builtin=1 ORDER BY sort") if r[0] not in NEVER_ASSIGNED]
+
+
+_TRANSFER_FOLDED = frozenset(n.casefold() for n in TRANSFER_LIKE)
+
+
+def is_transfer_category(name):
+    return isinstance(name, str) and name.casefold() in _TRANSFER_FOLDED
 
 
 def default_emoji(category, transfer=False):
@@ -171,8 +189,10 @@ def _is_payroll(row):
     return bool(PAYROLL.search(unicodedata.normalize("NFKC", text).casefold()))
 
 
-def resolve(row, rules, cache, canon):
-    """(effective category, source). `canon` maps casefolded name -> list name."""
+def resolve(row, rules, cache, canon, issuers=()):
+    """(effective category, source). `canon` maps casefolded name -> list name. `issuers` are the card issuers of
+    the linked card accounts (tx_transfers.card_issuer_terms): a checking debit that names one is a Card payment by
+    default (below a manual choice, a rule and a saved stamp; above the classifier)."""
     stored = row["category"]
     if row["category_manual"]:
         return canon.get(stored.casefold(), stored), "manual"
@@ -186,6 +206,8 @@ def resolve(row, rules, cache, canon):
         return canon.get(stored.casefold(), stored), "stamp"
     if _is_payroll(row):
         return canon.get(INCOME.casefold(), INCOME), "default"
+    if issuers and names_card_issuer(row, issuers):
+        return canon.get("card payment", "Card payment"), "default"
     hit = cache.get(key) if key else None
     if hit:
         category, status = hit[0], hit[1]

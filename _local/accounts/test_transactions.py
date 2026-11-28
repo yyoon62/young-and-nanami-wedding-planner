@@ -279,11 +279,11 @@ class TransactionsTest(Fixture, unittest.TestCase):
         rendered = html("")
         for raw in ("<script>", "<svg onload", "<img", "<b>Groceries", "style=", "https://"):
             self.assertNotIn(raw, rendered)
-        for safe in ("&lt;script&gt;", "&lt;svg", "&lt;img", "&lt;b&gt;Groceries", "-10.123",
+        for safe in ("&lt;script&gt;", "&lt;svg", "&lt;img", "&lt;b&gt;Groceries", "-$10.123",
                      "Not linked; transaction data unavailable", TOKEN, 'action="/transactions/edit"'):
             self.assertIn(safe, rendered)
         self.assertNotIn("&lt;script&gt;", html("q=no-such-merchant"))
-        self.assertIn("-10.123", html("q=no-such-merchant"))  # list filter, not totals
+        self.assertIn("Net overspent <strong>$10.12</strong>", html("q=no-such-merchant"))  # list filter, not totals
         self.assertIn("No posted transactions reported", html("month=2026-10"))
         self.assertIn("No posted data with sufficient coverage", html("month=2024-10"))
         for expected, fields in [(403, {"token": "incorrect"}), (404, {"view": "Nanami"}),
@@ -339,12 +339,13 @@ class TransactionsTest(Fixture, unittest.TestCase):
                 self.assertEqual(sum(total.category_spending.values()), total.spending)
         rendered = render_transactions(self.db, "month=2026-12&currency=JPY&q=no-such-list-row",
                                        token=TOKEN, allowed_views={"Young"})
-        for shown in ("Spending by category", "Uncategorized", "Food", "42.0031", "300", "Income / credits",
-                      "includes refunds", "Net saved estimate", "not measured savings", "partial coverage",
+        for shown in ("Spending by category", "Uncategorized", "Food", "$42.00", "¥300", "Income",
+                      "includes refunds", "overspent", "not measured savings",
                       "No transactions match"):
             self.assertIn(shown, rendered)
-        self.assertIn('<option value="Young" selected>', rendered)
-        self.assertNotIn('value="Household"', rendered)
+        self.assertIn('<span class="cur" aria-current="page">Young</span>', rendered)
+        self.assertIn('<span class="off" aria-disabled="true">Nanami</span>', rendered)      # Household is not allowed here
+        self.assertNotIn("view=Household", rendered)
         with self.assertRaises(RouteProblem) as caught:
             render_transactions(self.db, "view=Household", token=TOKEN, allowed_views={"Young"})
         self.assertEqual(caught.exception.status, 403)
@@ -384,10 +385,15 @@ class TransactionsTest(Fixture, unittest.TestCase):
         edit("Credit card payment", action="transfer_rule", merchant_transfer="no")
         self.assertEqual(self.row("Credit card payment", "2026-12")["flow"], "Cash flow (merchant rule)")
         self.assertTrue(self.row("Manual transfer", "2026-12")["effective_transfer"])
-        rendered = render_transactions(self.db, "month=2026-12", token=TOKEN, allowed_views=VIEWS)
+        rendered = render_transactions(self.db, "month=2026-12&edit=%d" % self.row("Credit card payment", "2026-12")["row_id"],
+                                       token=TOKEN, allowed_views=VIEWS)          # the drawer is rendered for the row being edited
         self.assertIn('name="merchant_transfer"', rendered)
-        self.assertIn('<option value="no" selected>Not a transfer</option>', rendered)
-        self.assertIn("Cash flow (merchant rule)", rendered)
+        self.assertIn('<option value="no" selected>No, never a transfer</option>', rendered)
+        self.assertIn("Always treat “local merchant” on this account as a transfer", rendered.replace("&quot;", '"'))
+        self.assertIn("Transfer = money between your own accounts; not counted as spending.", rendered)
+        for old_wording in ("Merchant transfer rule", "transfer category", "Merchant transfer"):
+            self.assertNotIn(old_wording, rendered)
+        self.assertNotIn("Cash flow (merchant rule)", rendered)       # internal value only, never shown (L26-10)
         edit("Credit card payment", action="transfer_rule", merchant_transfer="none")
         self.assertEqual(self.row("Credit card payment", "2026-12")["flow"], "Matched transfer")
         self.assertEqual(self.row("New eligible", "2026-12")["category"], "Test category")

@@ -27,6 +27,10 @@ def contrast(fg, bg="#ffffff"):
     return (a + .05) / (b + .05)
 
 
+def cards(html):
+    return html[html.index('<div class="cards">'):html.index("<section><h2>Transactions")]
+
+
 class Months(Fixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
@@ -70,25 +74,29 @@ class Months(Fixture, unittest.TestCase):
         self.assertEqual(cmp["EUR"].current, {"Uncategorized": Decimal("50")})
         self.assertEqual(usd.partial, "so far, through 28 Nov")
         html = self.html()
-        self.assertIn('<span class="partial-flag">so far, through 28 Nov</span>', html)
-        dining = re.search(r'<li><a class="bar-row"[^>]*title="Show only Dining \(USD\)".*?</a></li>', html, re.S).group(0)
-        for text in ("300.00", "last month 200.00", "3-mo avg 250.00"):
+        self.assertRegex(html, r'<span class="partial-flag"[^>]*>📅 Month in progress</span>')
+        self.assertEqual(cards(html).count("📅 Month in progress"), 2)   # a note on each currency card (USD, EUR)
+        dining = re.search(r'<a class="tx-leg [^"]*"[^>]*title="Dining: [^"]*">.*?</a>', html, re.S).group(0)
+        for text in ("Dining: $300.00", "38% of spending", "vs Oct 2026: $200.00 (▲ $100.00)",
+                     '<span class="amt">$300</span> · 38%'):
             self.assertIn(text, dining)
-        self.assertIn("Spending 800", html)
-        self.assertIn("Spending 50", html)
+        self.assertNotIn("average", dining)                      # the comparison is with the previous period only
+        self.assertIn("Spending <strong>$800.00</strong>", html)
+        self.assertIn("Spending <strong>€50.00</strong>", html)
         # Click-to-filter: a plain, reversible GET link; the list shows only that category and currency.
-        link = re.search(r'href="([^"]+)"[^>]*title="Show only Dining \(USD\)"', html).group(1).replace("&amp;", "&")
+        link = re.search(r'<a class="tx-leg [^"]*" href="([^"]+)" title="Dining:', html).group(1).replace("&amp;", "&")
         self.assertEqual(parse_qs(urlsplit(link).query)["cat"], ["Dining"])
         filtered = self.html(urlsplit(link).query)
-        self.assertIn("Showing Dining only", filtered)
+        self.assertRegex(filtered, r'<a class="tx-leg c1 is-active" href="[^"]+" aria-current="true" title="Dining:')
         self.assertEqual(filtered.count('class="acct-row"'), 1)
         self.assertNotIn("Green Market</span>", filtered)
-        self.assertIn("Clear filter", filtered)
-        clear = re.search(r'<a href="([^"]+)">Clear filter</a>', filtered).group(1).replace("&amp;", "&")
+        self.assertIn("✕ Clear", filtered)
+        clear = re.search(r'<a class="tx-leg clear" href="([^"]+)"', filtered).group(1).replace("&amp;", "&")
         self.assertNotIn("cat=Dining", clear)
         self.assertGreater(self.html(urlsplit(clear).query).count('class="acct-row"'), 3)
         # Uncategorized is its own reversible filter value.
-        self.assertIn("Showing Uncategorized only", self.html("month=2026-11&cat=Uncategorized&currency=EUR"))
+        self.assertRegex(self.html("month=2026-11&cat=Uncategorized&currency=EUR"),
+                         r'<a class="tx-leg cu is-active" href="[^"]+" aria-current="true"')
 
     def test_partial_coverage_is_not_averaged_as_if_complete(self):
         """The 90-day first sync starts on 2026-08-30: August has 2 of 31 days and must not enter the mean."""
@@ -97,17 +105,11 @@ class Months(Fixture, unittest.TestCase):
         usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
         self.assertEqual(usd.avg_months, ("2026-10", "2026-09"))
         self.assertEqual(usd.avg["Dining"], Decimal("225.00"))
-        self.assertIn("2-mo avg 225.00", self.html())
-        cover(self.db, "2026-09-16", "2026-11-28")  # only October is complete: no average, previous still shown
-        usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
-        self.assertIsNone(usd.avg)
-        self.assertEqual(usd.prev["Dining"], Decimal("200"))
-        html = self.html()
-        self.assertIn("last month 200.00 · 3-mo avg —", html)
-        cover(self.db, "2026-10-20", "2026-11-28")  # not even October: no comparison at all
-        usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
-        self.assertIsNone(usd.prev)
-        self.assertIn("last month — · 3-mo avg —", self.html())
+        self.assertIn("vs Oct 2026: $200.00", self.html())       # October is fully fetched: the comparison stays
+        cover(self.db, "2026-10-20", "2026-11-28")  # not even October: no comparison at all, and no invented zero
+        self.assertNotIn("vs Oct 2026", self.html())
+        cover(self.db, "2026-11-10", "2026-11-28")  # data starts inside the viewed month: the note says so
+        self.assertIn("📅 Data from 10 Nov only", cards(self.html()))
 
     def test_zero_spend_month_counts_and_unlinked_is_reported(self):
         self.put("USD", "2026-09-10", "-300", "Maple Cafe")
@@ -136,17 +138,19 @@ class Months(Fixture, unittest.TestCase):
         html = self.html()
         self.assertNotIn("(UTC)</label>", html)
         self.assertNotIn("Month (UTC)", html)
-        self.assertIn("<label>Month<input", html)
+        self.assertNotIn("<label>Month<input", html)
         self.assertEqual(html.count("<button>Filter</button>"), 0)
-        self.assertRegex(html, r"<noscript><div class=\"drawer-left\"><button>Apply filters</button></div></noscript>")
-        self.assertIn("data-autofilter", html)
+        bar = html[html.index('<div class="tx-bar">'):html.index("</div>", html.index('<div class="tx-bar">'))]
+        self.assertNotIn("<select", bar)                                             # no dropdowns (L26-11)
+        self.assertNotIn('type="month"', html)
+        self.assertIn('class="tx-find" data-autofilter', html)                       # only the search box is a form
         self.assertIn('<script defer src="/dashboard.js"></script>', html)
         self.assertRegex(html, r'href="/transactions\?month=2026-10&amp;[^"]*" rel="prev">← Oct 2026')
         self.assertIn("Current month", html)  # no "next" past the current month
         self.assertRegex(self.html("month=2026-10"), r'href="/transactions\?month=2026-11&amp;[^"]*" rel="next">Nov 2026')
         self.assertEqual(month_add("2026-01", -1), "2025-12")
         self.assertEqual(month_add("2026-12", 1), "2027-01")
-        self.assertIn('<option value="Pets"', self.pets())
+        self.assertIn('name="pick" value="Pets"', self.pets())
 
     def pets(self):
         self.cat("Pets")
@@ -158,9 +162,9 @@ class Months(Fixture, unittest.TestCase):
         self.put("USD", "2026-11-17", "0.00", "Zero hold")
         html = self.html()
         self.assertIn("<th class=\"num\">Amount</th>", html)
-        self.assertIn('<span class="amt-in">+2,500.00</span>', html)
-        self.assertIn('<span class="amt-out">-12.40</span>', html)
-        self.assertIn('<span class="amt-zero">0.00</span>', html)
+        self.assertIn('<span class="amt-in">+$2,500.00</span>', html)
+        self.assertIn('<span class="amt-out">-$12.40</span>', html)
+        self.assertIn('<span class="amt-zero">$0.00</span>', html)
         css = (ROOT / "style.css").read_text()
         var = lambda name: re.search(rf"--{name}:\s*(#[0-9a-fA-F]{{6}})", css).group(1)
         for name in ("sage", "accent", "text-muted"):
