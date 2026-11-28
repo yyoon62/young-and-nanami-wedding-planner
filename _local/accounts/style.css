@@ -341,3 +341,14 @@ input, select {
   .top-actions { justify-content: flex-start; }
   .cards { grid-template-columns: 1fr; }
 }
+
+.projection-selector {
+  display: flex; flex-wrap: wrap; align-items: end; gap: .4rem .65rem; margin: 0;
+}
+.projection-form { max-width: none; }
+.projection-fields {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 0 .8rem;
+}
+.projection-cards strong, .projection-cards div { overflow-wrap: anywhere; }
+.history-plot .projection-zero { stroke: var(--text-muted); }

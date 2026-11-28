@@ -20,6 +20,8 @@ from history import history_panel, install as install_history, net_worth
 from hosted_auth import (Auth, Config, Rejected, CHALLENGE_TTL, SESSION_TTL, db_path, external,
                          load_env_file, offline_lock, private, require_crypto)
 from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo, sanitize_domain
+from projections import install_projections
+from projections_ui import projection_get, projection_post
 from transactions import install_transactions, sync_transactions
 from transactions_ui import (EDIT as TX_EDIT, SYNC as TX_SYNC, TRANSACTIONS as TX_PATH,
                              RouteProblem, post_transactions, render_transactions)
@@ -113,11 +115,12 @@ def init_db(path):
             db.execute("ALTER TABLE accounts ADD COLUMN logo_domain TEXT NOT NULL DEFAULT ''")
         schema(db)
         install_history(db)
+        install_projections(db)
         install_transactions(db)
 
 
-NAV = (("/", "Accounts"), ("/transactions", "Transactions"), ("/new", "Add account"),
-       ("/servicers", "Statements"), ("/federal-preview", "Federal preview"))
+NAV = (("/", "Accounts"), ("/transactions", "Transactions"), ("/projections", "Projections"),
+       ("/new", "Add account"), ("/servicers", "Statements"), ("/federal-preview", "Federal preview"))
 
 
 def nav(current=None):
@@ -621,6 +624,11 @@ class Handler(BaseHTTPRequestHandler):
         if result is not None:
             return self.send(*result)
         path = urlsplit(self.path).path
+        if path == "/projections":
+            status, body, location = projection_get(
+                self.server.db, self.path, page=page, token=self.token, people=PEOPLE,
+                section_for=section_for, places=places, today=date.today())
+            return self.send(status, body, location=location)
         if path == "/federal-preview":
             return self.send(200, (ROOT / "preview.html").read_text(), preview=True)
         if path == "/preview.js":
@@ -712,6 +720,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reject(exc)
         elif not self.local_host() or self.headers.get("Origin") not in {None, f"http://{self.headers.get('Host')}"}:
             return self.send(403, "Local requests only.")
+        if self.path == "/projections":
+            if not self.server.auth:
+                try:
+                    data = self.read_form(8192)
+                    self.require_csrf(data)
+                except Rejected as exc:
+                    return self.reject(exc)
+            status, body, location = projection_post(
+                self.server.db, data, page=page, token=self.token, people=PEOPLE,
+                section_for=section_for, places=places, today=date.today())
+            return self.send(status, body, location=location)
         target = self.path
         if not self.server.auth and target in (TX_EDIT, TX_SYNC):
             lengths = self.headers.get_all("Content-Length", [])
