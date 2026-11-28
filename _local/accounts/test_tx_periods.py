@@ -162,9 +162,9 @@ class Months(Fixture, unittest.TestCase):
         self.put("USD", "2026-11-17", "0.00", "Zero hold")
         html = self.html()
         self.assertIn("<th class=\"num\">Amount</th>", html)
-        self.assertIn('<span class="amt-in">+2,500.00</span>', html)
-        self.assertIn('<span class="amt-out">-12.40</span>', html)
-        self.assertIn('<span class="amt-zero">0.00</span>', html)
+        self.assertIn('<span class="amt-in">+$2,500.00</span>', html)
+        self.assertIn('<span class="amt-out">-$12.40</span>', html)
+        self.assertIn('<span class="amt-zero">$0.00</span>', html)
         css = (ROOT / "style.css").read_text()
         var = lambda name: re.search(rf"--{name}:\s*(#[0-9a-fA-F]{{6}})", css).group(1)
         for name in ("sage", "accent", "text-muted"):

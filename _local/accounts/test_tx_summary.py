@@ -180,7 +180,7 @@ class Summary(Fixture, unittest.TestCase):
         self.assertGreater(len(amounts), 8)
         for a in amounts:
             self.assertRegex(a, AMOUNT, a)
-        self.assertIn('<span class="amt-in">+1,000,000</span>', html)       # list rows keep exact amounts + separators
+        self.assertIn('<span class="amt-in">+$1,000,000</span>', html)       # list rows keep exact amounts + separators
         self.assertNotRegex(html, r"(?<![\d,.#-])\d{4,}\.\d{2}(?![\d])(?=[^<]*</(?:strong|span)>)")
 
 

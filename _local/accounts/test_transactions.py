@@ -279,7 +279,7 @@ class TransactionsTest(Fixture, unittest.TestCase):
         rendered = html("")
         for raw in ("<script>", "<svg onload", "<img", "<b>Groceries", "style=", "https://"):
             self.assertNotIn(raw, rendered)
-        for safe in ("&lt;script&gt;", "&lt;svg", "&lt;img", "&lt;b&gt;Groceries", "-10.123",
+        for safe in ("&lt;script&gt;", "&lt;svg", "&lt;img", "&lt;b&gt;Groceries", "-$10.123",
                      "Not linked; transaction data unavailable", TOKEN, 'action="/transactions/edit"'):
             self.assertIn(safe, rendered)
         self.assertNotIn("&lt;script&gt;", html("q=no-such-merchant"))

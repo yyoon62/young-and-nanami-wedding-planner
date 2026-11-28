@@ -21,7 +21,7 @@ from tx_range import DEFAULT_PERIOD, PERIODS, comparisons as period_comparisons,
 from tx_bars import CURRENT, legend_chip, ordered, stacked_bar, tooltip
 from tx_filters import currency_tabs, find_form, pending_toggle, period_tabs, view_tabs
 from tx_info import info_box, notes_html
-from tx_money import fmt, sign_of
+from tx_money import fmt, fmt_exact, sign_of
 from tx_periods import month_add, month_label, spending_comparison
 from logos import cached_logo, domain_for, fallback_svg
 from transactions import (CURRENCY, VIEWS, _midnight, category_context, edit_transaction, manual_index,
@@ -380,9 +380,9 @@ def _bars(cmp, f, totals):
 
 def _amount(r):
     value = Decimal(r["amount"])
+    shown = escape(fmt_exact(value, r["currency"]))
     if value == 0:
-        return f'<span class="amt-zero">{escape(format(value, ",f"))}</span>'
-    shown = escape(format(value, "+,f"))
+        return f'<span class="amt-zero">{shown}</span>'
     if r["effective_transfer"] or r["pending"]:
         return f'<span class="amt-neutral">{shown}</span>'
     return f'<span class="{"amt-in" if value > 0 else "amt-out"}">{shown}</span>'
@@ -502,7 +502,7 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
             f'{escape(r["nickname"])}</span></div></div></th>'
             + _owner_cell(r) +
             f'<td class="cat-cell">{shown}{flow}{marker}</td>'
-            f'<td class="num"><span class="cur">{escape(r["currency"])}</span> {_amount(r)}</td>'
+            f'<td class="num" title="{escape(r["currency"])}">{_amount(r)}</td>'
             f'<td class="act-cell">{edit}</td></tr>{drawer_row}')
     shared = (f'<form id="tx-act" method="post" action="{EDIT}" hidden>' + _hidden(f, token=token) + '</form>'
               + '<template id="tx-pick-tpl">' + _pick_menu(f, token, categories, None) + '</template>')
