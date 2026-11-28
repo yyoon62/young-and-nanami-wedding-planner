@@ -6,6 +6,8 @@ from decimal import Decimal, localcontext
 import json
 import re
 
+from debt_engine import Book, DebtPlan
+
 
 ZERO = Decimal(0)
 PRECISION = 64
@@ -113,7 +115,7 @@ RATES = {
     "hysa_apy": "Savings / HYSA APY",
     "investment_return": "Investment return (annual effective)",
     "retirement_return": "Retirement return (annual effective)",
-    "debt_apr": "Debt APR (nominal)",
+    "debt_apr": "Blended debt APR, for debts without a rate (nominal)",
     "inflation": "Inflation (annual effective)",
 }
 OPTIONAL = frozenset(("debt_target", "retirement_target", "investment_target"))
@@ -183,9 +185,11 @@ class Point:
     balances: Balances                 # Nominal account balances.
     display: Balances                  # Deflated if requested; no impact on the simulation.
     cumulative_gap: Decimal            # Nominal unfunded spending, NOT new debt.
+    pool: Decimal | None = None        # Debts without a rate (blended aggregate); only when a debt plan is used.
+    modeled: tuple = ()                # ((account id, balance), ...) of rate-known debts; only with a debt plan.
 
 
-def project(start, assumptions):
+def project(start, assumptions, plan=None):
     """Accrue first, then apply constant nominal cash flow at each month-end.
 
     Asset growth and inflation use geometric effective rates. Debt uses
@@ -193,6 +197,11 @@ def project(start, assumptions):
     at display. Unclassified assets are held flat and are not available for
     spending. No future borrowing, forced sales, taxes, or automatic catch-up
     on unmet spending is modeled.
+
+    With a `plan` (L23) rate-known debts follow their own schedules through `debt_engine.Book`:
+    planned payments are obligations paid every month (a shortfall draws cash, then savings),
+    extra payments come only from positive net savings, and paid-in-full cards are held flat.
+    Debts without a plan entry keep the blended path above exactly.
     """
     a = assumptions
     with localcontext() as ctx:
@@ -207,15 +216,21 @@ def project(start, assumptions):
         inflation_factor = effective_factor(a.inflation) if a.mode == "real" else Decimal(1)
         cash, hysa, inv, ret, debt, other = (getattr(start, field.name) for field in fields(Balances))
         gap = ZERO
+        book = Book(plan, a) if plan is not None else None
         points = [Point(0, start, start, gap)]
         for month in range(1, a.years * 12 + 1):
             cash, hysa, inv, ret = (amount * factor for amount, factor in zip((cash, hysa, inv, ret), factors))
-            debt *= debt_factor
-            remaining = a.surplus
+            if book is None:
+                debt *= debt_factor
+                remaining = a.surplus
+            else:
+                remaining = a.surplus - book.step()
+                debt = book.debt_total()
             if remaining >= 0:
-                paid = min(debt, a.debt_target, remaining)
-                debt -= paid
-                remaining -= paid
+                if book is None:
+                    paid = min(debt, a.debt_target, remaining)
+                    debt -= paid
+                    remaining -= paid
                 contribution = min(a.retirement_target, remaining)
                 ret += contribution
                 remaining -= contribution
@@ -234,5 +249,6 @@ def project(start, assumptions):
             balances = Balances(*amounts)
             deflator = inflation_factor ** month
             display = balances if deflator == 1 else Balances(*(value / deflator for value in amounts))
-            points.append(Point(month, balances, display, gap))
+            points.append(Point(month, balances, display, gap) if book is None else
+                          Point(month, balances, display, gap, book.pool, tuple(book.balance.items())))
     return points
