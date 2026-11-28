@@ -151,7 +151,8 @@ class Startup(unittest.TestCase):
             (repo / ".git").write_text("gitdir: fictional")
             (path / "linked").symlink_to(repo, target_is_directory=True)
             weak = path / "weak.db"
-            weak.touch(0o644)
+            weak.touch()
+            weak.chmod(0o644)  # not touch(mode): the process umask (0077 under systemd) would narrow it
             for candidate in (repo / "subdir" / "a", path / "linked" / "a", weak):
                 with self.assertRaises(ValueError):
                     db_path(candidate)
@@ -160,11 +161,14 @@ class Startup(unittest.TestCase):
     def test_cli_guards_before_bridge_or_db_initialization(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "never-created.sqlite"
+            repo = Path(tmp).resolve() / "repository"  # do not rely on the code itself being a Git checkout
+            repo.mkdir(0o700)
+            (repo / ".git").write_text("gitdir: fictional")
             cmd = [sys.executable, "server.py", "--hosted"]
             for extra, env, message in [
                 (["--demo"], ENV, "--demo cannot be combined"),
                 (["--bridge", "--db", str(db)], dict(ENV, GOOGLE_CLIENT_ID=""), "Hosted startup refused"),
-                (["--db", str(Path.cwd() / "never-created.sqlite")], ENV, "outside Git"),
+                (["--db", str(repo / "never-created.sqlite")], ENV, "outside Git"),
             ]:
                 p = subprocess.run(cmd + extra, env=dict(os.environ, **env), capture_output=True, text=True)
                 self.assertNotEqual(p.returncode, 0)
