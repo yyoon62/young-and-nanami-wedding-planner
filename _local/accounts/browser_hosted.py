@@ -65,7 +65,7 @@ window.google = {accounts: {id: {
                 drawer.get_by_label("Balance", exact=True).fill("120.25")
                 drawer.get_by_role("button", name="Save changes").click()
                 expect(page.locator(".card strong")).to_have_text("USD 120.25")
-                page.get_by_role("link", name="Federal preview").click()
+                page.goto(origin + "/federal-preview")      # hidden from the nav (f00e2e8) but still routable
                 expect(page.get_by_role("button", name="Choose My Aid Data file")).to_be_visible()
                 with page.expect_response(lambda r: r.url == origin + "/logout" and r.request.method == "POST") as logout:
                     page.get_by_role("button", name="Sign out").click()
