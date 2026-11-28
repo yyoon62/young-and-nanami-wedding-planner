@@ -83,6 +83,18 @@ class BrowserBulk(unittest.TestCase):
                     ef_row.locator("summary.sec-chip").click()
                     ef_row.get_by_role("button", name="Retirement").click()
                     self.assertEqual(page.locator("tbody[data-section='Retirement']").filter(has_text="Emergency Fund").count(), 1)
+                    # Institution SVG badge is rendered locally with zero external requests
+                    self.assertGreaterEqual(page.locator("svg.inst-logo").count(), 12)
+                    # In-place Edit drawer opens without leaving "/" and saves in place
+                    ef_row = find_row("Cedar Credit", "Emergency Fund")
+                    ef_row.locator("a.edit-trigger").click()
+                    self.assertEqual(page.url, origin + "/")
+                    drawer = page.locator("tr.edit-drawer:not([hidden])")
+                    self.assertEqual(drawer.count(), 1)
+                    drawer.locator("input[name=update_method]").fill("Auto sync")
+                    drawer.get_by_role("button", name="Save changes").click()
+                    page.wait_for_url(origin + "/")
+                    self.assertEqual(page.locator("tr.edit-drawer:not([hidden])").count(), 0)
                     # Nanami view shows her Emergency Fund (+10.10) + Joint Card (-20.01) = -9.91
                     page.locator(".owner-tabs").get_by_role("link", name="Nanami").click()
                     self.assertEqual(page.locator(".card strong").all_text_contents(), ["USD -9.91"])

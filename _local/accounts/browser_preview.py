@@ -147,7 +147,7 @@ class BrowserFlow(unittest.TestCase):
             self.assertEqual(ctx.cookies(), [])
             self.assertEqual(console, [])
             self.assertTrue(all(m == "GET" and data is None and url in
-                                {origin + p for p in ["/", "/style.css", "/preview.js", "/federal-preview"]}
+                                {origin + p for p in ["/", "/style.css", "/dashboard.js", "/preview.js", "/federal-preview"]}
                                 for m, url, data in requests))
             browser.close()
 

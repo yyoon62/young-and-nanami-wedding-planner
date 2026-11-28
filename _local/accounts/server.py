@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 from servicers import servicer_get
 from bridge import Bridge, Problem
 from bulk import Batch, schema
+from logos import institution_logo
 
 
 ROOT = Path(__file__).resolve().parent
@@ -127,11 +128,12 @@ def mode_banner(server):
             ' · no provider · saved on this computer</p>')
 
 
-def page(content, current=None, heading="Financial accounts"):
+def page(content, current=None, heading="Financial accounts", script=None):
+    tag = f'<script defer src="{script}"></script>' if script else ""
     return f"""<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>{escape(heading)} · Local planner</title><link rel="stylesheet" href="/style.css">
+<title>{escape(heading)} · Local planner</title><link rel="stylesheet" href="/style.css">{tag}
 <main>{nav(current)}<header><small>YOUNG &amp; NANAMI · LOCAL PLANNER</small><h1>{escape(heading)}</h1></header>{content}</main></html>"""
 
 
@@ -179,10 +181,45 @@ def section_totals(rows):
     return " · ".join(money(v, c) for c, v in sorted(totals.items()))
 
 
-def account_row(r, today, token, view, excluded=False):
+def inline_edit_drawer(r, today, token, view, opened=False, values=None, error=None):
+    rid = r["id"]
+    v = values if (opened and values) else dict(r)
+    owner_opts = "".join(f'<option value="{o}"{" selected" if v.get("owner") == o else ""}>{o}</option>' for o in OWNERS)
+    side_opts = "".join(
+        f'<option value="{k}"{" selected" if v.get("side") == k else ""}>{label}</option>'
+        for k, label in (("asset", "Asset (owned)"), ("debt", "Debt (owed)")))
+    err_html = f'<p class="notice" role="alert">{escape(error)}</p>' if (opened and error) else ""
+    return (f'<tr class="edit-drawer" id="edit-row-{rid}" data-id="{rid}"{"" if opened else " hidden"}>'
+            f'<td colspan="5">{err_html}'
+            f'<form method="post" action="/edit/{rid}" class="drawer-form">'
+            f'<input type="hidden" name="token" value="{token}">'
+            f'<input type="hidden" name="view" value="{view}">'
+            f'<input type="hidden" name="inline" value="1">'
+            f'<div class="drawer-grid">'
+            f'<label>Account name<input required name="nickname" maxlength="100" value="{escape(str(v.get("nickname", "")))}"></label>'
+            f'<label>Institution<input required name="institution" maxlength="100" value="{escape(str(v.get("institution", "")))}"></label>'
+            f'<label>Type / section<input required name="kind" list="types" maxlength="100" value="{escape(str(v.get("kind", "")))}"></label>'
+            f'<label>Owner<select required name="owner">{owner_opts}</select></label>'
+            f'<label>Asset or debt<select required name="side">{side_opts}</select></label>'
+            f'<label>Currency<input required name="currency" maxlength="3" value="{escape(str(v.get("currency", "")))}"></label>'
+            f'<label>Balance<input required name="balance" inputmode="decimal" value="{escape(str(v.get("balance", "")))}"></label>'
+            f'<label>Balance as of<input required type="date" name="asof" max="{today}" value="{escape(str(v.get("asof", "")))}"></label>'
+            f'<label>Update method<input required name="update_method" maxlength="100" value="{escape(str(v.get("update_method", "")))}"></label>'
+            f'</div>'
+            f'<div class="drawer-actions">'
+            f'<div class="drawer-left"><button type="submit">Save changes</button>'
+            f'<button type="button" class="secondary drawer-cancel">Cancel</button></div>'
+            f'<details class="inline-pop remove-pop"><summary class="danger-link">Remove account…</summary>'
+            f'<div class="remove-confirm"><span>Delete this snapshot permanently?</span>'
+            f'<button type="submit" formaction="/remove/{rid}" formnovalidate class="danger-btn">Confirm remove</button>'
+            f'</div></details></div></form></td></tr>')
+
+
+def account_row(r, today, token, view, excluded=False, open_edit=None, edit_values=None, edit_error=None):
     rid = r["id"]
     name = escape(r["nickname"])
     inst = escape(r["institution"])
+    logo = institution_logo(r["institution"])
     sec = section_for(r["kind"])
     amt = Decimal(r["balance"])
     c = r["currency"]
@@ -230,18 +267,22 @@ def account_row(r, today, token, view, excluded=False):
                    f'<input type="hidden" name="excluded" value="{toggle_val}">'
                    f'<button type="submit" class="link-btn">{toggle_label}</button></form>')
     stale_tag = ' <span class="stale-pill">Stale</span>' if stale else ""
+    opened = str(rid) == str(open_edit)
+    drawer = inline_edit_drawer(r, today, token, view, opened=opened, values=edit_values, error=edit_error)
     return (f'<tr class="acct-row{" is-excluded" if excluded else ""}">'
-            f'<th scope="row" class="acct-cell">'
+            f'<th scope="row" class="acct-cell"><div class="acct-with-logo">{logo}<div class="acct-info">'
             f'<div class="acct-head"><span class="acct-name">{name}</span>{rename_pop}</div>'
-            f'<div class="acct-sub-row"><span class="acct-sub">{inst}</span>{sec_pop}</div></th>'
+            f'<div class="acct-sub-row"><span class="acct-sub">{inst}</span>{sec_pop}</div></div></div></th>'
             f'<td class="num bal-cell"><span class="amt {side}">{signed_money(amt, c, side)}</span> {side_toggle}</td>'
             f'<td class="owner-cell">{owner_cell}</td>'
             f'<td class="date-cell"><time datetime="{r["asof"]}">{r["asof"]}</time>{stale_tag}</td>'
-            f'<td class="act-cell">{exclude_btn}<a href="/edit/{rid}">Edit<span class="sr"> {name}</span></a></td>'
-            f'</tr>')
+            f'<td class="act-cell">{exclude_btn}'
+            f'<a href="/edit/{rid}" class="edit-trigger" data-edit="{rid}" aria-controls="edit-row-{rid}"'
+            f' aria-expanded="{"true" if opened else "false"}">Edit<span class="sr"> {name}</span></a></td>'
+            f'</tr>{drawer}')
 
 
-def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None):
+def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None, open_edit=None, edit_values=None):
     active = [r for r in rows if not r["excluded"]]
     excluded = [r for r in rows if r["excluded"]]
     totals = {}
@@ -265,9 +306,10 @@ def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None):
                      f'<button type="submit" class="button">↻ Sync balances</button></form>')
     add_cls = "button secondary" if has_sync else "button"
     banner = ""
-    if error:
+    if error and not open_edit:
         banner += f'<p class="notice" role="alert">{escape(error)}</p>'
     banner += "".join(f'<p class="notice" role="status">{escape(n)}</p>' for n in notices)
+    choices = "".join(f'<option value="{k}">' for k in KINDS)
 
     if active:
         grouped = {s: [] for s in SECTIONS}
@@ -282,7 +324,8 @@ def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None):
             hdr = (f'<tr class="sec-row"><th colspan="5"><div class="sec-bar">'
                    f'<span>{sec} <span class="sec-count">{len(sec_rows)}</span></span>'
                    f'<span class="sec-total">{sub}</span></div></th></tr>')
-            items = "".join(account_row(r, today, token, view, excluded=False) for r in sec_rows)
+            items = "".join(account_row(r, today, token, view, excluded=False, open_edit=open_edit,
+                                        edit_values=edit_values, edit_error=error) for r in sec_rows)
             bodies.append(f'<tbody class="sec-group" data-section="{sec}">{hdr}{items}</tbody>')
         table = (f'<div class="table-wrap"><table class="acct-table">'
                  f'<thead><tr><th>Account</th><th class="num">Balance</th><th>Owner</th>'
@@ -296,8 +339,10 @@ def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None):
 
     excluded_html = ""
     if excluded:
-        ex_body = "".join(account_row(r, today, token, view, excluded=True) for r in excluded)
-        excluded_html = (f'<details class="excluded-box"><summary>Excluded accounts ({len(excluded)})'
+        ex_open = " open" if any(str(r["id"]) == str(open_edit) for r in excluded) else ""
+        ex_body = "".join(account_row(r, today, token, view, excluded=True, open_edit=open_edit,
+                                      edit_values=edit_values, edit_error=error) for r in excluded)
+        excluded_html = (f'<details class="excluded-box"{ex_open}><summary>Excluded accounts ({len(excluded)})'
                          f' — not counted in totals</summary>'
                          f'<div class="table-wrap"><table class="acct-table">'
                          f'<thead><tr><th>Account</th><th class="num">Balance</th><th>Owner</th>'
@@ -305,17 +350,17 @@ def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None):
                          f'<tbody>{ex_body}</tbody></table></div></details>')
 
     return page(
-        f'{banner}'
+        f'{banner}<datalist id="types">{choices}</datalist>'
         f'<div class="top-bar"><nav class="owner-tabs" aria-label="Inventory views">{links}</nav>'
         f'<div class="top-actions">{sync_html}<a class="{add_cls}" href="/new">+ Add account</a></div></div>'
         f'<div class="cards">{cards}</div>'
         f'{table}{excluded_html}'
         f'<details class="help"><summary>How totals work</summary><p>Household counts every active account once. '
         f'Click Young, Nanami, or both on any row to assign ownership (selecting both marks it joint; individual views '
-        f'overlap on joint accounts, so do not add them together). Click ✎ to rename an account or click its section '
-        f'tag to move it—re-syncing updates balances only and keeps your names, sections, and owners. '
-        f'Balances older than 30 days are marked stale and still included.</p></details>',
-        current="/")
+        f'overlap on joint accounts, so do not add them together). Click ✎ to rename, click the section tag to move, '
+        f'or click Edit to update all fields in place—re-syncing updates balances only and keeps your names, sections, '
+        f'and owners. Balances older than 30 days are marked stale and still included.</p></details>',
+        current="/", script="/dashboard.js")
 
 
 def form(v, target, token, error="", current=None):
@@ -353,7 +398,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def send(self, code, text, kind="text/html; charset=utf-8", location=None, preview=False):
+    def send(self, code, text, kind="text/html; charset=utf-8", location=None, preview=False, scripts=False):
         if kind.startswith("text/html"):
             text = text.replace("<main>", "<main>" + mode_banner(self.server), 1)
         body = text.encode()
@@ -364,8 +409,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         policy = "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
-        self.send_header("Content-Security-Policy", policy + (
-            "script-src 'self'; connect-src 'none'; form-action 'none'" if preview else "form-action 'self'"))
+        if preview:
+            extra = "script-src 'self'; connect-src 'none'; form-action 'none'"
+        elif scripts:
+            extra = "script-src 'self'; connect-src 'none'; form-action 'self'"
+        else:
+            extra = "form-action 'self'"
+        self.send_header("Content-Security-Policy", policy + extra)
         # A no-referrer form sends Origin: null even on a local POST.
         self.send_header("Referrer-Policy", "no-referrer" if preview else "same-origin")
         self.end_headers()
@@ -375,14 +425,15 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_port
         return self.headers.get("Host") in {f"127.0.0.1:{port}", f"localhost:{port}"}
 
-    def render_home(self, view, notices=(), error=None, status=200):
+    def render_home(self, view, notices=(), error=None, status=200, open_edit=None, edit_values=None):
         with closing(sqlite3.connect(self.server.db)) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute("""SELECT * FROM accounts WHERE ? = 'Household' OR owner IN (?, 'Joint')
                                  ORDER BY excluded, side, institution COLLATE NOCASE, nickname COLLATE NOCASE, id""",
                               (view, view)).fetchall()
         return self.send(status, dashboard(rows, date.today(), view, self.server.token,
-                                           has_sync=bool(self.server.batch), notices=notices, error=error))
+                                           has_sync=bool(self.server.batch), notices=notices, error=error,
+                                           open_edit=open_edit, edit_values=edit_values), scripts=True)
 
     def do_GET(self):
         if not self.local_host():
@@ -397,6 +448,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, (ROOT / "preview.html").read_text(), preview=True)
         if path == "/preview.js":
             return self.send(200, (ROOT / "preview.js").read_text(), "application/javascript")
+        if path == "/dashboard.js":
+            return self.send(200, (ROOT / "dashboard.js").read_text(), "application/javascript")
         if path == "/style.css":
             return self.send(200, (ROOT / "style.css").read_text(), "text/css")
         if path == "/new":
@@ -503,10 +556,12 @@ class Handler(BaseHTTPRequestHandler):
         if remove:
             with closing(sqlite3.connect(self.server.db)) as db, db:
                 db.execute("DELETE FROM accounts WHERE id=?", (remove[1],))
-            return self.send(303, "", location="/")
+            return self.send(303, "", location=view_url(back))
         try:
             values = validate(data, date.today())
         except ValueError as exc:
+            if edit and data.get("inline") == "1":
+                return self.render_home(back, error=str(exc), status=422, open_edit=edit[1], edit_values=data)
             return self.send(422, form(data, target, self.server.token, str(exc)))
         params = tuple(values[k] for k in FIELDS)
         with closing(sqlite3.connect(self.server.db)) as db, db:
@@ -521,7 +576,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 db.execute("""INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof,
                               owner,update_method,excluded,side_manual) VALUES (?,?,?,?,?,?,?,?,?,0,1)""", params)
-        self.send(303, "", location="/")
+        self.send(303, "", location=view_url(back) if (edit and data.get("inline") == "1") else "/")
 
 
 def serve(path, port, provider=None):
