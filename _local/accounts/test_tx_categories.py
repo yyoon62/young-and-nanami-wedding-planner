@@ -223,7 +223,7 @@ class Migration(unittest.TestCase):
                                  "maple cafe")  # legacy exact rule gains a cleaned key
                 names = [r[0] for r in db.execute("SELECT name FROM transaction_categories ORDER BY name")]
                 self.assertIn("Legacy Free Text", names)  # existing free text joins the list, not lost
-                self.assertEqual(len(names), len(BUILTIN) + 1)
+                self.assertEqual(len(names), len(BUILTIN) + 2)  # builtins + built-in Income + the legacy free text
                 tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
                 self.assertEqual(len(tables), len(set(tables)))
                 self.assertEqual(monthly_snapshot(db, "2026-11", "Household").rows[0]["category"], "Legacy Free Text")
