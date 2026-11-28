@@ -529,4 +529,12 @@ tr.rate-change td { background: #fdf0d5; color: #7a4b00; font-size: .8rem; font-
 .nw-stepnote { margin: .25rem 0 0; font-size: .86rem; }
 .nw-stepdot { stroke: var(--alert); stroke-width: 9; stroke-linecap: round; fill: none; }
 .nw-item { white-space: nowrap; }
+@media (max-width: 40rem) {
+  .nw-bar { gap: .2rem .5rem; }
+  .nw-item { display: block; white-space: normal; }
+  .nw-sep { display: none; }
+  .nw-axis, .nw-zone { font-size: .72rem; }
+  .nw-zone::before { width: .8rem; margin-right: .2rem; }
+  .nw-suggest { padding: .5rem .7rem; }
+}
 /* ==== L29 end ==== */

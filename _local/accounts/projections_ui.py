@@ -627,9 +627,9 @@ def _panel(view, currency, seed, assumptions, scale, token, *, attempted=None, e
         if not getattr(assumptions, name):
             values[name] = ""
     surplus = assumptions.surplus
-    budget = (f'<p class="nw-line nw-budget"><span class="nw-item">💰 Monthly take-home income: <strong>{money(assumptions.income)}</strong></span> · '
-              f'<span class="nw-item">💸 Monthly spending: <strong>{money(assumptions.spending)}</strong></span> · '
-              f'<span class="nw-item">{"🟢" if surplus >= 0 else "🔴"} Monthly net savings: <strong>{money(surplus)}</strong></span> · '
+    budget = (f'<p class="nw-line nw-budget"><span class="nw-item">💰 Monthly take-home income: <strong>{money(assumptions.income)}</strong></span><span class="nw-sep"> · </span>'
+              f'<span class="nw-item">💸 Monthly spending: <strong>{money(assumptions.spending)}</strong></span><span class="nw-sep"> · </span>'
+              f'<span class="nw-item">{"🟢" if surplus >= 0 else "🔴"} Monthly net savings: <strong>{money(surplus)}</strong></span><span class="nw-sep"> · </span>'
               f'<span class="nw-item">{escape(unit_label)}</span></p>')
     debt_note = _debt_note(seed.balances.debt if plan is None else plan.pool, assumptions.debt_target, surplus, money)
     service = ""
