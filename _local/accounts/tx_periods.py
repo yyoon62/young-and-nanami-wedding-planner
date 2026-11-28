@@ -44,8 +44,10 @@ def scope_accounts(db, view, currency, kinds=None):
     query = """SELECT a.id, a.kind, c.start_at, c.end_at FROM accounts a
         JOIN source_links l ON l.local=a.id
         LEFT JOIN transaction_coverage c ON c.source=l.source AND c.account_id=a.id AND c.currency=a.currency
-        WHERE a.excluded=0 AND a.currency=? AND (?='Household' OR a.owner IN (?,'Joint'))"""
-    rows = db.execute(query, (currency, view, view)).fetchall()
+        WHERE a.excluded=0 AND a.currency=? AND (?='Household' OR a.owner IN (?,'Joint')
+            OR EXISTS (SELECT 1 FROM account_transactions o WHERE o.account_id=a.id
+                       AND o.owner_override IN (?,'Joint')))"""   # L26: an overridden row's account counts for its view
+    rows = db.execute(query, (currency, view, view, view)).fetchall()
     return [r for r in rows if kinds is None or str(r[1]).lower() in kinds]
 
 

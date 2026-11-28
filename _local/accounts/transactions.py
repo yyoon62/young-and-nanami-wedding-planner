@@ -19,6 +19,7 @@ from urllib.parse import urlencode
 from bridge import Bridge, Problem, unique_fields
 from bulk import daily_guard_problem, fingerprint, text
 from tx_classifier import install_classifier
+from tx_owners import OWNERS, apply_owner
 from tx_categories import (clean_merchant, add_category, canonical, install_categories, list_categories,
                            load_cache, load_rules, resolve)
 
@@ -43,8 +44,13 @@ def install_transactions(db):
         pending_active INTEGER NOT NULL CHECK(pending_active IN (0,1)),
         category TEXT NOT NULL DEFAULT '', category_manual INTEGER NOT NULL DEFAULT 0,
         is_transfer INTEGER NOT NULL DEFAULT 0, transfer_manual INTEGER NOT NULL DEFAULT 0,
+        owner_override TEXT CHECK(owner_override IN ('Young','Nanami','Joint')),
         CHECK((pending=1 AND posted_date IS NULL) OR (pending=0 AND posted_date IS NOT NULL)),
         UNIQUE(account_id, tx_id))""")
+    if "owner_override" not in {r[1] for r in db.execute("PRAGMA table_info(account_transactions)")}:
+        # L26: per-transaction owner; NULL follows the account. The sync upsert never lists it, so it survives re-fetches.
+        db.execute("""ALTER TABLE account_transactions
+                      ADD COLUMN owner_override TEXT CHECK(owner_override IN ('Young','Nanami','Joint'))""")
     db.execute("""CREATE INDEX IF NOT EXISTS account_transactions_posted
                   ON account_transactions(posted_date)""")
     db.execute("""CREATE INDEX IF NOT EXISTS account_transactions_pending
@@ -436,7 +442,9 @@ def _internal_suggestions(rows):
 
 _VISIBLE = """FROM account_transactions t JOIN accounts a ON a.id=t.account_id
     JOIN source_links l ON l.local=a.id AND l.source=t.source"""
-_SCOPE = """WHERE a.excluded=0 AND t.currency=a.currency AND (?='Household' OR a.owner IN (?,'Joint'))"""
+# Effective owner: the transaction's own override, else its account's owner (L26).
+_EFF = "COALESCE(t.owner_override, a.owner)"
+_SCOPE = f"""WHERE a.excluded=0 AND t.currency=a.currency AND (?='Household' OR {_EFF} IN (?,'Joint'))"""
 
 
 @dataclass
@@ -474,7 +482,7 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
     scope = "Household" if household_matching else view
     # A competing edge of the other leg may be six days from the displayed row.
     # Three days of query padding can falsely turn an ambiguous edge into a pair.
-    rows = _dicts(db.execute(f"""SELECT t.*, a.kind, a.owner, a.nickname, a.institution, a.logo_domain,
+    rows = _dicts(db.execute(f"""SELECT t.*, a.kind, a.owner, {_EFF} AS eff_owner, a.nickname, a.institution, a.logo_domain,
         r.is_transfer AS merchant_transfer {_VISIBLE}
         LEFT JOIN transaction_merchant_rules r ON r.account_id=t.account_id AND r.source=t.source
             AND r.currency=t.currency AND r.merchant=t.merchant
@@ -493,14 +501,16 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
     matched = _match_transfers(rows)
     # Suggestions never depend on the presence of a counterpart outside the
     # selected view, even if the viewer is authorized to switch to Household.
-    suggested = _internal_suggestions(r for r in rows if view == "Household" or r["owner"] in (view, "Joint"))
+    suggested = _internal_suggestions(r for r in rows if view == "Household" or r["eff_owner"] in (view, "Joint"))
     result = Snapshot()
     result.coverage = _dicts(db.execute("""SELECT a.nickname, a.currency, a.institution,
         l.source IS NOT NULL AS linked, c.start_at, c.end_at
         FROM accounts a LEFT JOIN source_links l ON l.local=a.id
         LEFT JOIN transaction_coverage c ON c.source=l.source AND c.account_id=a.id AND c.currency=a.currency
-        WHERE a.excluded=0 AND (?='Household' OR a.owner IN (?,'Joint'))
-        ORDER BY a.institution, a.nickname, a.id""", (view, view)))
+        WHERE a.excluded=0 AND (?='Household' OR a.owner IN (?,'Joint')
+            OR EXISTS (SELECT 1 FROM account_transactions o WHERE o.account_id=a.id
+                       AND o.owner_override IN (?,'Joint')))
+        ORDER BY a.institution, a.nickname, a.id""", (view, view, view)))
     for c in result.coverage:
         c["covered"] = (c["start_at"] is not None and c["start_at"] <= _midnight(start)
                         and c["end_at"] >= _midnight(end))
@@ -515,7 +525,7 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
         # digits. Allow both, plus up to 19 digits of SQLite row count.
         ctx.prec = 150
         for r in rows:
-            if view != "Household" and r["owner"] not in (view, "Joint"):
+            if view != "Household" and r["eff_owner"] not in (view, "Joint"):
                 continue
             if not str(start) <= (r["posted_date"] or r["pending_date"]) < str(end):
                 continue
@@ -601,11 +611,11 @@ def manual_index(db):
     return index
 
 
-ACTIONS = ("category", "rule", "transfer", "transfer_rule", "save", "add_category")
+ACTIONS = ("category", "rule", "transfer", "transfer_rule", "save", "add_category", "owner", "owner_reset")
 
 
 def edit_transaction(db, row_id, view, month, *, action, category="", transfer="", merchant_transfer="",
-                     new_category="", apply=False):
+                     new_category="", apply=False, owner=""):
     """Apply a validated scoped edit inside the caller's BEGIN IMMEDIATE.
 
     `save` is the drawer's one-shot edit (category, optional new category, apply-to-merchant,
@@ -619,6 +629,8 @@ def edit_transaction(db, row_id, view, month, *, action, category="", transfer="
         raise ValueError("Unknown transaction action.")
     if transfer not in ("", "auto", "yes", "no") or merchant_transfer not in ("", "none", "yes", "no"):
         raise ValueError("Choose a valid transfer setting.")
+    if action == "owner" and owner not in OWNERS:
+        raise ValueError("Choose Young or Nanami.")
     if action == "transfer" and not transfer:
         raise ValueError("Choose a transfer setting.")
     if action == "transfer_rule" and not merchant_transfer:
@@ -632,7 +644,7 @@ def edit_transaction(db, row_id, view, month, *, action, category="", transfer="
                 raise ValueError("Choose a category from the list, or add it first.")
         if (action == "rule" or (action == "save" and apply)) and not (category or new_category.strip()):
             raise ValueError("Choose a category to apply to this merchant.")
-    found = _dicts(db.execute(f"""SELECT t.* {_VISIBLE} {_SCOPE} AND t.row_id=?
+    found = _dicts(db.execute(f"""SELECT t.*, a.owner AS account_owner {_VISIBLE} {_SCOPE} AND t.row_id=?
         AND coalesce(t.posted_date,t.pending_date)>=? AND coalesce(t.posted_date,t.pending_date)<?
         AND (t.pending=0 OR t.pending_active=1)""", (view, view, row_id, str(start), str(end))))
     if not found:
@@ -640,6 +652,9 @@ def edit_transaction(db, row_id, view, month, *, action, category="", transfer="
     row = found[0]
     key = (row["account_id"], row["source"], row["currency"], row["merchant"])
     clean = clean_merchant(row["merchant"])
+    if action in ("owner", "owner_reset"):
+        apply_owner(db, row, owner if action == "owner" else None)
+        return True
     if action == "add_category":
         add_category(db, new_category)
         return True

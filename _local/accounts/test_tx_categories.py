@@ -43,7 +43,10 @@ CREATE TABLE transaction_merchant_rules (account_id INTEGER NOT NULL, source TEX
 
 
 def dump(db, tables):
-    return {t: db.execute(f"SELECT * FROM {t} ORDER BY 1,2,3").fetchall() for t in tables}
+    """Rows of the tables as they were before L22, ignoring columns added later (L26 owner_override)."""
+    def columns(table):
+        return ",".join(c[1] for c in db.execute(f"PRAGMA table_info({table})") if c[1] != "owner_override")
+    return {t: db.execute(f"SELECT {columns(t)} FROM {t} ORDER BY 1,2,3").fetchall() for t in tables}
 
 
 class MaplePath(Fixture, unittest.TestCase):
