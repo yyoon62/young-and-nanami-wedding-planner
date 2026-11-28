@@ -22,11 +22,20 @@ DEFAULT_DB = Path.home() / ".local/share/planner-accounts/accounts.sqlite3"
 FIELDS = ("institution", "nickname", "kind", "side", "currency", "balance", "asof", "owner", "update_method")
 PEOPLE = ("Young", "Nanami")
 OWNERS = ("Unspecified", *PEOPLE, "Joint")
-TAG_OWNERS = (*PEOPLE, "Joint")
+SECTIONS = ("Checking", "Savings", "Retirement", "Investments", "Credit cards", "Loans", "Other")
+SECTION_KIND = {
+    "Checking": "Checking",
+    "Savings": "Savings",
+    "Retirement": "Retirement",
+    "Investments": "Brokerage",
+    "Credit cards": "Credit card",
+    "Loans": "Student loan",
+    "Other": "Other",
+}
 DEFAULT_METHOD = "Manual entry"
 KINDS = ("Checking", "Savings", "Cash", "Brokerage", "Retirement", "Pension",
          "Health savings", "Digital assets", "Credit card", "Mortgage", "Student loan",
-         "Personal loan", "Auto loan", "Line of credit")
+         "Personal loan", "Auto loan", "Line of credit", "Other")
 ZERO = set("BIF CLP DJF GNF ISK JPY KMF KRW PYG RWF UGX UYI VND VUV XAF XOF XPF".split())
 THREE = set("BHD IQD JOD KWD LYD OMR TND".split())
 
@@ -130,23 +139,82 @@ def view_url(view):
     return "/" if view == "Household" else f"/?view={view}"
 
 
+def section_for(kind):
+    k = (kind or "").strip().lower()
+    if k in ("checking", "cash"):
+        return "Checking"
+    if k in ("savings", "saving", "health savings", "hsa"):
+        return "Savings"
+    if k in ("retirement", "pension", "401k", "401(k)", "ira", "roth", "roth ira"):
+        return "Retirement"
+    if k in ("investments", "investment", "brokerage", "digital assets"):
+        return "Investments"
+    if k in ("credit card", "credit cards"):
+        return "Credit cards"
+    if k in ("loan", "loans", "student loan", "mortgage", "personal loan", "auto loan", "line of credit"):
+        return "Loans"
+    return "Other"
+
+
+def toggle_person(current, person):
+    has = set()
+    if current in ("Young", "Joint"):
+        has.add("Young")
+    if current in ("Nanami", "Joint"):
+        has.add("Nanami")
+    if person in has:
+        has.remove(person)
+    else:
+        has.add(person)
+    if has == set(PEOPLE):
+        return "Joint"
+    return next(iter(has), "Unspecified")
+
+
+def section_totals(rows):
+    totals = {}
+    for r in rows:
+        c, amt = r["currency"], Decimal(r["balance"])
+        totals[c] = totals.get(c, Decimal(0)) + (-amt if r["side"] == "debt" else amt)
+    return " · ".join(money(v, c) for c, v in sorted(totals.items()))
+
+
 def account_row(r, today, token, view, excluded=False):
     rid = r["id"]
     name = escape(r["nickname"])
     inst = escape(r["institution"])
-    kind = escape(r["kind"])
+    sec = section_for(r["kind"])
     amt = Decimal(r["balance"])
     c = r["currency"]
     side = r["side"]
     stale = (today - date.fromisoformat(r["asof"])).days > 30
+    owner = r["owner"]
     owner_pills = "".join(
-        f'<button type="submit" name="owner" value="{o}" class="pill-btn{" active" if r["owner"] == o else ""}"'
-        f' aria-pressed="{"true" if r["owner"] == o else "false"}">{o}</button>'
-        for o in TAG_OWNERS)
+        f'<button type="submit" name="owner" value="{p}"'
+        f' class="pill-btn{" active" if owner in (p, "Joint") else ""}"'
+        f' aria-pressed="{"true" if owner in (p, "Joint") else "false"}">{p}</button>'
+        for p in PEOPLE)
     owner_cell = (f'<form method="post" action="/owner/{rid}" class="inline-form owner-pills">'
                   f'<input type="hidden" name="token" value="{token}">'
                   f'<input type="hidden" name="view" value="{view}">'
                   f'{owner_pills}</form>')
+    rename_pop = (f'<details class="inline-pop">'
+                  f'<summary class="icon-btn" title="Rename account" aria-label="Rename {name}">✎</summary>'
+                  f'<form method="post" action="/rename/{rid}" class="pop-form">'
+                  f'<input type="hidden" name="token" value="{token}">'
+                  f'<input type="hidden" name="view" value="{view}">'
+                  f'<input type="text" name="nickname" value="{name}" maxlength="100" required aria-label="New account name">'
+                  f'<button type="submit" class="pop-save">Save</button></form></details>')
+    sec_buttons = "".join(
+        f'<button type="submit" name="section" value="{s}"'
+        f' class="sec-opt{" active" if s == sec else ""}">{s}</button>'
+        for s in SECTIONS)
+    sec_pop = (f'<details class="inline-pop sec-pop">'
+               f'<summary class="sec-chip" title="Move to another section">{escape(r["kind"])} ▾</summary>'
+               f'<form method="post" action="/section/{rid}" class="sec-menu">'
+               f'<input type="hidden" name="token" value="{token}">'
+               f'<input type="hidden" name="view" value="{view}">'
+               f'{sec_buttons}</form></details>')
     next_side = "asset" if side == "debt" else "debt"
     side_toggle = (f'<form method="post" action="/side/{rid}" class="inline-form">'
                    f'<input type="hidden" name="token" value="{token}">'
@@ -162,9 +230,10 @@ def account_row(r, today, token, view, excluded=False):
                    f'<input type="hidden" name="excluded" value="{toggle_val}">'
                    f'<button type="submit" class="link-btn">{toggle_label}</button></form>')
     stale_tag = ' <span class="stale-pill">Stale</span>' if stale else ""
-    return (f'<tr class="{"is-excluded" if excluded else ""}">'
-            f'<th scope="row" class="acct-cell"><span class="acct-name">{name}</span>'
-            f'<span class="acct-sub">{inst} · {kind}</span></th>'
+    return (f'<tr class="acct-row{" is-excluded" if excluded else ""}">'
+            f'<th scope="row" class="acct-cell">'
+            f'<div class="acct-head"><span class="acct-name">{name}</span>{rename_pop}</div>'
+            f'<div class="acct-sub-row"><span class="acct-sub">{inst}</span>{sec_pop}</div></th>'
             f'<td class="num bal-cell"><span class="amt {side}">{signed_money(amt, c, side)}</span> {side_toggle}</td>'
             f'<td class="owner-cell">{owner_cell}</td>'
             f'<td class="date-cell"><time datetime="{r["asof"]}">{r["asof"]}</time>{stale_tag}</td>'
@@ -201,11 +270,24 @@ def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None):
     banner += "".join(f'<p class="notice" role="status">{escape(n)}</p>' for n in notices)
 
     if active:
-        body = "".join(account_row(r, today, token, view, excluded=False) for r in active)
+        grouped = {s: [] for s in SECTIONS}
+        for r in active:
+            grouped[section_for(r["kind"])].append(r)
+        bodies = []
+        for sec in SECTIONS:
+            sec_rows = grouped[sec]
+            if not sec_rows:
+                continue
+            sub = section_totals(sec_rows)
+            hdr = (f'<tr class="sec-row"><th colspan="5"><div class="sec-bar">'
+                   f'<span>{sec} <span class="sec-count">{len(sec_rows)}</span></span>'
+                   f'<span class="sec-total">{sub}</span></div></th></tr>')
+            items = "".join(account_row(r, today, token, view, excluded=False) for r in sec_rows)
+            bodies.append(f'<tbody class="sec-group" data-section="{sec}">{hdr}{items}</tbody>')
         table = (f'<div class="table-wrap"><table class="acct-table">'
                  f'<thead><tr><th>Account</th><th class="num">Balance</th><th>Owner</th>'
                  f'<th>As of</th><th class="act-col"></th></tr></thead>'
-                 f'<tbody>{body}</tbody></table></div>')
+                 f'{"".join(bodies)}</table></div>')
     else:
         empty_msg = ("No active accounts in this view. Click <strong>↻ Sync balances</strong> to pull linked accounts, "
                      "or <strong>+ Add account</strong> to add one manually."
@@ -229,9 +311,9 @@ def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None):
         f'<div class="cards">{cards}</div>'
         f'{table}{excluded_html}'
         f'<details class="help"><summary>How totals work</summary><p>Household counts every active account once. '
-        f'Each person’s view includes their own accounts plus joint accounts (views overlap; do not add them together). '
-        f'Totals are separate by currency. Click Young, Nanami, or Joint on any row to tag it; click Asset/Debt to '
-        f'override sign detection; click Exclude to leave an account out of totals without deleting it. '
+        f'Click Young, Nanami, or both on any row to assign ownership (selecting both marks it joint; individual views '
+        f'overlap on joint accounts, so do not add them together). Click ✎ to rename an account or click its section '
+        f'tag to move it—re-syncing updates balances only and keeps your names, sections, and owners. '
         f'Balances older than 30 days are marked stale and still included.</p></details>',
         current="/")
 
@@ -347,10 +429,12 @@ class Handler(BaseHTTPRequestHandler):
         edit = re.fullmatch(r"/edit/([1-9][0-9]{0,17})", target)
         remove = re.fullmatch(r"/remove/([1-9][0-9]{0,17})", target)
         owner_act = re.fullmatch(r"/owner/([1-9][0-9]{0,17})", target)
+        rename_act = re.fullmatch(r"/rename/([1-9][0-9]{0,17})", target)
+        section_act = re.fullmatch(r"/section/([1-9][0-9]{0,17})", target)
         exclude_act = re.fullmatch(r"/exclude/([1-9][0-9]{0,17})", target)
         side_act = re.fullmatch(r"/side/([1-9][0-9]{0,17})", target)
         sync_act = target == "/sync" and bool(self.server.batch)
-        if not any((edit, remove, owner_act, exclude_act, side_act, sync_act, target == "/new")):
+        if not any((edit, remove, owner_act, rename_act, section_act, exclude_act, side_act, sync_act, target == "/new")):
             return self.send(404, "Page not found.")
         length = self.headers.get("Content-Length", "")
         if not re.fullmatch(r"[0-9]{1,5}", length) or int(length) > 8192:
@@ -374,8 +458,28 @@ class Handler(BaseHTTPRequestHandler):
                 row = db.execute("SELECT owner FROM accounts WHERE id=?", (owner_act[1],)).fetchone()
                 if not row:
                     return self.send(404, "Account not found.")
-                new_owner = "Unspecified" if row[0] == chosen else chosen
+                new_owner = toggle_person(row[0], chosen) if chosen in PEOPLE else (
+                    "Unspecified" if row[0] == chosen else chosen)
                 db.execute("UPDATE accounts SET owner=? WHERE id=?", (new_owner, owner_act[1]))
+            return self.send(303, "", location=view_url(back))
+        if rename_act:
+            nickname = data.get("nickname", "").strip()
+            if not 1 <= len(nickname) <= 100:
+                return self.render_home(back, error="Account name: enter 1–100 characters.", status=422)
+            with closing(sqlite3.connect(self.server.db)) as db, db:
+                changed = db.execute("UPDATE accounts SET nickname=? WHERE id=?", (nickname, rename_act[1])).rowcount
+                if not changed:
+                    return self.send(404, "Account not found.")
+            return self.send(303, "", location=view_url(back))
+        if section_act:
+            sec = data.get("section", "")
+            if sec not in SECTION_KIND:
+                return self.send(422, "Invalid section.")
+            with closing(sqlite3.connect(self.server.db)) as db, db:
+                changed = db.execute("UPDATE accounts SET kind=? WHERE id=?",
+                                     (SECTION_KIND[sec], section_act[1])).rowcount
+                if not changed:
+                    return self.send(404, "Account not found.")
             return self.send(303, "", location=view_url(back))
         if exclude_act:
             val = data.get("excluded", "")

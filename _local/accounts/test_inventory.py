@@ -75,13 +75,24 @@ class HouseholdInventory(unittest.TestCase):
                 self.assertIn("<option selected>Nanami</option>", edit17)
                 self.assertIn('value="Read co-op statement"', edit17)
                 self.assertEqual(request("/?view=unknown")[0], 400)
-                # Inline owner pill toggle and exclude/include
+                # Inline independent Young + Nanami toggles (both selected = Joint)
                 token = re.search(r'name="token" value="([^"]+)"', body)[1]
-                self.assertEqual(request("/owner/18", dict(token=token, owner="Joint", view="Household"))[0], 303)
+                # id=18 starts as Young; clicking Nanami makes it Joint (both active)
+                self.assertEqual(request("/owner/18", dict(token=token, owner="Nanami", view="Household"))[0], 303)
                 overview(request, "/?view=Nanami", [17, 18, 19, 20], ["USD 11.00", "JPY 7"])
-                # Clicking active pill again clears back to Unspecified
-                self.assertEqual(request("/owner/18", dict(token=token, owner="Joint", view="Household"))[0], 303)
+                # Clicking Young turns Young off, leaving Nanami
+                self.assertEqual(request("/owner/18", dict(token=token, owner="Young", view="Household"))[0], 303)
+                overview(request, "/?view=Young", [20], ["USD 3.00"])
+                overview(request, "/?view=Nanami", [17, 18, 19, 20], ["USD 11.00", "JPY 7"])
+                # Clicking Nanami turns Nanami off too -> Unspecified
+                self.assertEqual(request("/owner/18", dict(token=token, owner="Nanami", view="Household"))[0], 303)
                 overview(request, "/?view=Nanami", [17, 19, 20], ["USD 1.00", "JPY 7"])
+                # Inline rename and section move
+                self.assertEqual(request("/rename/18", dict(token=token, nickname="Renamed Checking", view="Household"))[0], 303)
+                self.assertEqual(request("/section/18", dict(token=token, section="Retirement", view="Household"))[0], 303)
+                home = request("/")[1]
+                self.assertIn("Renamed Checking", home)
+                self.assertIn('data-section="Retirement"', home)
                 # Excluding removes from totals without deleting
                 self.assertEqual(request("/exclude/19", dict(token=token, excluded="1", view="Household"))[0], 303)
                 after_ex = overview(request, "/", [17, 18, 19, 20], ["USD 13.00", "JPY 7"])

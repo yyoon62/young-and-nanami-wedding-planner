@@ -48,6 +48,27 @@ class Entry:
         return (n > 0) - (n < 0)
 
 
+def infer_kind(institution, nickname, side):
+    hay = f" {institution} {nickname} ".lower()
+    if any(k in hay for k in ("401k", "401(k)", "403b", "403(b)", "457", " ira ", "roth", "retirement", "pension", " tsp ")):
+        return "Retirement"
+    if any(k in hay for k in ("student loan", "nelnet", "aidvantage", "ecsi", "uas ", "mohela")):
+        return "Student loan"
+    if "mortgage" in hay:
+        return "Mortgage"
+    if any(k in hay for k in (" loan", "heloc", "auto loan")):
+        return "Loan"
+    if any(k in hay for k in ("card", "visa", "mastercard", "amex", "discover", "sapphire", "freedom", "signature", "rewards")):
+        return "Credit card"
+    if any(k in hay for k in ("checking", "chk")):
+        return "Checking"
+    if any(k in hay for k in ("saving", "hsa", "money market")):
+        return "Savings"
+    if any(k in hay for k in ("brokerage", "invest", "taxable", "vanguard", "fidelity", "schwab", "robinhood", "crypto")):
+        return "Brokerage"
+    return "Other"
+
+
 def unpack(payload, namespace, validate):
     if not isinstance(payload, dict) or not all(isinstance(payload.get(k), list)
             for k in ("connections", "accounts", "errlist")):
@@ -101,9 +122,10 @@ def unpack(payload, namespace, validate):
             if "." in magnitude and magnitude.partition(".")[2].isdigit():
                 magnitude = magnitude.rstrip("0").rstrip(".")  # exact; never round to fit
             inferred_side = "debt" if Decimal(signed) < 0 else "asset"
-            v = validate(dict(institution=connections[cid], nickname=text(a["name"], 100),
-                              kind="Linked account", side=inferred_side, owner="Unspecified",
-                              currency=text(a["currency"], 3), balance=magnitude,
+            inst_name, acct_name = connections[cid], text(a["name"], 100)
+            v = validate(dict(institution=inst_name, nickname=acct_name,
+                              kind=infer_kind(inst_name, acct_name, inferred_side), side=inferred_side,
+                              owner="Unspecified", currency=text(a["currency"], 3), balance=magnitude,
                               asof=str(date.fromtimestamp(stamp)), update_method="SimpleFIN sync"), date.today())
             entries[key] = Entry(key, v, signed, stamp)
         except (KeyError, TypeError, ValueError, OSError, OverflowError):

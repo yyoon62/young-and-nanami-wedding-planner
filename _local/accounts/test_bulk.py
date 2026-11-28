@@ -59,15 +59,15 @@ class SyncFlow(unittest.TestCase):
         # First synced row (id=2) had -20.01 -> automatically debt; id=3 had 10.10 -> asset
         self.assertEqual(rows[1][3:5], ("debt", "20.01"))
         self.assertEqual(rows[2][3:5], ("asset", "10.10"))
-        # User tags owner, flips side manually on id=4, and excludes id=5
-        self.sql("update accounts set owner='Nanami' where id=2")
+        # User tags owner, renames account, moves section, flips side manually on id=4, and excludes id=5
+        self.sql("update accounts set owner='Nanami', nickname='My Custom Card', kind='Retirement' where id=2")
         self.sql("update accounts set side='debt', side_manual=1 where id=4")
         self.sql("update accounts set excluded=1 where id=5")
         self.restart()
         ac = self.provider.payload["accounts"]
         for a in ac:
             a["balance-date"] += 86400
-        ac[0]["balance"] = "-21.88"            # updated debt
+        ac[0].update(name="Upstream Renamed Card", balance="-21.88")  # updated debt; custom name & section preserved
         ac[1]["balance"] = "-5.00"             # sign flip on non-overridden row -> flips to debt
         ac[2]["balance"] = "15.00"             # positive on manually-overridden debt -> stays debt
         ac[3]["balance-date"] -= 2 * 86400     # older than accepted source timestamp -> held
@@ -81,13 +81,13 @@ class SyncFlow(unittest.TestCase):
         notice = self.batch.sync()
         self.assertIn("Account lookup failed", str(notice))
         self.assertNotIn("PRIVATE", str(notice))
-        after = self.sql("select id, owner, side, balance, excluded from accounts where id>=2 order by id")
-        self.assertEqual(after[0], (2, "Nanami", "debt", "21.88", 0))
-        self.assertEqual(after[1], (3, "Unspecified", "debt", "5.00", 0))
-        self.assertEqual(after[2], (4, "Unspecified", "debt", "15.00", 0))  # side_manual preserved
-        self.assertEqual(after[3], (5, "Unspecified", "asset", "10.10", 1)) # older held, excluded preserved
-        self.assertEqual(after[4], (6, "Unspecified", "asset", "0.00", 0))
-        self.assertEqual(after[5], (7, "Unspecified", "asset", "10.10", 0)) # invalid precision held
+        after = self.sql("select id, owner, nickname, kind, side, balance, excluded from accounts where id>=2 order by id")
+        self.assertEqual(after[0], (2, "Nanami", "My Custom Card", "Retirement", "debt", "21.88", 0))
+        self.assertEqual(after[1][1:], ("Unspecified", "Savings", "Savings", "debt", "5.00", 0))
+        self.assertEqual(after[2][4:6], ("debt", "15.00"))    # side_manual preserved
+        self.assertEqual(after[3][4:7], ("asset", "10.10", 1)) # older held, excluded preserved
+        self.assertEqual(after[4][4:6], ("asset", "0.00"))
+        self.assertEqual(after[5][4:6], ("asset", "10.10"))    # invalid precision held
         self.assertEqual(len(after), 12)  # missing row never deleted
         self.provider.payload = {}
         with self.assertRaisesRegex(Problem, "v2 account set"):
