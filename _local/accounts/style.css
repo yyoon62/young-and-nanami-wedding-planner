@@ -425,3 +425,16 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
   .tx-table tr.acct-row > td:last-child { grid-area: cat; }
   .tx-form { min-width: 0; }
 }
+
+/* ---- L23: account terms (drawer fields, flags) ---- */
+.rate-flag, .terms-pill {
+  display: inline-block; margin-left: .3rem; padding: .08rem .45rem; border-radius: 999px;
+  font-size: .72rem; font-weight: 700; white-space: nowrap;
+}
+.rate-flag { background: #fdf0d5; color: #7a4b00; }
+.terms-pill { background: #e8f0e6; color: #2f5d2a; }
+.terms-fields { margin: .7rem 0 0; padding: .5rem .7rem .7rem; border: 1px solid var(--border); border-radius: 10px; }
+.terms-fields legend { padding: 0 .35rem; font-size: .8rem; font-weight: 700; color: var(--text-secondary); }
+.terms-fields label.check { display: flex; gap: .45rem; align-items: flex-start; font-size: .84rem; margin: 0 0 .5rem; }
+.terms-fields label.check input { width: auto; min-height: 0; margin-top: .15rem; }
+.terms-fields .acct-sub { margin: .45rem 0 0; }
