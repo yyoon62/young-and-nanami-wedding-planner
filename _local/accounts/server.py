@@ -627,7 +627,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/projections":
             status, body, location = projection_get(
                 self.server.db, self.path, page=page, token=self.token, people=PEOPLE,
-                section_for=section_for, places=places, today=date.today())
+                section_for=section_for, places=places, today=date.today(), suggestions=not self.server.auth)
             return self.send(status, body, location=location)
         if path == "/federal-preview":
             return self.send(200, (ROOT / "preview.html").read_text(), preview=True)
@@ -729,7 +729,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reject(exc)
             status, body, location = projection_post(
                 self.server.db, data, page=page, token=self.token, people=PEOPLE,
-                section_for=section_for, places=places, today=date.today())
+                section_for=section_for, places=places, today=date.today(), suggestions=not self.server.auth)
             return self.send(status, body, location=location)
         target = self.path
         if not self.server.auth and target in (TX_EDIT, TX_SYNC):

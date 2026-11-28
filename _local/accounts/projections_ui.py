@@ -5,11 +5,14 @@ from html import escape
 import sqlite3
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+from dataclasses import replace
+
 from projections import (
-    AMOUNTS, MODES, OPTIONAL, PRECISION, RATES, STALE_DAYS, available_currencies,
+    AMOUNTS, MODES, OPTIONAL, PRECISION, RATES, STALE_DAYS, Assumptions, available_currencies,
     eligible_accounts, load_assumptions, project, save_assumptions, starting_balances,
     validate_assumptions,
 )
+from tx_periods import money as tx_money, suggest_monthly
 
 
 PATH = "/projections"
@@ -35,7 +38,7 @@ def _scope_error(page, status, message, view="Household"):
                                  f'<p><a href="{escape(projection_url(view))}">Choose a projection</a></p>'), None)
 
 
-def projection_get(db_path, target, *, page, token, people, section_for, places, today):
+def projection_get(db_path, target, *, page, token, people, section_for, places, today, suggestions=False):
     """After the server's GET access gate. Returns (status, text, location)."""
     try:
         query = parse_qs(urlsplit(target).query, keep_blank_values=True, max_num_fields=16)
@@ -54,12 +57,13 @@ def projection_get(db_path, target, *, page, token, people, section_for, places,
             return _scope_error(page, 400, "Currency is unavailable in this view.", view)
         currency = currency[0]
         assumptions = load_assumptions(db, view, currency, places(currency))
+        suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
     seed = starting_balances(rows, currency, section_for, today)
     return 200, _page(page, _panel(view, currency, currencies, people, seed, assumptions,
-                                  places(currency), token)), None
+                                  places(currency), token, suggestion=suggestion)), None
 
 
-def projection_post(db_path, data, *, page, token, people, section_for, places, today):
+def projection_post(db_path, data, *, page, token, people, section_for, places, today, suggestions=False):
     """After the server's POST guards, using its already parsed and CSRF-checked data."""
     view, currency = data.get("view"), data.get("currency")
     if view not in ("Household", *people):
@@ -71,14 +75,86 @@ def projection_post(db_path, data, *, page, token, people, section_for, places, 
         if currency not in currencies:
             return _scope_error(page, 422, "Currency is unavailable in this view. No assumptions were saved.", view)
         scale = places(currency)
+        if data.get("apply") == "suggestion":
+            return _apply_suggestion(db, data, view, currency, scale, today, suggestions, page)
         assumptions, errors = validate_assumptions(data, scale)
         if not errors:
             save_assumptions(db, view, currency, assumptions)
             return 303, "", projection_url(view, currency)
         saved = load_assumptions(db, view, currency, scale)
+        suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
     seed = starting_balances(rows, currency, section_for, today)
     return 422, _page(page, _panel(view, currency, currencies, people, seed, saved, scale, token,
-                                  attempted=data, errors=errors)), None
+                                  attempted=data, errors=errors, suggestion=suggestion)), None
+
+
+def _apply_suggestion(db, data, view, currency, scale, today, suggestions, page):
+    """One POST: recompute server-side; save only income and spending, only if they match what was shown."""
+    def refuse(message):
+        return 422, _page(page, f'<p class="notice" role="alert">{escape(message)} No assumptions were saved.</p>'
+                                f'<p><a href="{escape(projection_url(view, currency))}">Back to projections</a></p>'), None
+
+    suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
+    if suggestion is None or suggestion.income is None:
+        return refuse("There is no suggestion to apply." if suggestions else "Suggestions are not available here.")
+    shown = (data.get("suggest_income"), data.get("suggest_spending"))
+    if shown != (format(suggestion.income, "f"), format(suggestion.spending, "f")):
+        return refuse("The suggestion changed since this page was loaded; reload to review it.")
+    current = load_assumptions(db, view, currency, scale)
+    updated, errors = validate_assumptions(
+        replace(current, income=suggestion.income, spending=suggestion.spending).form_values(), scale)
+    if errors:
+        return refuse("The suggested amounts do not fit the allowed range.")
+    save_assumptions(db, view, currency, updated)
+    return 303, "", projection_url(view, currency)
+
+
+def _suggestion_card(view, currency, token, suggestion, assumptions, scale):
+    """Dated basis for the suggested income/spending; nothing here is saved by viewing it."""
+    if suggestion is None:
+        return ""
+    money = lambda value: escape(currency) + " " + tx_money(value, currency)
+    if suggestion.income is None:
+        return ('<section aria-labelledby="projection-suggestion"><h2 id="projection-suggestion">'
+                'Suggested from your transactions</h2>'
+                f'<p class="notice" role="note">No suggestion yet: {escape(suggestion.reason)}</p></section>')
+    rows = "".join(f'<tr><th scope="row">{escape(month)}</th><td class="num">{money(c)}</td>'
+                   f'<td class="num">{money(sp)}</td></tr>' for month, c, sp in suggestion.monthly)
+    notes = []
+    if suggestion.wide:
+        notes.append("The largest month is more than 1.5× the smallest for "
+                     + " and ".join(suggestion.wide) + ": check for one-off amounts before applying.")
+    if suggestion.possible_transfers:
+        notes.append(f"{suggestion.possible_transfers} possible internal transfer leg(s) were left out; "
+                     "confirm them on Transactions if they are not real spending or income.")
+    if suggestion.card_reviews:
+        notes.append(f"{suggestion.card_reviews} card credit(s) under review were left out.")
+    if suggestion.unlinked:
+        notes.append(f"{suggestion.unlinked} included cash/card account(s) have no transaction feed, "
+                     "so their activity is missing.")
+    notes.append("Loan and card payments leaving checking still count as spending unless marked Transfer. "
+                 "Remove debt payments and contributions you model below to avoid counting them twice.")
+    same = (assumptions.income == suggestion.income and assumptions.spending == suggestion.spending)
+    return (
+        '<section aria-labelledby="projection-suggestion"><h2 id="projection-suggestion">'
+        'Suggested from your transactions</h2>'
+        f'<p>Basis: <strong>{escape(suggestion.basis)}</strong> · cash and credit-card accounts only · '
+        'transfers excluded. Not applied until you choose to.</p>'
+        '<div class="table-wrap"><table class="acct-table"><thead><tr><th scope="col">Month</th>'
+        '<th scope="col" class="num">Credits</th><th scope="col" class="num">Spending</th></tr></thead>'
+        f'<tbody>{rows}</tbody></table></div>'
+        f'<p>Average monthly credits (not verified income): <strong>{money(suggestion.income)}</strong> · '
+        f'Average monthly spending: <strong>{money(suggestion.spending)}</strong></p>'
+        + "".join(f'<p class="history-range">{escape(n)}</p>' for n in notes)
+        + (f'<p class="history-range">Already saved as your income and spending.</p>' if same else
+           f'<form method="post" action="{PATH}"><input type="hidden" name="token" value="{escape(token)}">'
+           f'<input type="hidden" name="view" value="{escape(view)}">'
+           f'<input type="hidden" name="currency" value="{escape(currency)}">'
+           f'<input type="hidden" name="apply" value="suggestion">'
+           f'<input type="hidden" name="suggest_income" value="{format(suggestion.income, "f")}">'
+           f'<input type="hidden" name="suggest_spending" value="{format(suggestion.spending, "f")}">'
+           '<button>Use these as my income and spending</button></form>')
+        + '</section>')
 
 
 def _options(choices, selected):
@@ -117,9 +193,12 @@ def _form(view, currency, scale, token, values, errors):
 
     summary = ('<p class="notice" role="alert">No assumptions were saved. Fix the marked fields below. '
                'Results still use the previous assumptions.</p>') if errors else ""
-    amount_fields = "".join(text_field(
-        name, label + (" (optional)" if name in OPTIONAL else ""), "decimal" if scale else "numeric",
-        ' placeholder="0"' if name in OPTIONAL else "") for name, label in AMOUNTS.items())
+    def amount(name, label):
+        return text_field(name, label + (" (optional)" if name in OPTIONAL else ""),
+                          "decimal" if scale else "numeric", ' placeholder="0"' if name in OPTIONAL else "")
+
+    basic_amounts = "".join(amount(n, AMOUNTS[n]) for n in ("income", "spending"))
+    advanced_amounts = "".join(amount(n, AMOUNTS[n]) for n in AMOUNTS if n not in ("income", "spending"))
     rate_fields = "".join(text_field(name, label + " (%)", "decimal") for name, label in RATES.items())
     mode = values.get("mode", "")
     modes = dict(MODES)
@@ -129,25 +208,43 @@ def _form(view, currency, scale, token, values, errors):
         modes = {mode: f"Invalid selection: {mode}", **modes}
     mode_field = (f'<label>Display units<select name="mode"{attrs("mode")}>{_options(modes.items(), mode)}'
                   f'</select>{error("mode")}</label>')
+    advanced_names = [n for n in AMOUNTS if n not in ("income", "spending")] + list(RATES) + ["mode"]
+    defaults = Assumptions().form_values()
+
+    def non_default(name):
+        value = str(values.get(name, "")).strip()
+        if name in OPTIONAL:
+            default = ""
+        else:
+            default = defaults[name]
+        if value == default or value in ("", "0") and name in OPTIONAL:
+            return False
+        try:
+            return Decimal(value) != Decimal(default or 0)
+        except Exception:
+            return value != default
+
+    advanced_open = any(n in errors for n in advanced_names) or any(non_default(n) for n in advanced_names)
     return (
         f'<section aria-labelledby="projection-assumptions"><h2 id="projection-assumptions">Assumptions</h2>{summary}'
         f'<form class="edit-form projection-form" method="post" action="{PATH}">'
         f'<input type="hidden" name="token" value="{escape(token)}">'
         f'<input type="hidden" name="view" value="{escape(view)}">'
         f'<input type="hidden" name="currency" value="{escape(currency)}">'
-        f'<div class="projection-fields">{text_field("years", "Horizon in years (1–40)", "numeric")}'
-        f'{mode_field}</div>'
         f'<h3>Monthly budget ({escape(currency)})</h3>'
-        '<p>Enter take-home income and spending. Exclude the debt payments and contributions you model below '
-        'from spending so they are not counted twice. These targets use only the surplus; they are not '
+        '<p>Enter take-home income and spending. Exclude the debt payments and contributions you model in '
+        'Advanced from spending so they are not counted twice. Targets use only the surplus; they are not '
         'guaranteed payments, minimums or payroll contributions.</p>'
+        f'<div class="projection-fields">{text_field("years", "Horizon in years (1–40)", "numeric")}'
+        f'{basic_amounts}</div>'
         f'<p class="history-range">Amounts: nonnegative, up to 15 whole digits and {scale} decimal places, no commas. '
         'Leave optional targets blank for zero.</p>'
-        f'<div class="projection-fields">{amount_fields}</div>'
+        f'<details class="advanced"{" open" if advanced_open else ""}><summary>Advanced: targets, rates, display units</summary>'
+        f'<div class="projection-fields">{mode_field}{advanced_amounts}</div>'
         '<h3>Annual rates</h3>'
         '<p class="history-range">APYs and returns: −99% to 100%. Debt APR and inflation: 0% to 100%. '
         'Up to four decimal places.</p>'
-        f'<div class="projection-fields">{rate_fields}</div>'
+        f'<div class="projection-fields">{rate_fields}</div></details>'
         '<button>Save assumptions</button></form></section>'
     )
 
@@ -229,7 +326,8 @@ def _debt_note(debt, target, surplus, money):
     return f'<p>{service}</p>'
 
 
-def _panel(view, currency, currencies, people, seed, assumptions, scale, token, *, attempted=None, errors=None):
+def _panel(view, currency, currencies, people, seed, assumptions, scale, token, *, attempted=None, errors=None,
+           suggestion=None):
     money = lambda value: _money(value, currency, scale)
     points = project(seed.balances, assumptions)
     extra_metrics = (("unclassified", "Unclassified assets"),) if seed.unclassified_count else ()
@@ -276,6 +374,7 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
         + _chart(points, money, assumptions.years)
         + _annual(points, ANNUAL_METRICS + extra_metrics, money, unit_label)
         + '</section>'
+        + _suggestion_card(view, currency, token, suggestion, assumptions, scale)
         + _form(view, currency, scale, token, attempted if attempted is not None else values, errors or {})
         + '<details><summary>How this projection works</summary>'
           '<p>Start is the sum of included saved balances, even when their dates differ; the scenario does not '
