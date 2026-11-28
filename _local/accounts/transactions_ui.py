@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from html import escape
 import re
 import secrets
+import time
 from urllib.parse import parse_qsl, urlencode
 
 from html import escape as _esc  # noqa: F401
@@ -26,7 +27,8 @@ from transactions import (CURRENCY, VIEWS, _midnight, category_context, edit_tra
 from pathlib import Path
 from tx_categories import default_emoji, is_transfer_category, list_categories
 from tx_owners import PEOPLE, effective, effective_owner_of
-from tx_classifier import enabled as classifier_enabled, load_key, model_name, run_classifier, set_setting, stats as classifier_stats
+from tx_classifier import (enabled as classifier_enabled, get_setting, load_key, model_name, run_classifier, set_setting,
+                           stats as classifier_stats)
 
 
 TRANSACTIONS = "/transactions"
@@ -124,6 +126,30 @@ def _data_dir(db):
     return Path(row[2]).parent if row and row[2] else None
 
 
+def _auto_problem(db):
+    """'' unless auto-categorize is on and something is actually wrong: no usable key, or paused after errors."""
+    if not classifier_enabled(db):
+        return ""
+    key, _, problem = load_key(_data_dir(db))
+    if key is None:
+        return (problem or "No key found.") + " Nothing is sent without a key."
+    if int(get_setting(db, "failures", "0") or 0) > 0 and int(get_setting(db, "next_try_at", "0") or 0) > time.time():
+        return get_setting(db, "status", "") or "Paused after errors; will retry later."
+    return ""
+
+
+def _auto_checkbox(db, f, token):
+    """The classifier's whole presence in the main view: one optional checkbox. It saves as it changes (a plain
+    form submit without JS), and a small ⚠️ appears next to it only while something is wrong."""
+    on, problem = classifier_enabled(db), _auto_problem(db)
+    warn = (f' <span class="tx-warn" role="img" aria-label="Problem" title="{escape(problem)}">⚠️</span>' if problem else "")
+    return (f'<form method="post" action="{EDIT}" class="tx-auto" data-autosubmit>'
+            + _hidden(f, token=token, action="classifier")
+            + f'<label title="Sends merchant names only to Anthropic"><input type="checkbox" name="enabled" value="1"'
+            f'{" checked" if on else ""}> ✨ Auto-categorize with AI</label>{warn}'
+            '<noscript><button class="button secondary">Save</button></noscript></form>')
+
+
 def _categories_info(db, f, token):
     """The classifier's only home on the page: a section of the ℹ️ box with the privacy facts, the key/status
     lines and the "↻ Refresh categories" action (its own form: it must not carry the toggle's checkbox)."""
@@ -131,7 +157,7 @@ def _categories_info(db, f, token):
     key, source, problem = load_key(_data_dir(db))
     key_line = (f"Key found ({source})." if key else (problem or "No key found.") + " Nothing is sent without a key.")
     if not on:
-        status = "Auto-categorize is off."
+        status = "Auto-categorize is off (tick ✨ Auto-categorize with AI to turn it on)."
     elif key is None:
         status = "On, but nothing is sent until a usable key is found."   # never next to a stale "last run" line
     else:
@@ -501,7 +527,7 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
     return (
         '<script defer src="/dashboard.js"></script>'
         '<section class="history" aria-labelledby="cash-flow"><h2 id="cash-flow">Monthly cash flow</h2>'
-        + alert + moved + search + sync + '<div class="tx-tools">'
+        + alert + moved + search + sync + '<div class="tx-tools">' + _auto_checkbox(db, f, token)
         + info_box(coverage, can_sync=can_sync and "Household" in allowed_views,
                    categories_html=_categories_info(db, f, token)) + '</div>' + summary
         + '</section><section><h2>Transactions</h2>' + review_chip + table + '</section>')

@@ -123,3 +123,10 @@
     document.querySelectorAll("details.tx-pick[open]").forEach(d => { if (!d.contains(event.target)) d.open = false; });
   });
 })();
+
+// L26 Transactions: the "✨ Auto-categorize with AI" checkbox saves as it changes (a plain form submit without JS).
+(() => {
+  document.querySelectorAll("form[data-autosubmit] input[type=checkbox]").forEach(box => {
+    box.addEventListener("change", () => box.form.requestSubmit());
+  });
+})();

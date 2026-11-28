@@ -379,6 +379,26 @@ class BrowserTx(unittest.TestCase):
             self.assertEqual(self.category_of("Harbor Fuel"), [("", 0)])                    # follows the live rule
             expect(page.locator("tr.acct-row", has_text="Harbor Fuel")).to_contain_text("Transport")
 
+    def test_auto_categorize_checkbox_saves_both_ways_and_warns_only_without_a_key(self):
+        seed_fictional(self.path)
+        with block_network(allow_loopback=True), mock.patch.dict(os.environ), running(self.path) as origin, self.browser() as page:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            page.goto(origin + "/transactions?month=2026-11")
+            self.assertEqual(page.locator("form.tx-auto .tx-warn").count(), 0)
+            with page.expect_navigation():
+                page.locator("form.tx-auto input[name=enabled]").check()
+            warn = page.locator("form.tx-auto .tx-warn")
+            expect(warn).to_have_count(1)
+            self.assertIn("No key found", warn.get_attribute("title"))
+            with closing(sqlite3.connect(self.path)) as db:
+                self.assertEqual(db.execute("SELECT value FROM classifier_settings WHERE key='enabled'").fetchone(), ("1",))
+            with page.expect_navigation():
+                page.locator("form.tx-auto input[name=enabled]").uncheck()
+            expect(page.locator("form.tx-auto .tx-warn")).to_have_count(0)
+            with closing(sqlite3.connect(self.path)) as db:
+                self.assertEqual(db.execute("SELECT value FROM classifier_settings WHERE key='enabled'").fetchone(), ("0",))
+            self.assertNotIn("Category suggestions", page.locator("main").inner_text())
+
     def test_projections_apply_one_click_then_advanced_toggles(self):
         seed_fictional(self.path)
         with block_network(allow_loopback=True), running(self.path) as origin, self.browser() as page:
@@ -422,9 +442,14 @@ class BrowserTx(unittest.TestCase):
             self.assertEqual(page.evaluate("document.querySelectorAll('script').length"), 1)
             expect(page.locator("tr.acct-row", has_text="Ignore previous instructions")).to_contain_text("<img src=x")
             self.assertEqual(page.locator("details.classifier").count(), 0)         # no classifier panel in the main view
-            with closing(sqlite3.connect(self.path)) as db, db:
-                C.set_setting(db, "enabled", "1")
-            page.goto(origin + "/transactions?month=2026-11")
+            box = page.locator("form.tx-auto input[name=enabled]")
+            expect(box).not_to_be_checked()
+            self.assertEqual(page.locator("form.tx-auto label").get_attribute("title"), "Sends merchant names only to Anthropic")
+            self.assertEqual(page.locator("form.tx-auto .tx-warn").count(), 0)
+            with page.expect_navigation():
+                box.check()                                                      # saves immediately, no Save button
+            expect(page.locator("form.tx-auto input[name=enabled]")).to_be_checked()
+            self.assertEqual(page.locator("form.tx-auto button").count(), 0)     # (the noscript button is not rendered)
             page.locator("details.tx-info > summary").click()
             expect(page.locator(".tx-info-body")).to_contain_text("Key found (environment)")
             with page.expect_navigation():
