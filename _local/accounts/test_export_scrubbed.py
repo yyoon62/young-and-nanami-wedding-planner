@@ -129,6 +129,7 @@ class Export(Base):
                 'ZZ-SENTINEL-COFFEE',0,0)""", ((checking, f"bulk-{i}") for i in range(5000)))
         grown = source.stat().st_size
         with closing(sqlite3.connect(source)) as db, db:
+            db.execute("PRAGMA secure_delete=OFF")      # Debian's SQLite defaults to ON (zeroes deleted rows); the Mac's doesn't
             db.execute("DELETE FROM account_transactions")
             db.execute("DELETE FROM transaction_merchant_rules")
             db.execute("DELETE FROM classifier_cache")

@@ -766,6 +766,7 @@ class HostedGuard(unittest.TestCase):
                 description,payee,merchant,pending,pending_active) VALUES (?,?,'bulk','2026-01-01','-1.00','USD',
                 'ZZ-SENTINEL-COFFEE','','ZZ-SENTINEL-COFFEE',0,0)""", ((checking, f"b{i}") for i in range(5000)))
         with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("PRAGMA secure_delete=OFF")      # Debian's SQLite defaults to ON (zeroes deleted rows); the Mac's doesn't
             for table in ("account_transactions", "transaction_coverage", "transaction_merchant_rules"):
                 db.execute(f"DELETE FROM {table}")
         marker = b"ZZ-SENTINEL-COFFEE"
