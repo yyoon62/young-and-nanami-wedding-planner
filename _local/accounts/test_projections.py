@@ -269,9 +269,23 @@ class EndpointTests(unittest.TestCase):
         for query in ("currency=EUR", "view=Joint", "view=Young&view=Nanami", "currency=USD&currency=JPY"):
             self.assertEqual(self.call("/projections?" + query)[0], 400)
 
-    def test_given_debt_then_result_warns_about_no_payment_or_an_underfunded_target(self):
+    def test_given_a_card_with_no_terms_then_it_is_assumed_paid_in_full_and_held_flat(self):
+        """L23 (by design): the old blended 6% accrual and debt payment no longer apply to a credit card."""
         with closing(sqlite3.connect(self.path)) as db, db:
             self.add(db, "Credit card", "Unspecified", "100.00", side="debt")
+            self.add(db, "Checking", "Unspecified", "200.00")
+        self.assertEqual(self.call(data=self.form(years="1", income="40", spending="35", debt_target="80"))[0], 303)
+        body = self.call()[2]
+        self.assertIn("1 card(s) assumed paid in full:", body)
+        self.assertIn("balance USD 100.00 held flat, no interest", body)
+        self.assertIn("<small>Debt owed</small><strong>Start: USD 100.00</strong><div>Year 1: USD 100.00", body)
+        self.assertNotIn("No debt payment is modeled:", body)        # there is no payable model debt
+        self.assertNotIn("Rate missing for", body)
+
+    def test_given_debt_then_result_warns_about_no_payment_or_an_underfunded_target(self):
+        # A debt with no rate (a personal loan here; before L23 this test used a credit card) keeps the blended path.
+        with closing(sqlite3.connect(self.path)) as db, db:
+            self.add(db, "Personal loan", "Unspecified", "100.00", side="debt")
             self.add(db, "Checking", "Unspecified", "200.00")
         no_payment = "No debt payment is modeled:"
         underfunded = "Debt payments can fall below the target:"

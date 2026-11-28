@@ -7,14 +7,18 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from dataclasses import replace
 
+from account_terms import VARIABLE_NOTE, load_terms
+from debt_engine import month_add as plan_month_add, run_plan, schedule
+from debt_inputs import debt_rows, make_plan
 from projections import (
     AMOUNTS, MODES, OPTIONAL, PRECISION, RATES, STALE_DAYS, Assumptions, available_currencies,
     eligible_accounts, load_assumptions, project, save_assumptions, starting_balances,
     validate_assumptions,
 )
-from tx_periods import money as tx_money, suggest_monthly
+from tx_periods import money as tx_money, month_label, suggest_monthly
 
 
+ZERO_D = Decimal(0)
 PATH = "/projections"
 NET_WORTH = ("net_worth", "Net worth")
 OTHER_METRICS = (("investments", "Investments"), ("retirement", "Retirement"), ("debt", "Debt owed"))
@@ -58,9 +62,11 @@ def projection_get(db_path, target, *, page, token, people, section_for, places,
         currency = currency[0]
         assumptions = load_assumptions(db, view, currency, places(currency))
         suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
+        debts = (debt_rows(db, view, currency), load_terms(db))
     seed = starting_balances(rows, currency, section_for, today)
     return 200, _page(page, _panel(view, currency, currencies, people, seed, assumptions,
-                                  places(currency), token, suggestion=suggestion)), None
+                                  places(currency), token, suggestion=suggestion,
+                                  debts=(*debts, section_for, today))), None
 
 
 def projection_post(db_path, data, *, page, token, people, section_for, places, today, suggestions=False):
@@ -83,9 +89,11 @@ def projection_post(db_path, data, *, page, token, people, section_for, places, 
             return 303, "", projection_url(view, currency)
         saved = load_assumptions(db, view, currency, scale)
         suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
+        debts = (debt_rows(db, view, currency), load_terms(db))
     seed = starting_balances(rows, currency, section_for, today)
     return 422, _page(page, _panel(view, currency, currencies, people, seed, saved, scale, token,
-                                  attempted=data, errors=errors, suggestion=suggestion)), None
+                                  attempted=data, errors=errors, suggestion=suggestion,
+                                  debts=(*debts, section_for, today))), None
 
 
 def _apply_suggestion(db, data, view, currency, scale, today, suggestions, page):
@@ -326,10 +334,127 @@ def _debt_note(debt, target, surplus, money):
     return f'<p>{service}</p>'
 
 
+def _pct(value):
+    text = format(value, "f")
+    return (text.rstrip("0").rstrip(".") if "." in text else text) + "%"
+
+
+def _when(plan, month):
+    return month_label(plan_month_add(plan.start_month, month - 1))
+
+
+def _debt_section(plan, entries, run, a, currency, scale, money):
+    """Per-debt table, flags and schedules; every number comes from the same `debt_engine` as the chart."""
+    if not entries:
+        return ""
+    parts = ['<section class="history" aria-labelledby="debt-heading"><h2 id="debt-heading">Debts</h2>',
+             f'<p class="history-range">{escape(currency)} only. Interest is rounded to the cent each month, then the '
+             f'payment is applied at month-end. {escape(VARIABLE_NOTE)} Balances are the saved, dated snapshots; '
+             'nothing here refreshes them.</p>']
+    flat = [e for e in entries if e.kind == "float"]
+    pool = [e for e in entries if e.kind == "pool"]
+    modeled = [e for e in entries if e.kind == "modeled"]
+    if flat:
+        names = ", ".join(escape(e.name) for e in flat)
+        parts.append(f'<p class="notice" role="note"><strong>{len(flat)} card(s) assumed paid in full:</strong> balance '
+                     f'{money(plan.float_debt)} held flat, no interest ({names}). Their monthly purchases are in your '
+                     'spending; set a rate on Accounts and untick “paid in full” for a card that carries a balance.</p>')
+    if pool:
+        names = ", ".join(escape(e.name) for e in pool)
+        parts.append(f'<p class="notice" role="note"><strong>Rate missing for {len(pool)} debt(s):</strong> {money(plan.pool)} '
+                     f'({names}) uses the blended {escape(_pct(a.debt_apr))} APR and the debt payment target, as before. '
+                     'Add the rate in the account’s edit drawer on Accounts.</p>')
+    if plan.planned_total > a.surplus:
+        parts.append(f'<p class="notice" role="note"><strong>Planned payments ({money(plan.planned_total)} a month) exceed '
+                     f'monthly net savings ({money(a.surplus)}).</strong> They are still paid; the shortfall is drawn from '
+                     'cash, then savings, and counted as unfunded when those run out.</p>')
+    if modeled:
+        rows, details = [], []
+        interest_now = ZERO_D
+        for e in modeled:
+            d = e.debt
+            sched = schedule(d, plan.start_month, plan.places)
+            out = run.outcomes[d.key]
+            interest_now += sched.first_interest
+            stale = ' <span class="stale-pill">Stale</span>' if e.stale else ""
+            rate = f'{escape(_pct(d.rate))} APR · {d.rate_kind}'
+            if d.rate_kind == "variable":
+                rate += " (assumes today’s rate holds)"
+            if d.promo_rate is not None and d.promo_end:
+                if d.promo_end < plan.start_month:
+                    rate += f'<div class="acct-sub">Promo ended {escape(month_label(d.promo_end))}; regular rate applies.</div>'
+                else:
+                    rate += (f'<div class="acct-sub">{escape(_pct(d.promo_rate))} promo through '
+                             f'{escape(month_label(d.promo_end))}, then {escape(_pct(d.rate))}</div>')
+            source = ("planned" if e.terms.planned_payment is not None else "minimum")
+            pay = money(d.payment) + f' <span class="acct-sub">({source})</span>' if d.payment else (
+                '<span class="rate-flag">payment missing</span>')
+            if out.payoff_month:
+                payoff = f'{escape(_when(plan, out.payoff_month))} <span class="acct-sub">(month {out.payoff_month})</span>'
+                total = money(out.total_interest)
+            elif sched.status == "does_not_cover":
+                payoff, total = '<strong>No payoff date</strong>', "—"
+            elif sched.status == "no_payment":
+                payoff, total = '<strong>No payoff date</strong>', "—"
+            else:
+                payoff, total = 'Not paid off within 40 years', "—"
+            notes = []
+            if sched.status == "does_not_cover":
+                notes.append(f'<span class="rate-flag">payment does not cover interest</span> '
+                             f'<span class="acct-sub">(interest {money(sched.rows[-1].interest)} a month from month '
+                             f'{sched.stalled_from} vs payment {money(d.payment)}; the balance grows)</span>')
+            elif sched.status == "no_payment":
+                notes.append('<span class="acct-sub">Add a planned or minimum payment on Accounts; only extra payments reduce it.</span>')
+            if e.stale:
+                notes.append('<span class="acct-sub">Balance is stale; the schedule starts from it anyway.</span>')
+            rows.append(
+                f'<tr><th scope="row">{escape(e.name)}<div class="acct-sub">{escape(e.institution)}</div></th>'
+                f'<td class="num">{money(d.balance)}<div class="acct-sub">as of <time>{escape(e.asof)}</time>{stale}</div></td>'
+                f'<td>{rate}</td><td class="num">{pay}</td><td>{payoff}</td><td class="num">{total}</td>'
+                f'<td class="num">{money(sched.first_interest)}</td><td>{"<br>".join(notes)}</td></tr>')
+            if sched.rows:
+                shown = sched.rows[:120]
+                body = "".join(
+                    f'<tr><th scope="row">{r.month}</th><td>{escape(month_label(r.calendar))}</td>'
+                    f'<td class="num">{escape(_pct(r.rate))}</td><td class="num">{money(r.interest)}</td>'
+                    f'<td class="num">{money(r.payment)}</td><td class="num">{money(r.balance)}</td></tr>'
+                    + (f'<tr class="rate-change"><td colspan="6">Month {r.month + 1}: rate changes to {escape(_pct(d.rate))} '
+                       f'(promo ended {escape(month_label(d.promo_end))})</td></tr>'
+                       if sched.promo_ended_month == r.month + 1 else "")
+                    for r in shown)
+                more = (f'<p class="history-range">First 120 of {len(sched.rows)} months shown.</p>'
+                        if len(sched.rows) > len(shown) else "")
+                details.append(
+                    f'<details><summary>Schedule: {escape(e.name)} (planned payment only)</summary>'
+                    '<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable debt schedule">'
+                    '<table class="acct-table"><thead><tr><th scope="col">Month</th><th scope="col">Calendar</th>'
+                    '<th scope="col" class="num">Rate</th><th scope="col" class="num">Interest</th>'
+                    '<th scope="col" class="num">Payment</th><th scope="col" class="num">Balance after</th></tr></thead>'
+                    f'<tbody>{body}</tbody></table></div>{more}</details>')
+        extra = (f'<p class="history-range">Extra payments of {money(run.extra)} a month (debt target beyond planned '
+                 'payments, from positive net savings) go to debts without a rate first, then the highest current rate; '
+                 'a paid-off debt’s payment rolls over. The table above includes them.</p>') if run.extra > 0 else ""
+        parts.append(
+            '<div class="table-wrap debt-table" tabindex="0" role="region" aria-label="Scrollable debt table">'
+            '<table class="acct-table"><thead><tr><th scope="col">Account</th><th scope="col" class="num">Balance</th>'
+            '<th scope="col">Rate</th><th scope="col" class="num">Payment</th><th scope="col">Payoff</th>'
+            '<th scope="col" class="num">Total interest</th><th scope="col" class="num">Interest this month</th>'
+            '<th scope="col">Notes</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>'
+            f'<p>Current monthly interest cost of these debts: <strong>{money(interest_now)}</strong> '
+            '(at today’s rates, before payments).</p>' + extra + "".join(details))
+    parts.append('</section>')
+    return "".join(parts)
+
+
 def _panel(view, currency, currencies, people, seed, assumptions, scale, token, *, attempted=None, errors=None,
-           suggestion=None):
+           suggestion=None, debts=None):
     money = lambda value: _money(value, currency, scale)
-    points = project(seed.balances, assumptions)
+    plan = entries = run = None
+    if debts is not None:
+        rows, terms, section_for, today = debts
+        plan, entries = make_plan(rows, terms, section_for, scale, today)
+        run = run_plan(plan, assumptions)
+    points = project(seed.balances, assumptions, plan)
     extra_metrics = (("unclassified", "Unclassified assets"),) if seed.unclassified_count else ()
     if seed.count:
         date_range = f'<time>{seed.oldest}</time>'
@@ -362,7 +487,8 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
     budget = (f'<p>Monthly take-home income: <strong>{money(assumptions.income)}</strong> · Monthly spending: '
               f'<strong>{money(assumptions.spending)}</strong> · Monthly net savings before modeled allocations '
               f'(income minus spending): <strong>{money(surplus)}</strong> (nominal).</p>')
-    debt_note = _debt_note(seed.balances.debt, assumptions.debt_target, surplus, money)
+    debt_note = _debt_note(seed.balances.debt if plan is None else plan.pool, assumptions.debt_target, surplus, money)
+    debt_section = _debt_section(plan, entries, run, assumptions, currency, scale, money) if plan is not None else ""
     return (
         _selector(view, currency, currencies, people)
         + '<p class="notice"><strong>Illustrative projection only:</strong> not financial advice or a forecast. '
@@ -375,6 +501,7 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
         + _chart(points, money, assumptions.years)
         + _annual(points, ANNUAL_METRICS + extra_metrics, money, unit_label)
         + '</section>'
+        + debt_section
         + _form(view, currency, scale, token, attempted if attempted is not None else values, errors or {})
         + '<details><summary>How this projection works</summary>'
           '<p>Start is the sum of included saved balances, even when their dates differ; the scenario does not '
@@ -383,7 +510,7 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
           'The model treats both as available to spend, even if a real account has restrictions. '
           'Every debt-side balance is debt, regardless of section.</p>'
           '<p>Each month, interest and growth accrue first (annual effective rates converted geometrically; '
-          'debt APR divided by 12). At month-end, surplus goes to debt up to its balance and target, '
+          'debt APR divided by 12). Debts with a rate in Accounts follow their own schedule instead (below). At month-end, surplus goes to debt up to its balance and target, '
           'then retirement and investments up to their targets, then HYSA. Debt accrual ends when paid off. '
           'Deficits draw cash, then HYSA; any remainder is unfunded.</p>'
           '<p>Cash flows and targets are constant in nominal terms. Today’s purchasing power discounts each '
