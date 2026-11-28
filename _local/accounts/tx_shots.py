@@ -46,9 +46,9 @@ def main(out):
             page = chrome.new_page(viewport={"width": width, "height": height})
             page.goto(origin + "/transactions?month=2026-11")
             page.screenshot(path=str(out / f"transactions-{name}.png"), full_page=True)
-            page.locator("details.classifier summary").click()      # collapsed by default; open it for this shot
+            page.locator("details.classifier > summary").click()      # collapsed by default; open it for this shot
             page.locator("details.classifier").screenshot(path=str(out / f"transactions-classifier-{name}.png"))
-            page.locator("details.classifier summary").click()
+            page.locator("details.classifier > summary").click()
             row = page.locator("tr.acct-row", has_text="Metro Transit")
             row.locator("summary", has_text="Edit").click()
             row.scroll_into_view_if_needed()

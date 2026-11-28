@@ -32,8 +32,11 @@ def frozen_today():
         yield TODAY
 
 
-def seed_fictional(path, *, full_history=True, hostile="", categorize=False):
-    """Four months for Household: payroll, rent, groceries, dining, a transfer pair, one EUR account."""
+def seed_fictional(path, *, full_history=True, hostile="", categorize=False, joint_card=False):
+    """Four months for Household: payroll, rent, groceries, dining, a transfer pair, one EUR account.
+
+    `joint_card` (default off) adds a Joint-owned credit card with three November rows (L26 owner fixtures).
+    """
     init_db(path)
     db = sqlite3.connect(path)
     accounts = {}
@@ -42,7 +45,8 @@ def seed_fictional(path, *, full_history=True, hostile="", categorize=False):
                 ("chk", "Birch Bank", "Checking", "asset", "USD", "Young"),
                 ("sav", "Birch Bank", "Savings", "asset", "USD", "Joint"),
                 ("card", "Cedar Credit", "Credit card", "debt", "USD", "Nanami"),
-                ("eur", "Maple Trust", "Checking", "asset", "EUR", "Nanami")):
+                ("eur", "Maple Trust", "Checking", "asset", "EUR", "Nanami"),
+                *((("jcard", "Willow Credit", "Credit card", "debt", "USD", "Joint"),) if joint_card else ())):
             account = db.execute("""INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof,owner,
                 update_method) VALUES (?,?,?,?,?,'1000.00','2026-11-27',?,'Fictional')""",
                                  (institution, f"{institution} {kind}", kind, side, currency, owner)).lastrowid
@@ -66,6 +70,10 @@ def seed_fictional(path, *, full_history=True, hostile="", categorize=False):
         put("chk", f"{month}-20", "-600.00", "Transfer to savings", transfer=True)
         put("sav", f"{month}-20", "600.00", "Transfer from checking", transfer=True)
     put("eur", "2026-11-11", "-42.50", "Boulangerie Fictive")
+    if joint_card:
+        put("jcard", "2026-11-05", "-41.30", "Harbor Fuel")
+        put("jcard", "2026-11-12", "-18.75", "Noodle House")
+        put("jcard", "2026-11-19", "-27.00", "Corner Coffee")
     if hostile:
         put("card", "2026-11-18", "-9.99", hostile, payee=hostile)
     if categorize:   # rent, groceries and dining are set by hand; transit, the bakery and payroll stay open

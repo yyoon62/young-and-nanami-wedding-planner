@@ -168,13 +168,13 @@ class BrowserTx(unittest.TestCase):
             self.assertEqual(page.evaluate("document.querySelectorAll('script').length"), 1)
             expect(page.locator("tr.acct-row", has_text="Ignore previous instructions")).to_contain_text("<img src=x")
             expect(page.locator("details.classifier")).not_to_have_attribute("open", "")   # off by default: collapsed
-            page.locator("details.classifier summary").click()
+            page.locator("details.classifier > summary").click()
             expect(page.get_by_text("Merchant names are sent to Anthropic.")).to_be_visible()
             page.locator("input[name=enabled]").check()
             with page.expect_navigation():
                 page.locator(".classifier-form").get_by_role("button", name="Save").click()
-            expect(page.locator("details.classifier summary")).to_have_text("Category suggestions · on")
-            page.locator("details.classifier summary").click()          # collapsed again once a key is found
+            expect(page.locator("details.classifier > summary")).to_have_text("Category suggestions · on")
+            page.locator("details.classifier > summary").click()          # collapsed again once a key is found
             with page.expect_navigation():
                 page.get_by_role("button", name="Classify now").click()
             self.assertEqual(len(sent), 1)
