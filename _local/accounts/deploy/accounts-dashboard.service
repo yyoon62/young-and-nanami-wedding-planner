@@ -3,9 +3,11 @@ Description=Private household accounts dashboard (Tailscale Serve backend)
 After=network-online.target
 
 [Service]
+# No --bridge here: without ~/.local/share/planner-accounts/bridge.access the process exits and systemd
+# restarts it every 10 seconds. Enable Bridge with a drop-in at the Bridge step (PI_TAILSCALE_SETUP.md 2.5).
 Type=simple
 WorkingDirectory=%h/planner/_local/accounts
-ExecStart=%h/.local/share/planner-accounts-venv/bin/python %h/planner/_local/accounts/server.py --port 8765 --bridge --hosted --hosted-env %h/.config/planner-accounts/hosted.env
+ExecStart=%h/.local/share/planner-accounts-venv/bin/python %h/planner/_local/accounts/server.py --port 8765 --hosted --hosted-env %h/.config/planner-accounts/hosted.env
 UMask=0077
 NoNewPrivileges=yes
 Restart=on-failure

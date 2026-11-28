@@ -1,5 +1,7 @@
 [Unit]
 Description=Encrypted online accounts SQLite snapshot
+# WARNING: if the drive is not mounted, systemd SKIPS this unit silently (status "condition failed",
+# exit 0). A healthy-looking timer can mean no backups. Check the newest archive's age (runbook 4.4).
 ConditionPathIsMountPoint=/mnt/accounts-backup
 
 [Service]

@@ -21,10 +21,12 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlencode
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "deploy"))
 from demo_batch import Demo
 from hosted_auth import Auth, CHALLENGE_TTL, SESSION_TTL, Config, GoogleKeys, Rejected, db_path, offline_lock
 from server import serve
 from test_history import BASE, DAY
+import seed_fictional
 
 ENV = dict(GOOGLE_CLIENT_ID="12345-fictional.apps.googleusercontent.com",
            LOANS_ORIGIN="https://accounts.example.test", LOANS_SESSION_KEY="56" * 32,
@@ -149,7 +151,8 @@ class Startup(unittest.TestCase):
             (repo / ".git").write_text("gitdir: fictional")
             (path / "linked").symlink_to(repo, target_is_directory=True)
             weak = path / "weak.db"
-            weak.touch(0o644)
+            weak.touch()
+            weak.chmod(0o644)  # not touch(mode): the process umask (0077 under systemd) would narrow it
             for candidate in (repo / "subdir" / "a", path / "linked" / "a", weak):
                 with self.assertRaises(ValueError):
                     db_path(candidate)
@@ -158,11 +161,14 @@ class Startup(unittest.TestCase):
     def test_cli_guards_before_bridge_or_db_initialization(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "never-created.sqlite"
+            repo = Path(tmp).resolve() / "repository"  # do not rely on the code itself being a Git checkout
+            repo.mkdir(0o700)
+            (repo / ".git").write_text("gitdir: fictional")
             cmd = [sys.executable, "server.py", "--hosted"]
             for extra, env, message in [
                 (["--demo"], ENV, "--demo cannot be combined"),
                 (["--bridge", "--db", str(db)], dict(ENV, GOOGLE_CLIENT_ID=""), "Hosted startup refused"),
-                (["--db", str(Path.cwd() / "never-created.sqlite")], ENV, "outside Git"),
+                (["--db", str(repo / "never-created.sqlite")], ENV, "outside Git"),
             ]:
                 p = subprocess.run(cmd + extra, env=dict(os.environ, **env), capture_output=True, text=True)
                 self.assertNotEqual(p.returncode, 0)
@@ -411,3 +417,270 @@ class HostedFlow(unittest.TestCase):
         self.assertEqual(auth.session(jar[CONFIG.name("session")])[1], csrf(self.server, jar))
         with closing(sqlite3.connect(self.db)) as db:
             self.assertEqual(db.execute("SELECT * FROM hosted_identities").fetchall(), [(CONFIG.members[0], "100001")])
+
+
+class CountingProvider:
+    """A provider that records every fetch. Hosted Transactions must never cause one."""
+    namespace = "fictional-counting-v1"
+    label = "Counting fixture"
+
+    def __init__(self):
+        self.calls = 0
+
+    def fetch(self):
+        self.calls += 1
+        return dict(connections=[], accounts=[], errlist=[])
+
+
+TX_TABLES = ("account_transactions", "transaction_coverage", "transaction_merchant_rules")
+PROJECTION_FORM = dict(years="10", income="5000", spending="3000", debt_target="", retirement_target="",
+                       investment_target="", checking_apy="0", hysa_apy="4", investment_return="7",
+                       retirement_return="7", debt_apr="6", inflation="2.5", mode="nominal",
+                       view="Household", currency="USD")
+
+
+@unittest.skipUnless(HAS_CRYPTO, "install requirements-hosted.txt for hosted acceptance")
+class HostedTransactionsGated(unittest.TestCase):
+    """L21: Transactions is unreachable when hosted, for every route and method.
+
+    The DB deliberately contains fictional transaction rows ("gated off" is not "absent").
+    NO_TRANSACTION_DATA_ON_ANY_HOSTED_ROUTE below is a generic sentinel test: when another task
+    adds transaction-derived features (for example projection suggestions), re-run
+    `python -m unittest test_hosted.HostedTransactionsGated` after merging.
+    """
+    SENTINELS = (seed_fictional.SENTINEL_MERCHANT, seed_fictional.SENTINEL_DESCRIPTION,
+                 "7777.77", "7,777.77", "4242.42", "4,242.42", "Fictional category", "FICTIONAL PAYROLL")
+
+    @classmethod
+    def setUpClass(cls):
+        tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(tmp.cleanup)
+        cls.rsa = RSA(tmp.name)
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.db = Path(tmp.name).resolve() / "fictional.db"
+        seed_fictional.seed(self.db)
+        self.now = NOW
+        self.provider = CountingProvider()
+        ctx = running(self.db, self.rsa, lambda: self.now, provider=self.provider)
+        self.server = ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
+        self.a, self.b = {}, {}
+        assert login(self.server, self.rsa, self.a, email="member.alpha@gmail.com")[0] == 204
+        assert login(self.server, self.rsa, self.b, sub="200002", email=CONFIG.members[1],
+                     hd="workspace.example")[0] == 204
+
+    def tx_state(self):
+        with closing(sqlite3.connect(self.db)) as db:
+            return [db.execute(f"SELECT * FROM {t} ORDER BY 1, 2").fetchall() for t in TX_TABLES]
+
+    def assert_no_sentinel(self, response, label):
+        text = response[2].decode("utf8", "replace")
+        for marker in self.SENTINELS:
+            if marker in text:  # not assertNotIn: its failure message would print the whole page
+                self.fail(f"{marker!r} leaked from {label}")
+
+    def test_positive_control_local_mode_does_show_the_fixture_rows(self):
+        """Without this, 'sentinel absent' could pass only because the fixture rows never render at all."""
+        local = Path(self.db).with_name("local.db")
+        seed_fictional.seed(local)
+        with serve(local, 0) as server:
+            thread = Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                status, _, body = request(server, "/transactions")
+                html = body.decode()
+                self.assertEqual(status, 200)
+                self.assertIn(seed_fictional.SENTINEL_MERCHANT, html)
+                self.assertIn("7,777.77".replace(",", ""), html.replace(",", ""))
+                self.assertIn(">Transactions</a>", request(server, "/")[2].decode())
+            finally:
+                server.shutdown()
+                thread.join()
+
+    def test_unauthenticated_every_transaction_and_projection_route_is_401_no_store(self):
+        token = "x" * 43
+        for method_target in ("/new", "/transactions", "/transactions?month=2026-11&view=Young",
+                              "/transactions/", "/transactions/edit", "/transactions/sync", "/projections",
+                              "/projections?view=Young&currency=USD"):
+            with self.subTest(target=method_target):
+                response = request(self.server, method_target)
+                self.assertEqual((response[0], response[1]["Cache-Control"]), (401, "no-store"))
+                post = request(self.server, method_target, {"token": token}, origin=ORIGIN)
+                self.assertEqual((post[0], post[1]["Cache-Control"]), (401, "no-store"))
+                self.assert_no_sentinel(response, method_target)
+        root = request(self.server, "/")
+        self.assertEqual(root[0], 200)
+        self.assertIn(b"Sign in to the private dashboard", root[2])
+        self.assertEqual(self.provider.calls, 0)
+
+    def test_signed_in_transaction_routes_are_absent_and_writes_are_refused(self):
+        before = self.tx_state()
+        self.assertTrue(any(before[0]), "fixture must contain transaction rows")
+        for jar in (self.a, self.b):
+            token = csrf(self.server, jar)
+            for target in ("/transactions", "/transactions/", "/transactions?month=2024-11&view=Young",
+                           "/transactions;x", "/transactions/edit", "/transactions/sync", "/Transactions",
+                           "/api/transactions", "//transactions"):
+                with self.subTest(target=target):
+                    response = request(self.server, target, jar=jar)
+                    self.assertIn(response[0], (400, 404), target)
+                    self.assertEqual(response[1]["Cache-Control"], "no-store")
+                    self.assert_no_sentinel(response, target)
+            for target, extra in (("/transactions/sync", {"include_pending": "1"}),
+                                  ("/transactions/edit", {"row": "1", "action": "category",
+                                                          "category": "Hacked", "month": "2024-11",
+                                                          "view": "Household"}),
+                                  ("/transactions", {})):
+                with self.subTest(post=target):
+                    response = request(self.server, target, dict(token=token, **extra), jar=jar, origin=ORIGIN)
+                    self.assertEqual(response[0], 404, target)
+                    self.assert_no_sentinel(response, "POST " + target)
+        self.assertEqual(self.tx_state(), before, "a hosted request changed transaction data")
+        self.assertEqual(self.provider.calls, 0, "hosted Transactions must never call the provider")
+
+    def test_nav_has_no_transactions_link_on_any_page(self):
+        for jar in (self.a, self.b):
+            for target in ("/", "/?view=Young", "/projections", "/servicers", "/new", "/federal-preview"):
+                html = request(self.server, target, jar=jar)[2].decode()
+                self.assertIn('href="/projections"' if target != "/federal-preview" else "Federal", html, target)
+                self.assertNotIn("/transactions", html, target)
+                self.assertNotIn(">Transactions<", html, target)
+
+    def test_NO_TRANSACTION_DATA_ON_ANY_HOSTED_ROUTE(self):
+        """Sign in as each member and GET everything linked from the hosted nav, plus all projection views."""
+        visited = 0
+        for jar in (self.a, self.b):
+            home = request(self.server, "/", jar=jar)[2].decode()
+            nav = re.search(r'<nav class="sitenav".*?</nav>', home, re.S)[0]
+            targets = {"/", "/?view=Household", "/?view=Young", "/?view=Nanami", "/servicers", "/new",
+                       "/federal-preview", "/preview.js", "/dashboard.js", "/style.css", "/edit/1", "/remove/1",
+                       "/new?servicer=uas", "/transactions", "/transactions?month=2024-11", *re.findall(r'href="(/[^"]*)"', nav)}
+            for view in ("Household", "Young", "Nanami"):
+                for currency in ("USD", "JPY", "EUR"):  # EUR: unavailable, must still not leak
+                    targets.add(f"/projections?view={view}&currency={currency}")
+                targets.add(f"/projections?view={view}")
+            for target in sorted(targets):
+                response = request(self.server, target, jar=jar)
+                self.assertIn(response[0], (200, 400, 404), target)
+                self.assert_no_sentinel(response, target)
+                visited += response[0] == 200
+            # Also the projection and logo caches reached by the same session.
+            self.assert_no_sentinel(request(self.server, "/logo/chase.com", jar=jar), "/logo")
+        self.assertGreaterEqual(visited, 30)
+        self.assertEqual(self.provider.calls, 0)
+
+
+@unittest.skipUnless(HAS_CRYPTO, "install requirements-hosted.txt for hosted acceptance")
+class HostedProjections(unittest.TestCase):
+    """L21: /projections POST needs session + exact Origin + CSRF; assumptions are household-shared."""
+
+    @classmethod
+    def setUpClass(cls):
+        tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(tmp.cleanup)
+        cls.rsa = RSA(tmp.name)
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.db = Path(tmp.name).resolve() / "fictional.db"
+        seed_fictional.seed(self.db)
+        self.now = NOW
+        ctx = running(self.db, self.rsa, lambda: self.now)
+        self.server = ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
+        self.a, self.b = {}, {}
+        assert login(self.server, self.rsa, self.a, email="member.alpha@gmail.com")[0] == 204
+        assert login(self.server, self.rsa, self.b, sub="200002", email=CONFIG.members[1],
+                     hd="workspace.example")[0] == 204
+
+    def saved(self):
+        with closing(sqlite3.connect(self.db)) as db:
+            return db.execute("SELECT view, currency, assumptions FROM projection_assumptions ORDER BY 1, 2").fetchall()
+
+    def token(self, jar):
+        body = request(self.server, "/projections", jar=jar)[2]
+        return re.search(rb'name="token" value="([^"]+)"', body)[1].decode()
+
+    def post(self, jar, token, origin=ORIGIN, **fields):
+        return request(self.server, "/projections", dict(PROJECTION_FORM, token=token, **fields),
+                       jar=jar, origin=origin)
+
+    def test_rejections_save_nothing_and_valid_post_is_shared(self):
+        before = self.saved()
+        self.assertEqual([row[:2] for row in before], [("Household", "USD")])
+        token = self.token(self.a)
+        # Missing CSRF token, wrong token, another session's token.
+        for bad in ("", "wrong", self.token(self.b)):
+            self.assertEqual(self.post(self.a, bad)[0], 403, bad)
+        no_token = dict(PROJECTION_FORM)
+        self.assertEqual(request(self.server, "/projections", no_token, jar=self.a, origin=ORIGIN)[0], 403)
+        # Wrong, missing and duplicated Origin.
+        for origin in ("https://unapproved.test", ORIGIN + "/", ORIGIN.replace("https", "http"), None):
+            self.assertEqual(self.post(self.a, token, origin=origin)[0], 403, origin)
+        # No session at all.
+        self.assertEqual(self.post({}, token)[0], 401)
+        self.assertEqual(self.saved(), before)
+        # Expired session: the same cookie that worked a moment ago is refused and nothing is saved.
+        self.now += SESSION_TTL
+        for jar in (self.a, self.b):
+            response = self.post(jar, token)
+            self.assertEqual((response[0], response[1]["Cache-Control"]), (401, "no-store"))
+        self.assertEqual(self.saved(), before)
+        self.now = NOW
+        # Valid session, token and Origin: saved. The second member sees the same assumptions.
+        self.assertEqual(self.post(self.a, token)[0], 303)
+        after = request(self.server, "/projections?view=Household&currency=USD", jar=self.b)[2].decode()
+        self.assertRegex(after, r'name="income"[^>]*value="5000"')
+        self.assertNotIn(seed_fictional.PROJECTION_INCOME, after)
+        # Owner views are shared data too: Young's scenario saved by member A is visible to member B only
+        # through the same table, never as a permission boundary.
+        self.assertEqual(self.post(self.a, token, view="Young", income="777")[0], 303)
+        young = request(self.server, "/projections?view=Young&currency=USD", jar=self.b)[2].decode()
+        self.assertRegex(young, r'name="income"[^>]*value="777"')
+        self.assertEqual([row[:2] for row in self.saved()], [("Household", "USD"), ("Young", "USD")])
+        # Member B can overwrite (last writer wins); there is no per-member scenario.
+        self.assertEqual(self.post(self.b, self.token(self.b), income="6000")[0], 303)
+        again = request(self.server, "/projections?view=Household&currency=USD", jar=self.a)[2].decode()
+        self.assertRegex(again, r'name="income"[^>]*value="6000"')
+
+    def test_invalid_values_are_422_and_not_saved(self):
+        before = self.saved()
+        token = self.token(self.a)
+        self.assertEqual(self.post(self.a, token, income="1,000")[0], 422)
+        self.assertEqual(self.post(self.a, token, view="Mallory")[0], 422)
+        self.assertEqual(self.post(self.a, token, currency="EUR")[0], 422)
+        self.assertEqual(self.saved(), before)
+
+
+class DeployUnits(unittest.TestCase):
+    """Static checks on the shipped systemd units (they cannot be run on the build host)."""
+    DEPLOY = Path(__file__).resolve().parent / "deploy"
+
+    def exec_start(self, name):
+        text = (self.DEPLOY / name).read_text()
+        lines = [line for line in text.splitlines() if line.startswith("ExecStart=")]
+        self.assertEqual(len(lines), 1, name)
+        return lines[0]
+
+    def test_dashboard_unit_is_hosted_loopback_and_never_ships_bridge(self):
+        line = self.exec_start("accounts-dashboard.service")
+        for required in ("--port 8765", "--hosted", "--hosted-env %h/.config/planner-accounts/hosted.env",
+                         "%h/.local/share/planner-accounts-venv/bin/python"):
+            self.assertIn(required, line)
+        # Bridge is enabled only by a drop-in at the Bridge-enrolment step (see the runbook): without
+        # bridge.access the process exits and systemd would restart it every 10 seconds.
+        self.assertNotIn("--bridge", line)
+        self.assertNotIn("--db", line)
+        text = (self.DEPLOY / "accounts-dashboard.service").read_text()
+        self.assertIn("UMask=0077", text)
+        self.assertIn("WantedBy=default.target", text)
+
+    def test_backup_unit_uses_stdlib_python_and_a_private_umask(self):
+        line = self.exec_start("accounts-backup.service")
+        self.assertIn("backup-sqlite.sh backup", line)
+        self.assertNotIn("--db", line)
+        self.assertIn("UMask=0077", (self.DEPLOY / "accounts-backup.service").read_text())
