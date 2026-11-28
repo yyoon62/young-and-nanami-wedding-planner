@@ -548,6 +548,10 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
   .tx-pick.up .sec-menu { top: auto; bottom: calc(100% - .2rem); }
 }
 /* ==== L26 end ==== */
+/* ==== L30a start: last-synced note beside the Sync button ==== */
+.sync-note { display: inline-block; margin-left: .6rem; font-size: .85rem; color: var(--text-secondary); vertical-align: middle; }
+.sync-note.sync-stale { color: var(--accent); font-weight: 700; }
+/* ==== L30a end ==== */
 
 /* Phone: each transaction becomes a small card so the amount and the edit drawer are never off-screen */
 @media (max-width: 40rem) {
