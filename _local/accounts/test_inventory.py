@@ -33,7 +33,7 @@ class HouseholdInventory(unittest.TestCase):
                     return db.execute("SELECT * FROM accounts ORDER BY id").fetchall()
 
             with running(path) as request:
-                self.assertEqual(stored(), [(*legacy, "Unspecified", "Manual entry", 0, 0)])
+                self.assertEqual(stored(), [(*legacy, "Unspecified", "Manual entry", 0, 0, "")])
                 overview(request, "/?view=Young", [], [])
                 form = request("/new")[1]
                 self.assertIn("<option selected>Unspecified</option>", form)
@@ -65,7 +65,7 @@ class HouseholdInventory(unittest.TestCase):
                 self.assertEqual(request("/edit/17", fields)[0], 303)
 
             with running(path) as request:
-                self.assertEqual(stored(), [(*legacy, "Nanami", "Read co-op statement", 0, 0), *snapshot[1:]])
+                self.assertEqual(stored(), [(*legacy, "Nanami", "Read co-op statement", 0, 0, ""), *snapshot[1:]])
                 overview(request, "/", [17, 18, 19, 20], ["USD 11.00", "JPY 7"])
                 overview(request, "/?view=Young", [18, 20], ["USD 13.00"])
                 body = overview(request, "/?view=Nanami", [17, 19, 20], ["USD 1.00", "JPY 7"])

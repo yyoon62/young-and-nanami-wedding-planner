@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 from servicers import servicer_get
 from bridge import Bridge, Problem
 from bulk import Batch, schema
-from logos import institution_logo
+from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo, sanitize_domain
 
 
 ROOT = Path(__file__).resolve().parent
@@ -101,6 +101,8 @@ def init_db(path):
             db.execute("ALTER TABLE accounts ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0")
         if "side_manual" not in columns:
             db.execute("ALTER TABLE accounts ADD COLUMN side_manual INTEGER NOT NULL DEFAULT 0")
+        if "logo_domain" not in columns:
+            db.execute("ALTER TABLE accounts ADD COLUMN logo_domain TEXT NOT NULL DEFAULT ''")
         schema(db)
 
 
@@ -215,11 +217,11 @@ def inline_edit_drawer(r, today, token, view, opened=False, values=None, error=N
             f'</div></details></div></form></td></tr>')
 
 
-def account_row(r, today, token, view, excluded=False, open_edit=None, edit_values=None, edit_error=None):
+def account_row(r, today, token, view, excluded=False, open_edit=None, edit_values=None, edit_error=None, use_logos=False):
     rid = r["id"]
     name = escape(r["nickname"])
     inst = escape(r["institution"])
-    logo = institution_logo(r["institution"])
+    logo = institution_logo(r["institution"], r["logo_domain"], use_cached=use_logos)
     sec = section_for(r["kind"])
     amt = Decimal(r["balance"])
     c = r["currency"]
@@ -282,7 +284,7 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
             f'</tr>{drawer}')
 
 
-def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None, open_edit=None, edit_values=None):
+def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None, open_edit=None, edit_values=None, use_logos=False):
     active = [r for r in rows if not r["excluded"]]
     excluded = [r for r in rows if r["excluded"]]
     totals = {}
@@ -325,7 +327,7 @@ def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None, 
                    f'<span>{sec} <span class="sec-count">{len(sec_rows)}</span></span>'
                    f'<span class="sec-total">{sub}</span></div></th></tr>')
             items = "".join(account_row(r, today, token, view, excluded=False, open_edit=open_edit,
-                                        edit_values=edit_values, edit_error=error) for r in sec_rows)
+                                        edit_values=edit_values, edit_error=error, use_logos=use_logos) for r in sec_rows)
             bodies.append(f'<tbody class="sec-group" data-section="{sec}">{hdr}{items}</tbody>')
         table = (f'<div class="table-wrap"><table class="acct-table">'
                  f'<thead><tr><th>Account</th><th class="num">Balance</th><th>Owner</th>'
@@ -341,7 +343,7 @@ def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None, 
     if excluded:
         ex_open = " open" if any(str(r["id"]) == str(open_edit) for r in excluded) else ""
         ex_body = "".join(account_row(r, today, token, view, excluded=True, open_edit=open_edit,
-                                      edit_values=edit_values, edit_error=error) for r in excluded)
+                                      edit_values=edit_values, edit_error=error, use_logos=use_logos) for r in excluded)
         excluded_html = (f'<details class="excluded-box"{ex_open}><summary>Excluded accounts ({len(excluded)})'
                          f' — not counted in totals</summary>'
                          f'<div class="table-wrap"><table class="acct-table">'
@@ -398,6 +400,15 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def send_bytes(self, code, body, kind, cache="no-store"):
+        self.send_response(code)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", cache)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
     def send(self, code, text, kind="text/html; charset=utf-8", location=None, preview=False, scripts=False):
         if kind.startswith("text/html"):
             text = text.replace("<main>", "<main>" + mode_banner(self.server), 1)
@@ -412,7 +423,7 @@ class Handler(BaseHTTPRequestHandler):
         if preview:
             extra = "script-src 'self'; connect-src 'none'; form-action 'none'"
         elif scripts:
-            extra = "script-src 'self'; connect-src 'none'; form-action 'self'"
+            extra = "img-src 'self'; script-src 'self'; connect-src 'none'; form-action 'self'"
         else:
             extra = "form-action 'self'"
         self.send_header("Content-Security-Policy", policy + extra)
@@ -433,7 +444,8 @@ class Handler(BaseHTTPRequestHandler):
                               (view, view)).fetchall()
         return self.send(status, dashboard(rows, date.today(), view, self.server.token,
                                            has_sync=bool(self.server.batch), notices=notices, error=error,
-                                           open_edit=open_edit, edit_values=edit_values), scripts=True)
+                                           open_edit=open_edit, edit_values=edit_values,
+                                           use_logos=bool(self.server.logo_dir)), scripts=True)
 
     def do_GET(self):
         if not self.local_host():
@@ -450,8 +462,25 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, (ROOT / "preview.js").read_text(), "application/javascript")
         if path == "/dashboard.js":
             return self.send(200, (ROOT / "dashboard.js").read_text(), "application/javascript")
+        if path == "/favicon.ico":
+            return self.send_bytes(204, b"", "image/x-icon", cache="private, max-age=86400")
         if path == "/style.css":
             return self.send(200, (ROOT / "style.css").read_text(), "text/css")
+        if path.startswith("/logo/") and self.server.logo_dir:
+            raw_domain = path[len("/logo/"):]
+            domain = sanitize_domain(raw_domain)
+            if not domain or domain != raw_domain:
+                return self.send(404, "Not found.")
+            allowed = domain in KNOWN_DOMAIN_SET
+            if not allowed:
+                with closing(sqlite3.connect(self.server.db)) as db:
+                    allowed = bool(db.execute("SELECT 1 FROM accounts WHERE logo_domain=? LIMIT 1", (domain,)).fetchone())
+            if not allowed:
+                return self.send(404, "Not found.")
+            found = cached_logo(self.server.logo_dir, domain, fetcher=self.server.logo_fetcher)
+            if found:
+                return self.send_bytes(200, found[0], found[1], cache="private, max-age=86400")
+            return self.send_bytes(200, fallback_svg(domain.split(".")[0]).encode(), "image/svg+xml")
         if path == "/new":
             return self.send(200, form({"currency": "USD", "asof": str(date.today()), "owner": "Unspecified",
                                         "update_method": DEFAULT_METHOD}, path, self.server.token))
@@ -579,13 +608,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send(303, "", location=view_url(back) if (edit and data.get("inline") == "1") else "/")
 
 
-def serve(path, port, provider=None):
+def serve(path, port, provider=None, logo_dir=None):
     init_db(path)
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.token = secrets.token_urlsafe(32)
     server.db = path
     server.batch = Batch(path, provider, validate) if provider else None
     server.notices = []
+    server.logo_dir = logo_dir
+    from logos import _default_fetch
+    server.logo_fetcher = _default_fetch
     return server
 
 
@@ -609,7 +641,8 @@ if __name__ == "__main__":
                 provider = Bridge()
             except (Problem, OSError, UnicodeError):
                 parser.exit(1, "Bridge disabled: missing or unsafe credential storage. See BULK.md.\n")
-        server = stack.enter_context(serve(path, args.port, provider))
+        logo_dir = None if args.demo else path.parent / "logos"
+        server = stack.enter_context(serve(path, args.port, provider, logo_dir=logo_dir))
         server.demo = args.demo
         if args.demo:
             with closing(sqlite3.connect(path)) as db, db:

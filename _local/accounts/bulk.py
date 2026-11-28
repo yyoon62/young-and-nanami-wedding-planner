@@ -11,6 +11,7 @@ from threading import Lock
 import time
 
 from bridge import Problem
+from logos import sanitize_domain
 
 
 def schema(db):
@@ -77,12 +78,14 @@ def unpack(payload, namespace, validate):
         raise Problem("Batch exceeds the local limit (200 accounts).")
     entries, seen, warnings, blocked = {}, set(), [], []
     connections = {}
+    conn_domains = {}
     try:
         for c in payload["connections"]:
             cid = text(c["conn_id"], 256)
             if cid in connections:
                 raise ValueError()
             connections[cid] = text(c["name"], 100)
+            conn_domains[cid] = sanitize_domain(c.get("org_url") or c.get("domain") or "")
     except (ValueError, KeyError, TypeError):
         raise Problem("Invalid or duplicate connection identity.") from None
     if payload.get("errors"):
@@ -127,6 +130,7 @@ def unpack(payload, namespace, validate):
                               kind=infer_kind(inst_name, acct_name, inferred_side), side=inferred_side,
                               owner="Unspecified", currency=text(a["currency"], 3), balance=magnitude,
                               asof=str(date.fromtimestamp(stamp)), update_method="SimpleFIN sync"), date.today())
+            v["logo_domain"] = conn_domains.get(cid, "")
             entries[key] = Entry(key, v, signed, stamp)
         except (KeyError, TypeError, ValueError, OSError, OverflowError):
             warnings.append(f"Provider row {i}: invalid, unsupported or duplicate; held.")
@@ -180,6 +184,9 @@ class Batch:
                             held += 1
                         else:
                             new_side = row["side"] if row["side_manual"] else inferred_side
+                            if e.values.get("logo_domain") and not row["logo_domain"]:
+                                db.execute("UPDATE accounts SET logo_domain=? WHERE id=?",
+                                           (e.values["logo_domain"], row["id"]))
                             if (row["balance"] == e.values["balance"] and row["asof"] == e.values["asof"]
                                     and row["side"] == new_side):
                                 db.execute("""UPDATE source_links SET stamp=?, sign=?, status=?,
@@ -200,10 +207,10 @@ class Batch:
                     else:
                         v = e.values
                         local = db.execute("""INSERT INTO accounts
-                            (institution,nickname,kind,side,currency,balance,asof,owner,update_method,excluded,side_manual)
-                            VALUES (?,?,?,?,?,?,?,?,?,0,0)""",
+                            (institution,nickname,kind,side,currency,balance,asof,owner,update_method,excluded,side_manual,logo_domain)
+                            VALUES (?,?,?,?,?,?,?,?,?,0,0,?)""",
                             (v["institution"], v["nickname"], v["kind"], v["side"], v["currency"],
-                             v["balance"], v["asof"], v["owner"], v["update_method"])).lastrowid
+                             v["balance"], v["asof"], v["owner"], v["update_method"], v.get("logo_domain", ""))).lastrowid
                         fresh = db.execute("SELECT * FROM accounts WHERE id=?", (local,)).fetchone()
                         db.execute("""INSERT INTO source_links (source,local,stamp,sign,snapshot,status)
                             VALUES (?,?,?,?,?,?)""", (key, local, e.stamp, e.sign, snapshot(fresh), "Added"))

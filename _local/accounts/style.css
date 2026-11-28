@@ -134,6 +134,12 @@ button.secondary:hover, .button.secondary:hover { background: var(--pill); color
 .acct-cell { font-weight: 400; min-width: 15rem; }
 .acct-with-logo { display: flex; align-items: center; gap: .6rem; }
 .inst-logo { flex: 0 0 28px; width: 28px; height: 28px; border-radius: 7px; display: block; }
+.logo-frame {
+  flex: 0 0 28px; width: 28px; height: 28px; border-radius: 7px;
+  background: #fff; border: 1px solid var(--border);
+  display: inline-flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.inst-logo-img { width: 22px; height: 22px; object-fit: contain; display: block; }
 .acct-info { min-width: 0; flex: 1; }
 .acct-head { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
 .acct-name { font-weight: 600; color: #2b2320; line-height: 1.3; }
