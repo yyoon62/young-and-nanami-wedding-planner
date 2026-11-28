@@ -107,10 +107,13 @@ class MaplePath(Fixture, unittest.TestCase):
         bank = [r for r in self.rows("Maple Cafe") if r["nickname"] == "Bank"]
         row = bank[0]
         self.post(bank[1]["row_id"], action="save", category="Dining")
-        html = render_transactions(self.db, "month=2026-11", token=TOKEN, allowed_views=VIEWS)
+        plain = render_transactions(self.db, "month=2026-11", token=TOKEN, allowed_views=VIEWS)
+        self.assertEqual(plain.count('name="action" value="save"'), 0)            # no drawer per row: pages stay small
+        self.assertGreaterEqual(plain.count('class="sec-chip tx-edit"'), len(self.snap().rows))   # one Edit link per row
+        html = render_transactions(self.db, "month=2026-11&edit=%d" % row["row_id"], token=TOKEN, allowed_views=VIEWS)
         self.assertIn("Apply to this merchant on this account (USD) matching “maple cafe”", html)
-        self.assertEqual(html.count("1 other row(s) with a category you set by hand will not change"), 3)
-        self.assertEqual(html.count('name="action" value="save"'), len(self.snap().rows))
+        self.assertEqual(html.count("1 other row(s) with a category you set by hand will not change"), 1)
+        self.assertEqual(html.count('name="action" value="save"'), 1)             # exactly the one open drawer
         self.assertNotIn('name="action" value="category"', html)  # per-row button forms are gone
         self.assertIn('id="tx-%d"' % row["row_id"], html)
 

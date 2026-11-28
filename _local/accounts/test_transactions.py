@@ -384,7 +384,8 @@ class TransactionsTest(Fixture, unittest.TestCase):
         edit("Credit card payment", action="transfer_rule", merchant_transfer="no")
         self.assertEqual(self.row("Credit card payment", "2026-12")["flow"], "Cash flow (merchant rule)")
         self.assertTrue(self.row("Manual transfer", "2026-12")["effective_transfer"])
-        rendered = render_transactions(self.db, "month=2026-12", token=TOKEN, allowed_views=VIEWS)
+        rendered = render_transactions(self.db, "month=2026-12&edit=%d" % self.row("Credit card payment", "2026-12")["row_id"],
+                                       token=TOKEN, allowed_views=VIEWS)          # the drawer is rendered for the row being edited
         self.assertIn('name="merchant_transfer"', rendered)
         self.assertIn('<option value="no" selected>No, never a transfer</option>', rendered)
         self.assertIn("Always treat “local merchant” on this account as a transfer", rendered.replace("&quot;", '"'))

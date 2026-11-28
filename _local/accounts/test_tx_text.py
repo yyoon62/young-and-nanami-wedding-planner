@@ -18,10 +18,12 @@ class Language(Fixture, unittest.TestCase):
         return render_transactions(self.db, query, token=TOKEN, allowed_views=VIEWS, today=date(2026, 12, 15))
 
     def test_drawer_says_what_the_transfer_rule_does_and_old_wording_is_gone(self):
-        html = self.html()
+        maple, odd = (self.row(d, "2026-12")["row_id"] for d in ("SQ *MAPLE CAFE 04/12 #1234", "***"))
+        html = self.html("month=2026-12&edit=%d" % maple)
         self.assertEqual(html.count("Always treat “maple cafe” on this account as a transfer"), 1)
-        self.assertEqual(html.count("Transfer = money between your own accounts; not counted as spending."), 2)   # once per row drawer
-        self.assertIn("Always treat “***” on this account as a transfer", html)       # no cleaned key: the description
+        self.assertEqual(html.count("Transfer = money between your own accounts; not counted as spending."), 1)   # the open drawer only
+        other = self.html("month=2026-12&edit=%d" % odd)
+        self.assertIn("Always treat “***” on this account as a transfer", other)       # no cleaned key: the description
         self.assertIn('name="merchant_transfer"', html)
         for old in ("Merchant transfer rule", "transfer category", "Merchant transfer"):
             self.assertNotIn(old, html)
@@ -117,6 +119,90 @@ class Text(Fixture, unittest.TestCase):
         self.assertIn("No posted transactions reported", self.html("month=2026-10"))
         self.assertIn("No posted data with sufficient coverage", self.html("month=2024-10"))
         self.assertIn("ℹ️ How these numbers work", self.html("month=2024-10"))
+
+
+class Rows(Fixture, unittest.TestCase):
+    """Part 5: one-line rows with tooltip provenance, lazy drawer, small pages."""
+    def setUp(self):
+        super().setUp()
+        self.account("Bank")
+        self.account("Card", "Credit card")
+        self.add("Bank", tx("a", "2026-12-10", "3000", "PAYROLL Fictional"), tx("b", "2026-12-11", "-12.00", "Corner Cafe"),
+                 tx("c", "2026-12-12", "-30.00", "Online transfer to savings"), tx("m", "2026-12-12", "-5.00", "Maple Shop"))
+        self.add("Card", tx("p", "2026-12-12", "40.00", "Payment thank you"), tx("x", "2026-12-13", "-8.00", "Totally Unknown"))
+        self.sync()
+        self.cat("Dining")
+        self.post(self.row("Corner Cafe", "2026-12")["row_id"], action="category", category="Dining", month="2026-12")
+
+    def html(self, query="month=2026-12"):
+        return render_transactions(self.db, query, token=TOKEN, allowed_views=VIEWS, today=date(2026, 12, 15))
+
+    def tr(self, html, description):
+        start = html.index('<tr class="acct-row"', html.index(description) - 900)
+        return html[start:html.index("</tr>", start)]
+
+    def test_provenance_is_a_tooltip_and_only_transfer_review_and_suggested_stay_visible(self):
+        html = self.html()
+        payroll, cafe, unknown = (self.tr(html, d) for d in ("PAYROLL Fictional", "Corner Cafe", "Totally Unknown"))
+        self.assertIn('title="(built-in default) · Cash flow"', payroll)
+        self.assertIn('title="(set by you) · Cash flow"', cafe)
+        for tr in (payroll, cafe, unknown):
+            self.assertNotIn(">Posted<", tr)
+            self.assertNotIn("SimpleFIN ·</", tr)
+            self.assertNotRegex(tr, r">[^<]*(?:Cash flow|set by you|built-in default|merchant rule)[^<]*<")   # tooltip only
+        self.assertIn('title="SimpleFIN · Fictional institution · Bank"', payroll)    # full account text in the tooltip
+        self.assertIn('<td class="date-cell" title="Posted">', payroll)
+        credit = self.tr(html, "Payment thank you")
+        self.assertIn('<span class="acct-sub tx-flow">Review card credit</span>', credit)      # short visible label
+        self.assertEqual(html.count('class="badge"'), 0)
+        self.assertEqual(html.count("overridden"), 0)
+
+    def test_every_row_has_a_visible_default_emoji_and_the_old_faint_one_is_gone(self):
+        from tx_categories import CUSTOM_EMOJI, UNCATEGORIZED_EMOJI
+        html = self.html()
+        self.assertEqual(UNCATEGORIZED_EMOJI, "🏷️")
+        self.assertNotEqual(UNCATEGORIZED_EMOJI, CUSTOM_EMOJI)
+        self.assertNotIn("❔", html)
+        self.assertEqual(html.count('class="tx-emoji"'), html.count('class="acct-row"'))
+        self.assertIn(f">{UNCATEGORIZED_EMOJI}</span> Totally Unknown", html)
+
+    def test_account_label_shows_the_nickname_once(self):
+        html = self.html()
+        self.assertIn('class="acct-sub tx-acct" title="SimpleFIN · Fictional institution · Card">Card</span>', html)
+        self.assertNotIn("SimpleFIN · Fictional institution · Card</div>", html)
+
+    def test_possible_transfer_marker_is_short_and_keeps_the_tooltip(self):
+        self.account("Savings", "Savings")
+        self.add("Savings", tx("s", "2026-12-12", "30.00", "Transfer from checking"))
+        self.sync()
+        html = self.html()
+        tr = self.tr(html, "Online transfer to savings")
+        self.assertIn("↔️ possible transfer", tr)
+        self.assertIn("Possible internal transfer · still counted", tr)
+
+    def test_drawer_is_lazy_one_per_page_and_pages_stay_small(self):
+        rows = self.snap("2026-12").rows
+        plain = self.html()
+        self.assertEqual(plain.count("<details class=\"inline-pop tx-drawer\""), 0)
+        self.assertEqual(plain.count('class="sec-chip tx-edit"'), len(rows))
+        one = self.html("month=2026-12&view=Household&edit=%d" % rows[0]["row_id"])
+        self.assertEqual(one.count("<details class=\"inline-pop tx-drawer\" open>"), 1)
+        self.assertEqual(one.count('class="sec-chip tx-edit"'), len(rows) - 1)
+        self.assertIn(f'href="/transactions?month=2026-12&amp;view=Household#tx-{rows[0]["row_id"]}">Cancel</a>', one)
+        self.assertRegex(plain, r'href="/transactions\?month=2026-12&amp;view=Household&amp;edit=\d+#tx-\d+">Edit</a>')
+        self.assertEqual(self.html("month=2026-12&edit=abc").count("tx-drawer"), 0)          # a junk id is ignored
+        self.assertEqual(self.html("month=2026-12&edit=99999").count("tx-drawer"), 0)        # an id outside the list too
+
+    def test_page_size_at_300_rows_stays_near_400_kb(self):
+        from tx_fixture import put_row, source_of
+        account = self.db.execute("SELECT id FROM accounts LIMIT 1").fetchone()[0]
+        for i in range(300):
+            put_row(self.db, account, source_of(self.db, account), "USD", f"2026-12-{1 + i % 14:02d}", f"-{10 + i}.{i % 100:02d}",
+                    f"Merchant {i % 40} #{i}")
+        html = self.html()
+        self.assertGreaterEqual(html.count('class="acct-row"'), 300)
+        per_row = len(html.encode()) / html.count('class="acct-row"')
+        self.assertLess(per_row, 1700, per_row)                 # was ~4,200 B/row before the shared form and lazy drawer
 
 
 if __name__ == "__main__":

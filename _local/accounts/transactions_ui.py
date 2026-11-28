@@ -98,11 +98,9 @@ def _stamp(stamp):
     return datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-_SOURCES = {"suggested": ' <span class="badge" title="Suggested by the classifier; not confirmed">suggested</span>',
-            "manual": ' <span class="acct-sub">(set by you)</span>',
-            "rule": ' <span class="acct-sub">(merchant rule)</span>',
-            "stamp": ' <span class="acct-sub">(saved rule)</span>',
-            "default": ' <span class="acct-sub">(built-in default)</span>'}
+_BADGE = '<span class="badge" title="Suggested by the classifier; not confirmed">suggested</span>'
+_ORIGIN = {"manual": "(set by you)", "rule": "(merchant rule)", "stamp": "(saved rule)", "default": "(built-in default)"}
+_SHOWN_FLOWS = ("Transfer", "Matched transfer", "Review card credit", "Pending")   # other flows are tooltip-only
 
 
 def _data_dir(db):
@@ -174,7 +172,7 @@ def _drawer(r, f, token, categories, manual, attempt, error):
                  f'<select name="merchant_transfer">{rule_choices}</select></label>')
     problem = f'<p class="notice" role="alert">{escape(error)}</p>' if error else ""
     return (
-        f'<details class="inline-pop tx-drawer"{" open" if error else ""}><summary class="sec-chip">Edit</summary>'
+        f'<details class="inline-pop tx-drawer" open><summary class="sec-chip">Edit</summary>'
         f'<form method="post" action="{EDIT}" class="drawer-form tx-form">{problem}'
         + _hidden(f, token=token, row=r["row_id"])
         + f'<div class="tx-grid"><label>Category<select name="category">{cats}</select></label>'
@@ -183,7 +181,8 @@ def _drawer(r, f, token, categories, manual, attempt, error):
         '<button class="button secondary" name="action" value="add_category">Add category</button>'
         f'<label>Is this transaction a transfer?<select name="transfer">{choices}</select></label></div>'
         '<small class="tx-hint">Transfer = money between your own accounts; not counted as spending.</small>'
-        + rules + '<div class="drawer-left"><button name="action" value="save">Save</button></div>'
+        + rules + '<div class="drawer-left"><button name="action" value="save">Save</button>'
+        f'<a class="button secondary" href="{escape(_short_location(f))}#tx-{r["row_id"]}">Cancel</a></div>'
         '</form></details>')
 
 
@@ -216,22 +215,33 @@ def _summary_card(currency, t, cmp, incomplete, f):
             + line + confirm)
 
 
-def _owner_cell(r, f, token):
-    """Young / Nanami pills with the Accounts markup; both active = Joint. A click toggles this transaction only."""
+def _short_location(f):
+    """The page URL with only the non-default filters written (month and view always)."""
+    keep = {k: v for k, v in f.items() if k in ("month", "view") or v not in ("", "0")}
+    return f"{TRANSACTIONS}?{urlencode(keep)}"
+
+
+def _edit_href(f, row_id):
+    """Short link that reopens this page with the row's drawer."""
+    return f"{_short_location(f)}&edit={row_id}#tx-{row_id}"
+
+
+def _owner_cell(r):
+    """Young / Nanami pills with the Accounts classes; both active = Joint. Buttons belong to the page's one shared
+    form (#tx-act) so a row costs a few hundred bytes, not a form. A click toggles this transaction only."""
     eff = r["eff_owner"]
     overridden = r["owner_override"] is not None and r["owner_override"] != r["owner"]
     pills = "".join(
-        f'<button type="submit" name="owner" value="{p}" class="pill-btn{" active" if eff in (p, "Joint") else ""}"'
-        f' aria-pressed="{"true" if eff in (p, "Joint") else "false"}"'
-        f' title="Owner of this transaction (account owner: {escape(r["owner"])})">{p}</button>' for p in PEOPLE)
-    cell = (f'<form method="post" action="{EDIT}" class="inline-form owner-pills">'
-            + _hidden(f, token=token, row=r["row_id"], action="owner") + pills + '</form>')
+        f'<button type="submit" form="tx-act" name="act" value="owner-{r["row_id"]}-{p}"'
+        f' class="pill-btn{" active" if eff in (p, "Joint") else ""}"'
+        f' aria-pressed="{"true" if eff in (p, "Joint") else "false"}">{p}</button>' for p in PEOPLE)
+    cell = (f'<span class="inline-form owner-pills" title="Owner of this transaction (account owner: '
+            f'{escape(r["owner"])})">{pills}</span>')
     if overridden:
-        cell += (f' <form method="post" action="{EDIT}" class="inline-form">'
-                 + _hidden(f, token=token, row=r["row_id"], action="owner_reset")
-                 + f'<button type="submit" class="icon-btn tx-reset" title="Overridden for this transaction. '
-                 f'Reset to the account owner ({escape(r["owner"])})" aria-label="Reset owner to the account owner">'
-                 '↺</button></form> <span class="acct-sub tx-ovr">overridden</span>')
+        cell += (f' <button type="submit" form="tx-act" name="act" value="reset-{r["row_id"]}" class="icon-btn tx-reset"'
+                 f' title="Overridden for this transaction. Reset to the account owner ({escape(r["owner"])})"'
+                 f' aria-label="Reset owner to the account owner">↺</button>'
+                 ' <span class="acct-sub tx-ovr">overridden</span>')
     return f'<td class="owner-cell">{cell}</td>'
 
 
@@ -315,9 +325,11 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
                         open_row=None, attempt=None, error=None, logo_dir=None):
     """Return fragment for parent page()/send(); read DB in a single parent snapshot."""
     today = today or datetime.now(timezone.utc).date()
-    data = _params(query, set(_FILTERS) | {"moved"})
+    data = _params(query, set(_FILTERS) | {"moved", "edit"})
     f = _filters(data, allowed_views, today.isoformat()[:7])
     moved = _moved_note(data.get("moved"), f, allowed_views)
+    if open_row is None and re.fullmatch(r"[1-9][0-9]{0,18}", data.get("edit", "")):
+        open_row = int(data["edit"])        # the drawer is rendered only for this row: pages stay small
     context = category_context(db)
     snap = monthly_snapshot(db, f["month"], f["view"], show_pending=f["pending"] == "1",
                             household_matching="Household" in allowed_views, context=context)
@@ -400,30 +412,40 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         if f["review"] == "1" and r["flow"] != "Review card credit":
             continue
         category = escape(r["category"])
-        drawer = _drawer(r, f, token, categories, manual, attempt if open_row == r["row_id"] else {},
-                         error if open_row == r["row_id"] else None)
         when = escape(r["posted_date"] or r["pending_date"])
-        label = "Pending · provider or observed date" if r["pending"] else "Posted"
-        payee = f'<div class="acct-sub">Payee: {escape(r["payee"])}</div>' if r["payee"] else ""
-        suggestion = ('<div class="acct-sub">Possible internal transfer · still counted. '
-                      'If confirmed, mark each leg as Transfer.</div>' if r["suggested_transfer"] else "")
-        origin = _SOURCES.get(r["category_source"], "")
+        when_title = "Pending · provider or observed date" if r["pending"] else "Posted"
+        payee = f' title="Payee: {escape(r["payee"])}"' if r["payee"] else ""
+        marker = ('<span class="acct-sub tx-flag" title="Possible internal transfer · still counted. '
+                  'If confirmed, mark each leg as Transfer.">↔️ possible transfer</span>' if r["suggested_transfer"] else "")
         # A transfer is not spending, so it needs no category; say so instead of "Needs review".
         label_cell = category or ("" if r["effective_transfer"] else
                                   "Needs review" if r["category_source"] == "review" else "Uncategorized")
+        tip = " · ".join(x for x in (_ORIGIN.get(r["category_source"]), r["flow"]) if x)
+        flow = (f'<span class="acct-sub tx-flow">{escape(r["flow"])}</span>'
+                if r["flow"].startswith(_SHOWN_FLOWS) else "")
+        shown = f'<span class="tx-cat" title="{escape(tip)}">{label_cell}</span>' if label_cell else ""
+        badge = _BADGE if r["category_source"] == "suggested" else ""
+        if open_row == r["row_id"]:
+            edit = _drawer(r, f, token, categories, manual, attempt, error)
+        else:
+            edit = (f'<a class="sec-chip tx-edit" rel="nofollow" title="Edit this transaction" '
+                    f'href="{escape(_edit_href(f, r["row_id"]))}">Edit</a>')
         rows.append(
-            f'<tr class="acct-row" id="tx-{r["row_id"]}"><td class="date-cell"><time datetime="{when}">{when}</time>'
-            f'<div class="acct-sub">{label}</div></td><th scope="row" class="acct-cell">'
+            f'<tr class="acct-row" id="tx-{r["row_id"]}"><td class="date-cell" title="{when_title}">'
+            f'<time datetime="{when}">{when}</time></td><th scope="row" class="acct-cell">'
             f'<div class="acct-with-logo">{_logo(r, logo_dir)}<div class="acct-info">'
-            f'<span class="acct-name"><span class="tx-emoji" aria-hidden="true">{escape(r["emoji"] or default_emoji(r["category"], r["effective_transfer"]))}</span> {escape(r["description"] or "No description")}</span>{payee}'
-            f'<div class="acct-sub">SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}</div>'
-            f'</div></div></th>'
-            + _owner_cell(r, f, token) +
+            f'<span class="acct-name"{payee}><span class="tx-emoji" aria-hidden="true">{escape(r["emoji"] or default_emoji(r["category"], r["effective_transfer"]))}</span> {escape(r["description"] or "No description")}</span>'
+            f'<span class="acct-sub tx-acct" title="SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}">'
+            f'{escape(r["nickname"])}</span></div></div></th>'
+            + _owner_cell(r) +
+            f'<td class="cat-cell">{shown}{badge}{flow}{marker}</td>'
             f'<td class="num"><span class="cur">{escape(r["currency"])}</span> {_amount(r)}</td>'
-            f'<td>{label_cell + origin + " · " if label_cell else ""}{escape(r["flow"])}{suggestion} {drawer}</td></tr>')
+            f'<td class="act-cell">{edit}</td></tr>')
+    shared = (f'<form id="tx-act" method="post" action="{EDIT}" hidden>' + _hidden(f, token=token) + '</form>')
     table = (
-        '<div class="table-wrap"><table class="acct-table tx-table tx-compact"><thead><tr><th>Date</th><th>Transaction</th>'
-        '<th>Owner</th><th class="num">Amount</th><th>Category</th></tr></thead><tbody>'
+        shared + '<div class="table-wrap"><table class="acct-table tx-table tx-compact"><thead><tr><th>Date</th>'
+        '<th>Transaction</th><th>Owner</th><th>Category</th><th class="num">Amount</th>'
+        '<th><span class="sr">Edit</span></th></tr></thead><tbody>'
         + "".join(rows) + "</tbody></table></div>" if rows else "<p>No transactions match this list.</p>")
     alert = f'<p class="notice" role="alert">{escape(error)}</p>' if error else ""
     review_chip = (f'<p class="filter-chip">Showing card payments to confirm only · '
@@ -432,8 +454,8 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
     return (
         '<script defer src="/dashboard.js"></script>'
         '<section class="history" aria-labelledby="cash-flow"><h2 id="cash-flow">Monthly cash flow</h2>'
-        + alert + moved + search + sync + _classifier_panel(db, f, token) + summary
-        + info_box(coverage, can_sync=can_sync and "Household" in allowed_views)
+        + alert + moved + search + sync + '<div class="tx-tools">' + _classifier_panel(db, f, token)
+        + info_box(coverage, can_sync=can_sync and "Household" in allowed_views) + '</div>' + summary
         + '</section><section><h2>Transactions</h2>' + review_chip + table + '</section>')
 
 
@@ -476,7 +498,7 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     except UnicodeError:
         raise RouteProblem(400, "Invalid transaction form.") from None
     keys = set(_FILTERS) | {"token"} | ({"row", "category", "new_category", "apply", "transfer",
-                                         "merchant_transfer", "action", "enabled", "owner"}
+                                         "merchant_transfer", "action", "enabled", "owner", "act"}
                                         if path == EDIT else {"include_pending"})
     data = _params(raw, keys)
     if not token or not secrets.compare_digest(data.get("token", "").encode("utf-8"), token.encode("utf-8")):
@@ -484,6 +506,13 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     if "view" not in data:
         raise RouteProblem(400, "Choose an account view.")
     f = _filters(data, allowed_views, None)
+    if "act" in data and path == EDIT:
+        # A button of the page's shared form: "owner-<row>-<Person>" or "reset-<row>". Never mixed with row fields.
+        act = re.fullmatch(r"(?:(owner)-([1-9][0-9]{0,18})-(Young|Nanami)|(reset)-([1-9][0-9]{0,18}))", data["act"])
+        if not act or {"row", "action", "owner"} & data.keys():
+            raise RouteProblem(400, "Invalid transaction action.")
+        data = {k: v for k, v in data.items() if k != "act"} | (
+            dict(action="owner", row=act[2], owner=act[3]) if act[1] else dict(action="owner_reset", row=act[5]))
     if path == SYNC:
         if not can_sync or "Household" not in allowed_views:
             raise RouteProblem(403, "Transaction sync not authorized or unavailable.")

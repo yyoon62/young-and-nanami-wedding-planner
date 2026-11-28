@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from urllib.parse import urlencode
 
 import server
 import tx_owners
@@ -256,15 +257,18 @@ class OwnerUi(Owners):
         self.assertIn("<th>Owner</th>", html)
         joint, young, nanami, unspecified = (self.tr(html, d) for d in
                                              ("Harbor Fuel", "Fictional Gym", "Page Turner", "Mystery Shop"))
-        for tr, active in ((joint, (True, True)), (young, (True, False)), (nanami, (False, True)),
-                           (unspecified, (False, False))):
+        for description, tr, active in (("Harbor Fuel", joint, (True, True)), ("Fictional Gym", young, (True, False)),
+                                        ("Page Turner", nanami, (False, True)), ("Mystery Shop", unspecified, (False, False))):
+            rid = self.row(description, "2026-12")["row_id"]
             for person, on in zip(("Young", "Nanami"), active):
-                self.assertIn(f'<button type="submit" name="owner" value="{person}" class="pill-btn'
+                self.assertIn(f'<button type="submit" form="tx-act" name="act" value="owner-{rid}-{person}" class="pill-btn'
                               f'{" active" if on else ""}" aria-pressed="{"true" if on else "false"}"', tr)
-            self.assertIn('class="inline-form owner-pills"', tr)
-            self.assertIn(f'action="{EDIT}"', tr)
+            self.assertIn('<span class="inline-form owner-pills" title="Owner of this transaction (account owner:', tr)
+            self.assertNotIn("<form", tr)                       # the row carries no form of its own
             self.assertNotIn("overridden", tr)
             self.assertNotIn("tx-reset", tr)
+        self.assertEqual(html.count(f'<form id="tx-act" method="post" action="{EDIT}" hidden>'), 1)   # one shared form
+        self.assertEqual(html[html.index('<tbody>'):].count('name="token"'), 0)       # no per-row token bundles
         self.assertEqual(html.count("pill-btn"), 2 * html.count('class="acct-row"'))   # two pills on every row
 
     def test_overridden_row_shows_the_mark_and_reset_but_not_a_badge_and_reset_clears_it(self):
@@ -272,10 +276,10 @@ class OwnerUi(Owners):
         html = self.html()
         tr = self.tr(html, "Harbor Fuel")
         self.assertEqual(tr.count("active"), 1)
-        self.assertIn('name="owner" value="Nanami" class="pill-btn active" aria-pressed="true"', tr)
-        self.assertIn('name="owner" value="Young" class="pill-btn" aria-pressed="false"', tr)
+        self.assertIn(f'name="act" value="owner-{row_id}-Nanami" class="pill-btn active" aria-pressed="true"', tr)
+        self.assertIn(f'name="act" value="owner-{row_id}-Young" class="pill-btn" aria-pressed="false"', tr)
         self.assertIn("tx-ovr\">overridden", tr)
-        self.assertIn('name="action" value="owner_reset"', tr)
+        self.assertIn(f'form="tx-act" name="act" value="reset-{row_id}"', tr)
         self.assertNotIn('class="badge"', tr)
         self.assertEqual(html.count("overridden"), 1)       # only that row
         result = self.post(row_id, action="owner_reset", month="2026-12")
@@ -321,6 +325,26 @@ class OwnerUi(Owners):
         result = self.post(mystery, action="owner_reset", month="2026-12", view="Young")
         self.assertIn(f"&moved=Unspecified-{mystery}", result.location)
         self.assertIn("Now unassigned", self.html(result.location.split("?", 1)[1].split("#", 1)[0]))
+
+    def test_shared_form_buttons_post_owner_and_reset_by_act_value(self):
+        row = self.row("Fictional Gym", "2026-12")["row_id"]
+        body = lambda **kw: urlencode(dict(token=TOKEN, month="2026-12", view="Household", **kw)).encode()
+        result = post_transactions(self.db, EDIT, body(act=f"owner-{row}-Nanami"), token=TOKEN, allowed_views=VIEWS)
+        self.assertTrue(result.location.endswith(f"#tx-{row}"))
+        self.assertEqual(self.stored("Fictional Gym"), "Joint")
+        post_transactions(self.db, EDIT, body(act=f"owner-{row}-Young"), token=TOKEN, allowed_views=VIEWS)
+        self.assertEqual(self.stored("Fictional Gym"), "Nanami")
+        post_transactions(self.db, EDIT, body(act=f"reset-{row}"), token=TOKEN, allowed_views=VIEWS)
+        self.assertIsNone(self.stored("Fictional Gym"))
+        for bad in (f"owner-{row}", f"owner-{row}-Joint", f"owner-0-Young", f"reset-{row}-Young", "reset-", "x", f"owner-{row}-Young "):
+            with self.subTest(bad=bad), self.assertRaises(RouteProblem) as caught:
+                post_transactions(self.db, EDIT, body(act=bad), token=TOKEN, allowed_views=VIEWS)
+            self.assertEqual(caught.exception.status, 400)
+        for extra in (dict(row=row), dict(action="category"), dict(owner="Young")):     # never mixed with the explicit fields
+            with self.subTest(extra=extra), self.assertRaises(RouteProblem) as caught:
+                post_transactions(self.db, EDIT, body(act=f"reset-{row}", **extra), token=TOKEN, allowed_views=VIEWS)
+            self.assertEqual(caught.exception.status, 400)
+        self.assertIsNone(self.stored("Fictional Gym"))
 
     def test_malformed_owner_posts_are_refused(self):
         row = self.row("Fictional Gym", "2026-12")["row_id"]

@@ -50,7 +50,8 @@ def main(out):
             page.locator("details.classifier").screenshot(path=str(out / f"transactions-classifier-{name}.png"))
             page.locator("details.classifier > summary").click()
             row = page.locator("tr.acct-row", has_text="Metro Transit")
-            row.locator("summary", has_text="Edit").click()
+            row.get_by_role("link", name="Edit").click()      # reloads with this row's drawer open
+            row = page.locator("tr.acct-row", has_text="Metro Transit")
             row.scroll_into_view_if_needed()
             page.screenshot(path=str(out / f"transactions-drawer-{name}.png"))
             page.goto(origin + "/projections")

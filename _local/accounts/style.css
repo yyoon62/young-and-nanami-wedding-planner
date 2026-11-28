@@ -445,9 +445,53 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
 .tx-confirm a { display: inline-block; padding: .22rem .7rem; border-radius: 999px; background: #fdf0d5; color: #7a4b00;
   font-weight: 700; font-size: .86rem; text-decoration: none; border: 1px solid #e9cf9b; }
 .tx-confirm a:hover, .tx-confirm a[aria-current] { background: #f6e1b3; }
+/* Filters on one row; the section heading is redundant with the page title. */
+#cash-flow { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.history .month-nav { margin: 0 0 .4rem; }
+@media (min-width: 56rem) {
+  .history form[data-autofilter] .drawer-grid { grid-template-columns: 1.1fr .9fr .9fr 1.1fr 1.6fr .9fr; gap: .3rem .55rem; }
+}
+.history form[data-autofilter] .drawer-grid input, .history form[data-autofilter] .drawer-grid select { min-height: 32px; margin-top: .1rem; }
+.history + section > h2 { margin: .5rem 0 .35rem; font-size: 1rem; }
+.tx-tools { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 1.4rem; margin: .1rem 0 .35rem; }
+.tx-tools > details { margin: 0; }
+.tx-tools > details[open] { flex: 1 1 100%; }
+.tx-tools .classifier { margin: .1rem 0; }
+.tx-tools .tx-info { margin: .1rem 0; }
+.tx-notes { display: flex; flex-wrap: wrap; gap: 0 1.4rem; }
+
+/* One-line transaction rows (desktop): date, emoji + merchant + small account, owner pills, category, amount, Edit. */
+.tx-table.tx-compact th, .tx-table.tx-compact td { padding: .15rem .5rem; white-space: nowrap; }
+.tx-table.tx-compact thead th { padding: .3rem .5rem; }
+.tx-table.tx-compact td.date-cell { font-size: .82rem; }
+.tx-table.tx-compact th.acct-cell { width: 42%; max-width: 0; overflow: hidden; }
+.tx-table.tx-compact .acct-with-logo { flex-wrap: nowrap; gap: .45rem; min-width: 0; }
+.tx-table.tx-compact .inst-logo, .tx-table.tx-compact .inst-logo-img { width: 22px; height: 22px; flex: none; }
+.tx-table.tx-compact .logo-frame { width: 22px; height: 22px; flex: none; }
+.tx-table.tx-compact .acct-info { display: flex; align-items: baseline; gap: .15rem .5rem; min-width: 0; }
+.tx-table.tx-compact .acct-name { font-size: .9rem; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tx-table.tx-compact .tx-acct { flex: none; max-width: 9rem; overflow: hidden; text-overflow: ellipsis; font-size: .74rem; }
+.tx-table.tx-compact .tx-emoji { font-size: 1rem; }
+.tx-table.tx-compact .tx-cat { font-size: .86rem; }
+.tx-table.tx-compact .tx-flow, .tx-table.tx-compact .tx-flag, .tx-table.tx-compact .badge { margin-left: .3rem; font-size: .72rem; }
+.tx-table.tx-compact td.num { font-size: .92rem; }
+.tx-table.tx-compact .sec-chip { display: inline-block; text-decoration: none; }
+.tx-table.tx-compact .tx-drawer { white-space: normal; }
+.tx-table.tx-compact .tx-ovr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.tx-table.tx-compact .tx-reset { color: var(--accent-strong); font-weight: 700; }
 @media (max-width: 40rem) {
-  .tx-table.tx-compact tr.acct-row { grid-template-areas: "tx amt" "date date" "own own" "cat cat"; }
-  .tx-table.tx-compact tr.acct-row > td.owner-cell { grid-area: own; display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; }
+  /* Phone: a two-line card. Line 1 merchant + amount; line 2 date, pills, category, Edit (wraps if needed). */
+  .tx-table.tx-compact tr.acct-row { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; padding: .5rem .6rem; }
+  .tx-table.tx-compact tr.acct-row > th, .tx-table.tx-compact tr.acct-row > td { display: block; padding: 0; border: 0; white-space: normal; }
+  .tx-table.tx-compact tr.acct-row > th.acct-cell { order: 1; flex: 1 1 0; width: auto; max-width: none; min-width: 0; }
+  .tx-table.tx-compact tr.acct-row > td.num { order: 2; flex: none; }
+  .tx-table.tx-compact tr.acct-row > td.date-cell { order: 3; display: block; }
+  .tx-table.tx-compact tr.acct-row > td.owner-cell { order: 4; }
+  .tx-table.tx-compact tr.acct-row > td.cat-cell { order: 5; flex: 1 1 auto; min-width: 0; }
+  .tx-table.tx-compact tr.acct-row > td.act-cell { order: 6; }
+  .tx-table.tx-compact .acct-info { flex-wrap: wrap; }
+  .tx-table.tx-compact .acct-name { white-space: nowrap; max-width: 100%; }
+  .tx-table.tx-compact .tx-ovr { position: static; width: auto; height: auto; clip-path: none; }
 }
 /* ==== L26 end ==== */
 

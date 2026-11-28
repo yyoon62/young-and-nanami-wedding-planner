@@ -21,7 +21,7 @@ DEFAULT_EMOJI = {
     "Insurance": "🛡️", "Education": "🎓", "Gifts & Donations": "🎁", "Personal Care": "🧴",
     "Fees & Taxes": "🧾", "Other": "📦", INCOME: "💵",
 }
-TRANSFER_EMOJI, UNCATEGORIZED_EMOJI, CUSTOM_EMOJI = "🔄", "❔", "🏷️"
+TRANSFER_EMOJI, UNCATEGORIZED_EMOJI, CUSTOM_EMOJI = "🔄", "🏷️", "📌"
 PAYROLL = re.compile(r"\b(?:payroll|direct dep(?:osit)?|dir dep)\b")
 RESERVED = frozenset(("uncategorized", "needs review"))
 MAX_CATEGORIES = 60

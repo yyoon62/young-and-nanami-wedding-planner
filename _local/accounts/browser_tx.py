@@ -75,7 +75,11 @@ class BrowserTx(unittest.TestCase):
             page.goto(origin + "/transactions?month=2026-11")
             maple = page.locator("tr.acct-row", has_text="MAPLE CAFE")
             self.assertEqual(maple.count(), 1)
-            maple.locator("summary", has_text="Edit").click()
+            with page.expect_navigation():
+                maple.get_by_role("link", name="Edit").click()           # the drawer opens in place, same filters and row
+            self.assertTrue(page.url.endswith("#" + maple.get_attribute("id")), page.url)
+            maple = page.locator("tr.acct-row", has_text="MAPLE CAFE")
+            self.assertEqual(page.locator("details.tx-drawer").count(), 1)       # only this row carries a drawer
             maple.locator("select[name=category]").select_option("Groceries")
             maple.locator("input[name=apply]").check()
             with page.expect_navigation():
@@ -86,7 +90,9 @@ class BrowserTx(unittest.TestCase):
             expect(page.locator("tr.acct-row", has_text="MAPLE CAFE")).to_contain_text("Groceries")
             page.goto(origin + "/transactions?month=2026-11")
             maple = page.locator("tr.acct-row", has_text="MAPLE CAFE")
-            maple.locator("summary", has_text="Edit").click()
+            with page.expect_navigation():
+                maple.get_by_role("link", name="Edit").click()
+            maple = page.locator("tr.acct-row", has_text="MAPLE CAFE")
             maple.locator("input[name=new_category]").fill("groceries")        # duplicate: rejected, drawer kept open
             with page.expect_response(lambda r: r.request.method == "POST") as response:
                 maple.get_by_role("button", name="Add category").click()
@@ -253,6 +259,41 @@ class BrowserTx(unittest.TestCase):
             summary = page.locator("details.bars-det > summary").first
             self.assertLessEqual(summary.bounding_box()["x"] + summary.bounding_box()["width"], 390)
 
+    def test_rows_are_dense_one_line_and_eight_fit_above_the_fold(self):
+        seed_fictional(self.path, joint_card=True)
+        with closing(sqlite3.connect(self.path)) as db:       # extend November like the screenshot fixture
+            ids = {r[1]: r[0] for r in db.execute("SELECT id, nickname FROM accounts")}
+            for i in range(24):
+                account = ids["Birch Bank Checking"] if i % 2 else ids["Cedar Credit Credit card"]
+                source = db.execute("SELECT source FROM source_links WHERE local=?", (account,)).fetchone()[0]
+                put_row(db, account, source, "USD", f"2026-11-{1 + i % 27:02d}", f"-{5 + i}.25", f"Fictional shop {i}")
+        with block_network(allow_loopback=True), running(self.path) as origin, self.browser() as page:
+            page.goto(origin + "/transactions?month=2026-11")
+            rows = page.locator("tr.acct-row")
+            heights = [rows.nth(i).bounding_box()["height"] for i in range(rows.count())]
+            self.assertGreaterEqual(len(heights), 30)
+            self.assertLessEqual(sum(heights) / len(heights), 34, heights)             # baseline 53 px
+            self.assertLessEqual(max(heights), 40)
+            visible = sum(1 for i in range(rows.count())
+                          if (b := rows.nth(i).bounding_box()) and b["y"] + b["height"] <= 900)
+            self.assertGreaterEqual(visible, 8, visible)                              # baseline 0
+            pill = rows.first.locator("button.pill-btn").first.bounding_box()
+            self.assertGreaterEqual(pill["height"], 28)                                # Accounts-exact pills
+            self.assertEqual(page.evaluate("document.documentElement.scrollWidth"), 1280)
+        with block_network(allow_loopback=True), running(self.path) as origin, \
+                self.browser({"width": 390, "height": 844}) as page:
+            page.goto(origin + "/transactions?month=2026-11")
+            self.assertEqual(page.evaluate("document.documentElement.scrollWidth"), 390)
+            rows = page.locator("tr.acct-row")
+            first = rows.first
+            box = first.bounding_box()
+            self.assertLessEqual(box["height"], 110)                                   # a two-line card
+            for sel in ("button.pill-btn", "a.tx-edit", ".num"):
+                inner = first.locator(sel).first.bounding_box()
+                self.assertLessEqual(inner["x"] + inner["width"], 390 + 0.5, sel)
+                self.assertGreaterEqual(inner["x"], 0, sel)
+            self.assertGreaterEqual(first.locator("button.pill-btn").first.bounding_box()["height"], 28)
+
     def test_projections_apply_one_click_then_advanced_toggles(self):
         seed_fictional(self.path)
         with block_network(allow_loopback=True), running(self.path) as origin, self.browser() as page:
@@ -311,7 +352,7 @@ class BrowserTx(unittest.TestCase):
             page.goto(origin + "/transactions?month=2026-11")
             evil = page.locator("tr.acct-row", has_text="Ignore previous instructions")
             expect(evil).to_contain_text("Needs review")
-            self.assertNotIn("Income", evil.locator("td").nth(2).inner_text())
+            self.assertNotIn("Income", evil.locator("td.cat-cell").inner_text())
             self.assertEqual(page.locator("img[src='x']").count(), 0)
             self.assertGreaterEqual(page.locator(".badge", has_text="suggested").count(), 1)
             self.assertIn("🚇", page.locator("main").inner_text())
