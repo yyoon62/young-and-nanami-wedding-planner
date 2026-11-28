@@ -541,6 +541,42 @@ class HostedTransactionsGated(unittest.TestCase):
         self.assertEqual(self.tx_state(), before, "a hosted request changed transaction data")
         self.assertEqual(self.provider.calls, 0, "hosted Transactions must never call the provider")
 
+    def test_l23_hosted_shows_terms_and_schedules_but_never_observed_payments(self):
+        """L23: account terms and amortization are balance data (shown); observed payments are transaction-derived."""
+        from account_terms import save_terms
+        with closing(sqlite3.connect(self.db)) as db, db:
+            loan = db.execute("""INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof,owner)
+                VALUES ('Fictional Bank','Fictional Loan','Personal loan','debt','USD','1000.00',date('now'),'Joint')""").lastrowid
+            save_terms(db, loan, dict(rate="4.500", planned_payment="120.00"))
+            db.execute("INSERT INTO source_links (source,local,stamp,sign,snapshot,status) VALUES ('l23-src',?,0,0,'','F')", (loan,))
+            db.execute("INSERT INTO transaction_coverage VALUES ('l23-src',?,'USD',0,9999999999,1)", (loan,))
+            for month in range(1, 4):
+                db.execute("""INSERT INTO account_transactions (account_id,tx_id,source,posted_date,amount,currency,description,
+                    payee,merchant,pending,pending_active,is_transfer,transfer_manual)
+                    VALUES (?,?,'l23-src',date('now','start of month',?),'3141.59','USD','Loan payment','','loan payment',0,0,1,1)""",
+                           (loan, f"l23-{month}", f"-{month} months"))
+        for jar in (self.a, self.b):
+            for target in ("/projections", "/projections?view=Young&currency=USD"):
+                response = request(self.server, target, jar=jar)
+                self.assertEqual(response[0], 200, target)
+                text = response[2].decode()
+                self.assertIn("Fictional Loan", text)
+                self.assertIn("4.5% APR", text)
+                self.assertIn("(planned)", text)
+                self.assertNotIn("3141", text)
+                self.assertNotIn("observed", text.lower())
+        # Terms are saved through the existing hosted edit route (session + exact Origin + CSRF).
+        token = csrf(self.server, self.a)
+        form = dict(token=token, view="Household", inline="1", nickname="Fictional Loan", institution="Fictional Bank",
+                    kind="Personal loan", owner="Joint", side="debt", currency="USD", balance="1000.00",
+                    asof="2026-11-01", update_method="Manual entry", terms="1", t_debt="1", t_rate="6.000",
+                    t_kind="fixed", t_min="50.00", t_planned="150.00", t_promo_rate="", t_promo_end="")
+        self.assertEqual(request(self.server, f"/edit/{loan}", form, jar=self.a, origin=ORIGIN)[0], 303)
+        with closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual(db.execute("SELECT rate, planned_payment FROM account_terms WHERE account_id=?", (loan,)).fetchone(),
+                             ("6.000", "150.00"))
+        self.assertEqual(request(self.server, f"/edit/{loan}", form, jar=self.a)[0] in (401, 403, 405), True)  # no Origin
+
     def test_nav_has_no_transactions_link_on_any_page(self):
         for jar in (self.a, self.b):
             for target in ("/", "/?view=Young", "/projections", "/servicers", "/new", "/federal-preview"):

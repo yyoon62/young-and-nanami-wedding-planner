@@ -7,14 +7,20 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from dataclasses import replace
 
+from account_terms import VARIABLE_NOTE, load_terms
+from debt_engine import compare_orders, month_add as plan_month_add, run_plan, schedule
+from asset_inputs import asset_rows, make_assets
+from debt_inputs import debt_rows, make_plan
+from observed import observed_payments
 from projections import (
     AMOUNTS, MODES, OPTIONAL, PRECISION, RATES, STALE_DAYS, Assumptions, available_currencies,
     eligible_accounts, load_assumptions, project, save_assumptions, starting_balances,
     validate_assumptions,
 )
-from tx_periods import money as tx_money, suggest_monthly
+from tx_periods import money as tx_money, month_label, suggest_monthly
 
 
+ZERO_D = Decimal(0)
 PATH = "/projections"
 NET_WORTH = ("net_worth", "Net worth")
 OTHER_METRICS = (("investments", "Investments"), ("retirement", "Retirement"), ("debt", "Debt owed"))
@@ -58,9 +64,13 @@ def projection_get(db_path, target, *, page, token, people, section_for, places,
         currency = currency[0]
         assumptions = load_assumptions(db, view, currency, places(currency))
         suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
+        debts = (debt_rows(db, view, currency), load_terms(db), asset_rows(db, view, currency))
+        observed = (observed_payments(db, view, currency, today, [r[0] for r in debts[0]])
+                    if suggestions else None)     # transaction-derived: never when hosted
     seed = starting_balances(rows, currency, section_for, today)
     return 200, _page(page, _panel(view, currency, currencies, people, seed, assumptions,
-                                  places(currency), token, suggestion=suggestion)), None
+                                  places(currency), token, suggestion=suggestion,
+                                  debts=(debts[0], debts[1], debts[2], section_for, today), observed=observed)), None
 
 
 def projection_post(db_path, data, *, page, token, people, section_for, places, today, suggestions=False):
@@ -83,9 +93,13 @@ def projection_post(db_path, data, *, page, token, people, section_for, places, 
             return 303, "", projection_url(view, currency)
         saved = load_assumptions(db, view, currency, scale)
         suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
+        debts = (debt_rows(db, view, currency), load_terms(db), asset_rows(db, view, currency))
+        observed = (observed_payments(db, view, currency, today, [r[0] for r in debts[0]])
+                    if suggestions else None)
     seed = starting_balances(rows, currency, section_for, today)
     return 422, _page(page, _panel(view, currency, currencies, people, seed, saved, scale, token,
-                                  attempted=data, errors=errors, suggestion=suggestion)), None
+                                  attempted=data, errors=errors, suggestion=suggestion,
+                                  debts=(debts[0], debts[1], debts[2], section_for, today), observed=observed)), None
 
 
 def _apply_suggestion(db, data, view, currency, scale, today, suggestions, page):
@@ -326,10 +340,243 @@ def _debt_note(debt, target, surplus, money):
     return f'<p>{service}</p>'
 
 
+def _pct(value):
+    text = format(value, "f")
+    return (text.rstrip("0").rstrip(".") if "." in text else text) + "%"
+
+
+def _when(plan, month):
+    return month_label(plan_month_add(plan.start_month, month - 1))
+
+
+def _compare(plan, a, money):
+    """Avalanche vs snowball for the extra payment. States both results; claims a winner only on a real difference."""
+    c = compare_orders(plan, a)
+    head = '<h3>Avalanche vs snowball</h3>'
+    if not c.comparable:
+        return f'<div class="compare">{head}<p class="history-range">{escape(c.reason)}</p></div>'
+
+    def payoff_order(run):
+        done = sorted(plan.debts, key=lambda d: (run.outcomes[d.key].payoff_month, d.key))
+        return ", ".join(f"{escape(d.name)} ({escape(_when(plan, run.outcomes[d.key].payoff_month))})" for d in done)
+
+    def row(label, run, note=""):
+        return (f'<tr><th scope="row">{label}</th><td data-label="Debt-free"><div class="cell">'
+                f'{escape(_when(plan, run.last_payoff_month))} <span class="acct-sub">(month {run.last_payoff_month})</span></div></td>'
+                f'<td class="num" data-label="Total interest">{money(run.total_interest)}</td>'
+                f'<td data-label="Payoff order"><div class="cell">{payoff_order(run)}{note}</div></td></tr>')
+
+    ava, snow = c.avalanche, c.snowball
+    if c.winner:
+        other = "snowball" if c.winner == "avalanche" else "avalanche"
+        verdict = (f'<p><strong>Lower total interest: {c.winner}, by {money(c.interest_difference)}</strong> '
+                   f'(compared with {other}). Debt-free dates: avalanche {escape(_when(plan, ava.last_payoff_month))}, '
+                   f'snowball {escape(_when(plan, snow.last_payoff_month))}.</p>')
+    elif ava.last_payoff_month == snow.last_payoff_month:
+        verdict = '<p><strong>No difference:</strong> same total interest and the same debt-free date.</p>'
+    else:
+        verdict = (f'<p><strong>Same total interest;</strong> the debt-free dates differ (avalanche '
+                   f'{escape(_when(plan, ava.last_payoff_month))}, snowball {escape(_when(plan, snow.last_payoff_month))}).</p>')
+    return (f'<div class="compare">{head}'
+            f'<p class="history-range">Extra payment {money(ava.extra)} a month on top of planned payments, same in both '
+            'orders. Avalanche: highest current rate first (re-picked each month, so a promo ending changes the target); '
+            'snowball: smallest balance first. A paid-off debt’s planned payment rolls over. Neither order is assumed to '
+            'win: both are computed.</p>'
+            '<div class="table-wrap stack-table" tabindex="0" role="region" aria-label="Scrollable payoff order comparison">'
+            '<table class="acct-table"><thead><tr><th scope="col">Order</th><th scope="col">Debt-free</th>'
+            '<th scope="col" class="num">Total interest</th><th scope="col">Payoff order</th></tr></thead><tbody>'
+            + row("Avalanche", ava) + row("Snowball", snow)
+            + row("Planned payments only (no extra)", c.planned_only) + '</tbody></table></div>' + verdict + '</div>')
+
+
+def _observed_line(obs, plan, money):
+    """Observed payments beside the plan; only called when transaction-derived data is allowed (not hosted)."""
+    if obs is None:
+        return ""
+    if obs.average is None:
+        return f'<div class="acct-sub">Observed: {escape(obs.reason)}</div>'
+    if not any(obs.values.values()):
+        text = "no observed payments found (loan payments are only counted when marked as transfers)"
+    else:
+        by_month = " · ".join(f"{escape(month_label(m)[:3])} {money(v)}" for m, v in obs.values.items())
+        text = (f'{money(obs.average)} <strong>avg of {len(obs.months)} month{"s" if len(obs.months) != 1 else ""}</strong>'
+                f' ({by_month}); shown for comparison, not used in the projection')
+    more = (f'; {obs.unconfirmed} payment-like credit(s) not confirmed' if obs.unconfirmed else "")
+    return f'<div class="acct-sub">Observed: {text}{more}</div>'
+
+
+def _asset_section(assets, points, a, currency, money):
+    """Cash and savings accounts: own APY where set, "rate missing" (blended assumption) where not."""
+    if not assets:
+        return ""
+    own = {x.key for x in assets if x.apy is not None}
+    year1 = dict(points[min(12, len(points) - 1)].own)
+    last = dict(points[-1].own)
+    rows = []
+    for x in assets:
+        if x.apy is not None:
+            note = "assumes today’s rate holds" if x.rate_kind == "variable" else "fixed"
+            rate = f'{escape(_pct(x.apy))} APY <div class="acct-sub">{note}</div>'
+            after1, afterN = money(year1[x.key]), money(last[x.key])
+        else:
+            blended = a.hysa_apy if x.bucket == "hysa" else a.checking_apy
+            flag = ('<span class="rate-flag">rate missing</span>' if x.bucket == "hysa" else
+                    '<span class="acct-sub">no rate set</span>')
+            rate = f'{flag}<div class="acct-sub">blended {escape(_pct(blended))} assumed</div>'
+            after1 = afterN = "pooled"
+        stale = ' <span class="stale-pill">Stale</span>' if x.stale else ""
+        rows.append(f'<tr><th scope="row">{escape(x.name)}<div class="acct-sub">{escape(x.institution)}</div></th>'
+                    f'<td class="num" data-label="Balance"><div class="cell">{money(x.balance)}<div class="acct-sub">as of '
+                    f'<time>{escape(x.asof)}</time>{stale}</div></div></td>'
+                    f'<td data-label="Rate"><div class="cell">{rate}</div></td>'
+                    f'<td class="num" data-label="After 1 year">{after1}</td>'
+                    f'<td class="num" data-label="After {a.years} years">{afterN}</td></tr>')
+    pooled = len(assets) - len(own)
+    note = (f'<p class="history-range">Accounts with an APY grow at their own rate. {pooled} without one are pooled at the '
+            'blended assumptions (Advanced); new savings from monthly net savings also earn the blended savings rate. '
+            'A shortfall draws cash first, then savings, lowest APY first.</p>')
+    return ('<section class="history" aria-labelledby="asset-heading"><h2 id="asset-heading">Cash and savings growth</h2>'
+            + note + '<div class="table-wrap stack-table" tabindex="0" role="region" aria-label="Scrollable cash and savings table">'
+            '<table class="acct-table"><thead><tr><th scope="col">Account</th><th scope="col" class="num">Balance</th>'
+            '<th scope="col">Rate</th><th scope="col" class="num">After 1 year</th>'
+            f'<th scope="col" class="num">After {a.years} years</th></tr></thead><tbody>' + "".join(rows)
+            + '</tbody></table></div><p class="history-range">Nominal balances after growth and any withdrawals.</p></section>')
+
+
+def _debt_section(plan, entries, run, a, currency, scale, money, observed=None):
+    """Per-debt table, flags and schedules; every number comes from the same `debt_engine` as the chart."""
+    if not entries:
+        return ""
+    parts = ['<section class="history" aria-labelledby="debt-heading"><h2 id="debt-heading">Debts</h2>',
+             f'<p class="history-range">{escape(currency)} only. Interest is rounded to the cent each month, then the '
+             f'payment is applied at month-end. {escape(VARIABLE_NOTE)} Balances are the saved, dated snapshots; '
+             'nothing here refreshes them.</p>']
+    flat = [e for e in entries if e.kind == "float"]
+    pool = [e for e in entries if e.kind == "pool"]
+    modeled = [e for e in entries if e.kind == "modeled"]
+    if flat:
+        names = ", ".join(escape(e.name) for e in flat)
+        parts.append(f'<p class="notice" role="note"><strong>{len(flat)} card(s) assumed paid in full:</strong> balance '
+                     f'{money(plan.float_debt)} held flat, no interest ({names}). Their monthly purchases are in your '
+                     'spending; set a rate on Accounts and untick “paid in full” for a card that carries a balance.</p>')
+    if pool:
+        names = ", ".join(escape(e.name) for e in pool)
+        parts.append(f'<p class="notice" role="note"><strong>Rate missing for {len(pool)} debt(s):</strong> {money(plan.pool)} '
+                     f'({names}) uses the blended {escape(_pct(a.debt_apr))} APR and the debt payment target, as before. '
+                     'Add the rate in the account’s edit drawer on Accounts.</p>')
+    if plan.planned_total > a.surplus:
+        parts.append(f'<p class="notice" role="note"><strong>Planned payments ({money(plan.planned_total)} a month) exceed '
+                     f'monthly net savings ({money(a.surplus)}).</strong> They are still paid; the shortfall is drawn from '
+                     'cash, then savings, and counted as unfunded when those run out.</p>')
+    if modeled:
+        rows, details = [], []
+        interest_now = ZERO_D
+        for e in modeled:
+            d = e.debt
+            sched = schedule(d, plan.start_month, plan.places)
+            out = run.outcomes[d.key]
+            interest_now += sched.first_interest
+            stale = ' <span class="stale-pill">Stale</span>' if e.stale else ""
+            rate = f'{escape(_pct(d.rate))} APR · {d.rate_kind}'
+            if d.rate_kind == "variable":
+                rate += " (assumes today’s rate holds)"
+            if d.promo_rate is not None and d.promo_end:
+                if d.promo_end < plan.start_month:
+                    rate += f'<div class="acct-sub">Promo ended {escape(month_label(d.promo_end))}; regular rate applies.</div>'
+                else:
+                    rate += (f'<div class="acct-sub">{escape(_pct(d.promo_rate))} promo through '
+                             f'{escape(month_label(d.promo_end))}, then {escape(_pct(d.rate))}</div>')
+            source = ("planned" if e.terms.planned_payment is not None else "minimum")
+            with_extra = run.extra > 0
+            label = f"{source} + extra" if with_extra else f"({source})"
+            pay = money(d.payment) + f' <span class="acct-sub">{label}</span>' if d.payment else (
+                '<span class="rate-flag">payment missing</span>')
+            if observed is not None:
+                pay += _observed_line(observed.get(d.key), plan, money)
+            if out.payoff_month:
+                payoff = f'{escape(_when(plan, out.payoff_month))} <span class="acct-sub">(month {out.payoff_month})</span>'
+                total = money(out.total_interest)
+            elif sched.status in ("does_not_cover", "no_payment"):
+                payoff, total = '<strong>No payoff date</strong>', "—"
+            else:
+                payoff, total = 'Not paid off within 40 years', "—"
+            if with_extra:
+                # The extra payment changes the date and the interest: show the planned-only figures beside them.
+                if sched.status == "paid_off":
+                    p_payoff = (f'{escape(_when(plan, sched.payoff_month))} '
+                                f'<span class="acct-sub">(month {sched.payoff_month})</span>')
+                    p_total = money(sched.total_interest)
+                elif sched.status == "beyond_cap":
+                    p_payoff, p_total = "Not paid off within 40 years", "—"
+                else:
+                    p_payoff, p_total = "<strong>No payoff date</strong>", "—"
+                two = lambda with_, planned_: (f'<div class="pair"><span class="acct-sub">With extra:</span> {with_}</div>'
+                                               f'<div class="pair"><span class="acct-sub">Planned only:</span> {planned_}</div>')
+                payoff, total = two(payoff, p_payoff), two(total, p_total)
+            notes = []
+            if sched.status == "does_not_cover":
+                notes.append(f'<span class="rate-flag">payment does not cover interest</span> '
+                             f'<span class="acct-sub">(interest {money(sched.rows[-1].interest)} a month from month '
+                             f'{sched.stalled_from} vs payment {money(d.payment)}; the balance grows)</span>')
+            elif sched.status == "no_payment":
+                notes.append('<span class="acct-sub">Add a planned or minimum payment on Accounts; only extra payments reduce it.</span>')
+            if e.stale:
+                notes.append('<span class="acct-sub">Balance is stale; the schedule starts from it anyway.</span>')
+            note_html = "".join(f'<div class="acct-sub debt-note">{n}</div>' for n in notes)
+            rows.append(
+                f'<tr><th scope="row">{escape(e.name)}<div class="acct-sub">{escape(e.institution)}</div>{note_html}</th>'
+                f'<td class="num" data-label="Balance"><div class="cell">{money(d.balance)}<div class="acct-sub">as of <time>{escape(e.asof)}</time>{stale}</div></div></td>'
+                f'<td data-label="Rate"><div class="cell">{rate}</div></td><td class="pay" data-label="Payment"><div class="cell">{pay}</div></td>'
+                f'<td data-label="Payoff"><div class="cell">{payoff}</div></td><td class="num" data-label="Total interest"><div class="cell">{total}</div></td>'
+                f'<td class="num" data-label="Interest this month">{money(sched.first_interest)}</td></tr>')
+            if sched.rows:
+                shown = sched.rows[:120]
+                cell = lambda v: f'<span class="cur">{escape(currency)} </span>{money(v).split(" ", 1)[1]}'
+                body = "".join(
+                    f'<tr><th scope="row">{r.month}<div class="acct-sub">{escape(month_label(r.calendar))}</div></th>'
+                    f'<td class="num">{escape(_pct(r.rate))}</td><td class="num">{cell(r.interest)}</td>'
+                    f'<td class="num">{cell(r.payment)}</td><td class="num">{cell(r.balance)}</td></tr>'
+                    + (f'<tr class="rate-change"><td colspan="5">Month {r.month + 1}: rate changes to {escape(_pct(d.rate))} '
+                       f'(promo ended {escape(month_label(d.promo_end))})</td></tr>'
+                       if sched.promo_ended_month == r.month + 1 else "")
+                    for r in shown)
+                more = (f'<p class="history-range">First 120 of {len(sched.rows)} months shown.</p>'
+                        if len(sched.rows) > len(shown) else "")
+                details.append(
+                    f'<details><summary>Schedule: {escape(e.name)} (planned payment only)</summary>'
+                    '<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable debt schedule">'
+                    f'<table class="acct-table sched"><caption>Amounts in {escape(currency)}; month 1 is the current month.</caption>'
+                    '<thead><tr><th scope="col">Month</th>'
+                    '<th scope="col" class="num">Rate</th><th scope="col" class="num">Interest</th>'
+                    '<th scope="col" class="num">Payment</th><th scope="col" class="num">Balance after</th></tr></thead>'
+                    f'<tbody>{body}</tbody></table></div>{more}</details>')
+        extra = (f'<p class="history-range">Extra payments of {money(run.extra)} a month (debt target beyond planned '
+                 'payments, from positive net savings) go to debts without a rate first, then the highest current rate; '
+                 'a paid-off debt’s payment rolls over. The table above shows each debt with extra and planned only.</p>') if run.extra > 0 else ""
+        parts.append(
+            '<div class="table-wrap debt-table stack-table" tabindex="0" role="region" aria-label="Scrollable debt table">'
+            '<table class="acct-table"><thead><tr><th scope="col">Account</th><th scope="col" class="num">Balance</th>'
+            '<th scope="col">Rate</th><th scope="col" class="pay">Payment</th><th scope="col">Payoff</th>'
+            '<th scope="col" class="num">Total interest</th><th scope="col" class="num">Interest this month</th>'
+            '</tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>'
+            f'<p>Current monthly interest cost of these debts: <strong>{money(interest_now)}</strong> '
+            '(at today’s rates, before payments).</p>' + extra + _compare(plan, a, money) + "".join(details))
+    parts.append('</section>')
+    return "".join(parts)
+
+
 def _panel(view, currency, currencies, people, seed, assumptions, scale, token, *, attempted=None, errors=None,
-           suggestion=None):
+           suggestion=None, debts=None, observed=None):
     money = lambda value: _money(value, currency, scale)
-    points = project(seed.balances, assumptions)
+    plan = entries = run = None
+    if debts is not None:
+        rows, terms, arows, section_for, today = debts
+        plan, entries = make_plan(rows, terms, section_for, scale, today)
+        run = run_plan(plan, assumptions)
+        assets = make_assets(arows, terms, section_for, today)
+    else:
+        assets = ()
+    points = project(seed.balances, assumptions, plan, assets)
     extra_metrics = (("unclassified", "Unclassified assets"),) if seed.unclassified_count else ()
     if seed.count:
         date_range = f'<time>{seed.oldest}</time>'
@@ -362,11 +609,13 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
     budget = (f'<p>Monthly take-home income: <strong>{money(assumptions.income)}</strong> · Monthly spending: '
               f'<strong>{money(assumptions.spending)}</strong> · Monthly net savings before modeled allocations '
               f'(income minus spending): <strong>{money(surplus)}</strong> (nominal).</p>')
-    debt_note = _debt_note(seed.balances.debt, assumptions.debt_target, surplus, money)
+    debt_note = _debt_note(seed.balances.debt if plan is None else plan.pool, assumptions.debt_target, surplus, money)
+    debt_section = _debt_section(plan, entries, run, assumptions, currency, scale, money, observed) if plan is not None else ""
     return (
         _selector(view, currency, currencies, people)
         + '<p class="notice"><strong>Illustrative projection only:</strong> not financial advice or a forecast. '
           'The model uses saved balances; visiting this page does not refresh them.</p>'
+        + _suggestion_card(view, currency, token, suggestion, assumptions, scale)
         + '<section class="history" aria-labelledby="projection-heading"><h2 id="projection-heading">'
           'Net worth projection</h2>'
         + asof + budget + debt_note + gap + f'<p>{escape(unit_label)}.</p>'
@@ -374,7 +623,8 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
         + _chart(points, money, assumptions.years)
         + _annual(points, ANNUAL_METRICS + extra_metrics, money, unit_label)
         + '</section>'
-        + _suggestion_card(view, currency, token, suggestion, assumptions, scale)
+        + debt_section
+        + _asset_section(assets, points, assumptions, currency, money)
         + _form(view, currency, scale, token, attempted if attempted is not None else values, errors or {})
         + '<details><summary>How this projection works</summary>'
           '<p>Start is the sum of included saved balances, even when their dates differ; the scenario does not '
@@ -383,7 +633,7 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
           'The model treats both as available to spend, even if a real account has restrictions. '
           'Every debt-side balance is debt, regardless of section.</p>'
           '<p>Each month, interest and growth accrue first (annual effective rates converted geometrically; '
-          'debt APR divided by 12). At month-end, surplus goes to debt up to its balance and target, '
+          'debt APR divided by 12). Debts with a rate in Accounts follow their own schedule instead (below). At month-end, surplus goes to debt up to its balance and target, '
           'then retirement and investments up to their targets, then HYSA. Debt accrual ends when paid off. '
           'Deficits draw cash, then HYSA; any remainder is unfunded.</p>'
           '<p>Cash flows and targets are constant in nominal terms. Today’s purchasing power discounts each '

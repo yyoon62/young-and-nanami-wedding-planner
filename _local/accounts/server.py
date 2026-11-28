@@ -20,7 +20,9 @@ from history import history_panel, install as install_history, net_worth
 from hosted_auth import (Auth, Config, Rejected, CHALLENGE_TTL, SESSION_TTL, db_path, external,
                          load_env_file, offline_lock, private, require_crypto)
 from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo, sanitize_domain
+from account_terms import install_terms, load_terms, parse_terms, save_terms
 from projections import install_projections
+import terms_ui
 from projections_ui import projection_get, projection_post
 from transactions import install_transactions, sync_transactions
 from tx_classifier import after_sync as classify_after_sync
@@ -118,6 +120,7 @@ def init_db(path):
         install_history(db)
         install_projections(db)
         install_transactions(db)
+        install_terms(db)
 
 
 NAV = (("/", "Accounts"), ("/transactions", "Transactions"), ("/projections", "Projections"),
@@ -197,6 +200,14 @@ def section_totals(rows):
     return " · ".join(money(v, c) for c, v in sorted(totals.items()))
 
 
+def r_terms(row):
+    """Terms attached by render_home (None for rows read elsewhere)."""
+    try:
+        return row["_terms"]
+    except (KeyError, IndexError):
+        return None
+
+
 def inline_edit_drawer(r, today, token, view, opened=False, values=None, error=None):
     rid = r["id"]
     v = values if (opened and values) else dict(r)
@@ -222,6 +233,8 @@ def inline_edit_drawer(r, today, token, view, opened=False, values=None, error=N
             f'<label>Balance as of<input required type="date" name="asof" max="{today}" value="{escape(str(v.get("asof", "")))}"></label>'
             f'<label>Update method<input required name="update_method" maxlength="100" value="{escape(str(v.get("update_method", "")))}"></label>'
             f'</div>'
+            + terms_ui.drawer_fields(r, r_terms(r), section_for, values if opened else None,
+                                     side=v.get("side"), currency=v.get("currency")) +
             f'<div class="drawer-actions">'
             f'<div class="drawer-left"><button type="submit">Save changes</button>'
             f'<button type="button" class="secondary drawer-cancel">Cancel</button></div>'
@@ -288,7 +301,8 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
     return (f'<tr class="acct-row{" is-excluded" if excluded else ""}">'
             f'<th scope="row" class="acct-cell"><div class="acct-with-logo">{logo}<div class="acct-info">'
             f'<div class="acct-head"><span class="acct-name">{name}</span>{rename_pop}</div>'
-            f'<div class="acct-sub-row"><span class="acct-sub">{inst}</span>{sec_pop}</div></div></div></th>'
+            f'<div class="acct-sub-row"><span class="acct-sub">{inst}</span>{sec_pop}'
+            f'{terms_ui.flag_html(r, r_terms(r), section_for)}</div></div></div></th>'
             f'<td class="num bal-cell"><span class="amt {side}">{signed_money(amt, c, side)}</span> {side_toggle}</td>'
             f'<td class="owner-cell">{owner_cell}</td>'
             f'<td class="date-cell"><time datetime="{r["asof"]}">{r["asof"]}</time>{stale_tag}</td>'
@@ -587,6 +601,8 @@ class Handler(BaseHTTPRequestHandler):
             rows = db.execute(f"""SELECT * FROM accounts WHERE {owner_scope}
                                  ORDER BY excluded, side, institution COLLATE NOCASE, nickname COLLATE NOCASE, id""",
                               (view, view)).fetchall()
+            terms = load_terms(db)
+            rows = [dict(r, _terms=terms.get(r["id"])) for r in rows]
             points = db.execute(f"""SELECT h.*, a.asof AS current_asof
                                    FROM balance_history AS h JOIN accounts AS a ON a.id = h.account_id
                                    WHERE a.excluded = 0 AND {owner_scope} ORDER BY h.asof, h.account_id""",
@@ -844,6 +860,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(303, "", location=view_url(back))
         try:
             values = validate(data, date.today())
+            terms = (parse_terms(data, values["currency"], values["side"], places(values["currency"]),
+                                 section_for, values["kind"]) if edit and data.get("terms") == "1" else None)
         except ValueError as exc:
             if edit and data.get("inline") == "1":
                 return self.render_home(back, error=str(exc), status=422, open_edit=edit[1], edit_values=data)
@@ -858,6 +876,8 @@ class Handler(BaseHTTPRequestHandler):
                 db.execute("""UPDATE accounts SET institution=?,nickname=?,kind=?,side=?,currency=?,
                               balance=?,asof=?,owner=?,update_method=?,side_manual=? WHERE id=?""",
                            (*params, side_manual, edit[1]))
+                if terms is not None:
+                    save_terms(db, edit[1], terms)
             else:
                 db.execute("""INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof,
                               owner,update_method,excluded,side_manual) VALUES (?,?,?,?,?,?,?,?,?,0,1)""", params)

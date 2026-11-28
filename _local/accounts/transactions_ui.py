@@ -21,7 +21,7 @@ from logos import cached_logo, domain_for, fallback_svg
 from transactions import (CURRENCY, VIEWS, category_context, edit_transaction, manual_index, month_dates,
                           monthly_snapshot)
 from pathlib import Path
-from tx_categories import list_categories
+from tx_categories import default_emoji, list_categories
 from tx_classifier import enabled as classifier_enabled, load_key, model_name, run_classifier, set_setting, stats as classifier_stats
 
 
@@ -97,7 +97,8 @@ def _stamp(stamp):
 _SOURCES = {"suggested": ' <span class="badge" title="Suggested by the classifier; not confirmed">suggested</span>',
             "manual": ' <span class="acct-sub">(set by you)</span>',
             "rule": ' <span class="acct-sub">(merchant rule)</span>',
-            "stamp": ' <span class="acct-sub">(saved rule)</span>'}
+            "stamp": ' <span class="acct-sub">(saved rule)</span>',
+            "default": ' <span class="acct-sub">(built-in default)</span>'}
 
 
 def _data_dir(db):
@@ -133,11 +134,13 @@ def _classifier_panel(db, f, token):
             + form +
             f'<p class="acct-sub">{escape(key_line)} Model: {escape(model_name())}.<br>'
             f'{escape(status)}<br>Merchants so far: {totals}.</p>'
+            '<p class="acct-sub">Only cleaned merchant names (no amounts, dates or accounts) are sent, once each.</p>'
+            '<details class="classifier-details"><summary>Privacy details</summary>'
             '<p class="acct-sub">Only cleaned merchant text (for example “maple cafe”) leaves this computer, once per '
             'merchant: never amounts, dates, accounts, owners or ids. Descriptions that look like Zelle, Venmo, '
             'payroll, transfers or checks are not sent. A bare person’s name or an employer in a description '
             'cannot be recognised and would be sent. Suggestions are labelled, never override anything you set, '
-            'and are not counted as confirmed. Not available when the dashboard is hosted.</p></details>')
+            'and are not counted as confirmed. Not available when the dashboard is hosted.</p></details></details>')
 
 
 def _drawer(r, f, token, categories, manual, attempt, error):
@@ -338,7 +341,7 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
             f'<tr class="acct-row" id="tx-{r["row_id"]}"><td class="date-cell"><time datetime="{when}">{when}</time>'
             f'<div class="acct-sub">{label}</div></td><th scope="row" class="acct-cell">'
             f'<div class="acct-with-logo">{_logo(r, logo_dir)}<div class="acct-info">'
-            f'<span class="acct-name">{escape(r["emoji"]) + " " if r["emoji"] else ""}{escape(r["description"] or "No description")}</span>{payee}'
+            f'<span class="acct-name"><span class="tx-emoji" aria-hidden="true">{escape(r["emoji"] or default_emoji(r["category"], r["effective_transfer"]))}</span> {escape(r["description"] or "No description")}</span>{payee}'
             f'<div class="acct-sub">SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}</div>'
             f'</div></div></th>'
             f'<td class="num"><span class="cur">{escape(r["currency"])}</span> {_amount(r)}</td>'
