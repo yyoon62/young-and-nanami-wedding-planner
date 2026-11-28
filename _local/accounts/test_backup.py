@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import sys
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ from demo_batch import Demo
 from hosted_auth import Auth, Rejected, digest, offline_lock, state_lock
 from test_history import BASE, DAY, request, running
 from test_hosted import CONFIG, NOW
+import seed_fictional
 
 
 @unittest.skipUnless(shutil.which("gpg"), "GnuPG is needed for real backup tests")
@@ -49,8 +51,8 @@ class BackupFlow(unittest.TestCase):
             raise AssertionError(proc.stderr.decode())
         return proc.stdout
 
-    def invoke(self, action, path, *args, home=None, recipient=None, okay=True):
-        env = dict(os.environ, GNUPGHOME=str(home or self.encrypt_only), ACCOUNTS_BACKUP_DIR=str(self.destination),
+    def invoke(self, action, path, *args, home=None, recipient=None, okay=True, destination=None):
+        env = dict(os.environ, GNUPGHOME=str(home or self.encrypt_only), ACCOUNTS_BACKUP_DIR=str(destination or self.destination),
                    ACCOUNTS_BACKUP_RECIPIENT=recipient or self.recipient)
         result = subprocess.run(["/bin/sh", "deploy/backup-sqlite.sh", action, "--db", path, *args],
                                 env=env, capture_output=True, text=True)
@@ -142,3 +144,65 @@ class BackupFlow(unittest.TestCase):
             auth.exchange(pending, "not-a-token")  # Cleared challenge short-circuits before verification.
         with running(db_path) as server:
             self.assertIn(account["nickname"], request(server)[1])
+
+
+    # ---- L24: the timer runs without the service, so backup and restore apply the same policy as the guard
+    def work(self):
+        """A private scratch state directory and backup directory, so these tests share nothing with the one above."""
+        folder = Path(tempfile.mkdtemp(dir=self.root))
+        state, destination = folder / "state", folder / "backup-disk"
+        state.mkdir(mode=0o700)
+        destination.mkdir(mode=0o700)
+        return state, destination
+
+    def test_backup_refuses_a_database_that_holds_transaction_rows(self):
+        state, destination = self.work()
+        db_path = state / "tx.db"
+        seed_fictional.seed(db_path)  # balances plus transaction, coverage and merchant-rule rows
+        before = db_path.read_bytes()
+        for flags in ((), ("--dry-run",)):
+            message = self.invoke("backup", db_path, *flags, okay=False, destination=destination)
+            self.assertIn("account_transactions holds 3 rows", message)
+            self.assertIn("export_scrubbed.py", message)
+        self.assertEqual(list(destination.iterdir()), [], "no archive, no staging file")
+        self.assertEqual(db_path.read_bytes(), before)
+
+    def test_restore_refuses_an_archive_that_holds_transaction_rows(self):
+        state, destination = self.work()
+        source = state / "tx-source.db"
+        seed_fictional.seed(source)
+        raw = source.read_bytes()
+        archive = destination / "old-pre-l24.sqlite3.gpg"
+        archive.write_bytes(self.gpg(self.encrypt_only, "--rfc4880", "--force-mdc", "--trust-model", "always",
+                                     "--recipient", self.recipient, "--encrypt", raw=raw))
+        archive.chmod(0o600)
+        target = state / "host.db"
+        target.touch(0o600)
+        before = target.read_bytes()
+        message = self.invoke("restore", target, "--archive", archive, home=self.recovery, okay=False,
+                              destination=destination)
+        self.assertIn("account_transactions holds 3 rows", message)
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_exported_file_round_trips_backup_and_restore_without_changing_any_balance_row(self):
+        state, destination = self.work()
+        source = state / "mac.db"
+        seed_fictional.seed(source)
+        with closing(sqlite3.connect(source)) as db, db:
+            db.execute("UPDATE balance_history SET recorded_at='2020-01-01T00:00:00.000Z'")
+        exported = state / "exported.db"
+        done = subprocess.run([sys.executable, "deploy/export_scrubbed.py", "--db", str(source), "--out", str(exported)],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("Encrypted backup written", self.invoke("backup", exported, destination=destination))
+        archive, = destination.iterdir()
+        self.assertNotIn(seed_fictional.SENTINEL_MERCHANT.encode(), self.gpg(self.recovery, "--decrypt", str(archive)))
+        restored = state / "restored.db"
+        self.assertIn("Restored dashboard database", self.invoke("restore", restored, "--archive", archive,
+                                                                home=self.recovery, destination=destination))
+        for table in ("accounts", "balance_history", "source_links", "projection_assumptions"):
+            with closing(sqlite3.connect(source)) as a, closing(sqlite3.connect(restored)) as b:
+                self.assertEqual(b.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall(),
+                                 a.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall(), table)
+        with closing(sqlite3.connect(restored)) as b:
+            self.assertEqual(b.execute("SELECT COUNT(*) FROM account_transactions").fetchone(), (0,))

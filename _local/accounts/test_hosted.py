@@ -7,6 +7,7 @@ from http.client import HTTPConnection
 from http.cookies import SimpleCookie
 import json
 from importlib.util import find_spec
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -23,6 +24,7 @@ from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "deploy"))
 from demo_batch import Demo
+from hosted_guard import Refused
 from hosted_auth import Auth, CHALLENGE_TTL, SESSION_TTL, Config, GoogleKeys, Rejected, db_path, offline_lock
 from server import serve
 from test_history import BASE, DAY
@@ -461,12 +463,17 @@ class HostedTransactionsGated(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.db = Path(tmp.name).resolve() / "fictional.db"
-        seed_fictional.seed(self.db)
+        # L24: a hosted start refuses a database that already holds transaction rows, so seed balances only,
+        # start the hosted server, and THEN insert the rows. They still exist while hosted serves ("gated off
+        # is not absent"); tx_state() below proves no hosted request changes them.
+        seed_fictional.seed(self.db, transactions=False)
         self.now = NOW
         self.provider = CountingProvider()
         ctx = running(self.db, self.rsa, lambda: self.now, provider=self.provider)
         self.server = ctx.__enter__()
         self.addCleanup(ctx.__exit__, None, None, None)
+        seed_fictional.add_transactions(self.db)
+        self.assertEqual([len(rows) for rows in self.tx_state()], [3, 1, 1])
         self.a, self.b = {}, {}
         assert login(self.server, self.rsa, self.a, email="member.alpha@gmail.com")[0] == 204
         assert login(self.server, self.rsa, self.b, sub="200002", email=CONFIG.members[1],
@@ -581,7 +588,7 @@ class HostedTransactionsGated(unittest.TestCase):
         for jar in (self.a, self.b):
             for target in ("/", "/?view=Young", "/?chart=projection", "/servicers", "/new", "/federal-preview"):
                 html = request(self.server, target, jar=jar)[2].decode()
-                self.assertIn("Federal", html, target)
+                self.assertIn("Add account", html, target)                # nav still rendered
                 self.assertNotIn('href="/projections"', html, target)      # L29: Projection is a tab on Accounts
                 self.assertNotIn("/transactions", html, target)
                 self.assertNotIn(">Transactions<", html, target)
@@ -612,6 +619,190 @@ class HostedTransactionsGated(unittest.TestCase):
         self.assertEqual(self.provider.calls, 0)
 
 
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def hosted_cli(db, *, wait=True, timeout=10):
+    cmd = [sys.executable, "server.py", "--port", "0", "--hosted", "--db", str(db)]
+    env = dict(os.environ, **ENV)
+    if wait:
+        return subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
+    return subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+@unittest.skipUnless(HAS_CRYPTO, "install requirements-hosted.txt for hosted acceptance")
+class HostedGuard(unittest.TestCase):
+    """L24: --hosted refuses a database that holds transaction-derived rows, read-only and before any write."""
+    SENTINEL = seed_fictional.SENTINEL_MERCHANT.encode()
+
+    @classmethod
+    def setUpClass(cls):
+        tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(tmp.cleanup)
+        cls.rsa = RSA(tmp.name)
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name).resolve()
+        self.db = self.dir / "state" / "accounts.sqlite3"
+
+    def listing(self):
+        return sorted(p.name for p in self.db.parent.iterdir())
+
+    def test_serve_refuses_transaction_rows_before_any_write_and_names_the_table(self):
+        seed_fictional.seed(self.db)  # balances plus transaction, coverage and merchant-rule rows
+        before = sha(self.db)
+        with self.assertRaises(Refused) as caught:
+            with running(self.db, self.rsa):
+                self.fail("must not start")
+        text = str(caught.exception)
+        self.assertIn("account_transactions holds 3 rows", text)
+        self.assertIn("transaction_merchant_rules holds 1 row", text)
+        self.assertIn("export_scrubbed.py", text)
+        self.assertEqual(sha(self.db), before, "the database must be byte-identical after a refusal")
+        self.assertEqual(self.listing(), ["accounts.sqlite3", "accounts.sqlite3.hosted-lock"])  # no journal, no logos dir
+
+    def test_refusal_precedes_migration_even_on_an_old_schema(self):
+        """init_db would add many tables; an untouched old-shaped file proves it never ran."""
+        self.db.parent.mkdir(mode=0o700)
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("CREATE TABLE account_transactions (merchant TEXT)")
+            db.execute("INSERT INTO account_transactions VALUES ('ZZ-SENTINEL-COFFEE')")
+        self.db.chmod(0o600)
+        before = sha(self.db)
+        with self.assertRaises(Refused):
+            with running(self.db, self.rsa):
+                self.fail("must not start")
+        self.assertEqual(sha(self.db), before)
+        with closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual(db.execute("SELECT name FROM sqlite_schema").fetchall(), [("account_transactions",)])
+
+    def test_cli_exits_nonzero_with_a_clear_message_and_leaves_the_file_alone(self):
+        seed_fictional.seed(self.db)
+        before = sha(self.db)
+        result = hosted_cli(self.db)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Hosted startup refused:", result.stderr)
+        self.assertIn("account_transactions holds 3 rows", result.stderr)
+        self.assertIn("export_scrubbed.py", result.stderr)
+        self.assertNotIn("Open ", result.stdout)
+        self.assertEqual(sha(self.db), before)
+        self.assertEqual(self.listing(), ["accounts.sqlite3", "accounts.sqlite3.hosted-lock"])
+
+    def test_one_transaction_classifier_or_rule_row_is_enough(self):
+        for statement in ("INSERT INTO classifier_cache (clean_key,category,status) VALUES ('x','Dining','suggested')",
+                          "INSERT INTO classifier_settings VALUES ('enabled','1')",
+                          "INSERT INTO transaction_categories(name, builtin, sort) VALUES ('Custom', 0, 1000)",
+                          "INSERT INTO transaction_merchant_rules (account_id,source,currency,merchant,category) "
+                          "VALUES (1,'s','USD','m','c')"):
+            with self.subTest(statement=statement):
+                path = self.dir / f"{abs(hash(statement))}" / "accounts.sqlite3"
+                seed_fictional.seed(path, transactions=False)
+                with closing(sqlite3.connect(path)) as db, db:
+                    db.execute(statement)
+                before = sha(path)
+                with self.assertRaises(Refused):
+                    with running(path, self.rsa):
+                        self.fail("must not start")
+                self.assertEqual(sha(path), before)
+
+    def test_fresh_path_balance_only_seed_and_restart_after_hosted_tables_exist_all_start(self):
+        seed_fictional.seed(self.db, transactions=False)
+        for second_start in (False, True):  # the second start also sees the app's own hosted tables and rows
+            with running(self.db, self.rsa, lambda: NOW) as server:
+                jar = {}
+                self.assertEqual(login(server, self.rsa, jar)[0], 204)
+                self.assertEqual(request(server, "/", jar=jar)[0], 200)
+        with closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM hosted_identities").fetchone(), (1,))
+            self.assertGreater(db.execute("SELECT COUNT(*) FROM transaction_categories").fetchone()[0], 0)
+        fresh = self.dir / "never" / "accounts.sqlite3"
+        for _ in range(2):  # brand-new path, then restart on what the first start created
+            with running(fresh, self.rsa):
+                pass
+
+    def test_exported_file_starts_hosted_with_history_and_terms_intact_and_no_spurious_rows(self):
+        source = self.dir / "mac" / "accounts.sqlite3"
+        seed_fictional.seed(source)
+        with closing(sqlite3.connect(source)) as db, db:
+            from account_terms import save_terms
+            loan = db.execute("""INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof,owner)
+                VALUES ('Fictional Bank','Fictional Loan','Personal loan','debt','USD','1000.00','2026-11-01','Joint')""").lastrowid
+            save_terms(db, loan, dict(rate="4.500", planned_payment="120.00"))
+            db.execute("UPDATE balance_history SET recorded_at='2020-01-01T00:00:00.000Z'")
+        out = self.dir / "export.sqlite3"
+        done = subprocess.run([sys.executable, "deploy/export_scrubbed.py", "--db", str(source), "--out", str(out)],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.db.parent.mkdir(mode=0o700)
+        os.replace(out, self.db)  # "install" the file as the service database
+        query = {name: f"SELECT * FROM {name} ORDER BY 1, 2" for name in
+                 ("accounts", "balance_history", "account_terms", "source_links", "projection_assumptions")}
+        with closing(sqlite3.connect(source)) as a:
+            expected = {name: a.execute(sql).fetchall() for name, sql in query.items()}
+        with hosted_cli(self.db, wait=False) as process:
+            try:
+                self.assertTrue(select.select([process.stdout], [], [], 10)[0], "hosted server did not start")
+                self.assertIn(f"Open {ORIGIN}/", process.stdout.readline())
+            finally:
+                process.send_signal(signal.SIGINT)
+                process.wait(timeout=10)
+            self.assertEqual(process.returncode, 0, process.stderr.read())
+        with closing(sqlite3.connect(self.db)) as b:
+            for name, sql in query.items():
+                self.assertEqual(b.execute(sql).fetchall(), expected[name], name)
+            self.assertEqual(b.execute("SELECT COUNT(*) FROM account_transactions").fetchone(), (0,))
+        self.assertNotIn(self.SENTINEL, self.db.read_bytes())
+
+
+    def emptied_but_not_clean(self):
+        """Rows deleted (so the row guard passes) but the sentinel remains in the file's free pages."""
+        seed_fictional.seed(self.db)
+        with closing(sqlite3.connect(self.db)) as db, db:
+            checking = db.execute("SELECT id FROM accounts WHERE nickname='Fictional Checking'").fetchone()[0]
+            db.executemany("""INSERT INTO account_transactions (account_id,tx_id,source,posted_date,amount,currency,
+                description,payee,merchant,pending,pending_active) VALUES (?,?,'bulk','2026-01-01','-1.00','USD',
+                'ZZ-SENTINEL-COFFEE','','ZZ-SENTINEL-COFFEE',0,0)""", ((checking, f"b{i}") for i in range(5000)))
+        with closing(sqlite3.connect(self.db)) as db, db:
+            for table in ("account_transactions", "transaction_coverage", "transaction_merchant_rules"):
+                db.execute(f"DELETE FROM {table}")
+        marker = b"ZZ-SENTINEL-COFFEE"
+        self.assertIn(marker, self.db.read_bytes(), "precondition: remnants sit in free pages")
+        return marker
+
+    def test_startup_compaction_removes_remnants_of_deleted_rows(self):
+        """The guard counts rows, so a file whose tables are empty passes; compaction then purges the free pages."""
+        marker = self.emptied_but_not_clean()
+        with closing(sqlite3.connect(self.db)) as db:
+            before = db.execute("SELECT * FROM balance_history ORDER BY 1,2").fetchall()
+        with running(self.db, self.rsa) as server:
+            self.assertGreater(server.reclaimed, 100)
+        self.assertNotIn(marker, self.db.read_bytes())
+        with closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual(db.execute("PRAGMA freelist_count").fetchone(), (0,))
+            self.assertEqual(db.execute("SELECT * FROM balance_history ORDER BY 1,2").fetchall(), before)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM accounts").fetchone(), (6,))
+
+    def test_compaction_is_skipped_when_there_are_no_free_pages_and_logged_once_by_the_cli(self):
+        seed_fictional.seed(self.db, transactions=False)
+        with running(self.db, self.rsa) as server:
+            self.assertEqual(server.reclaimed, 0)
+        self.db.unlink()  # now the same database with remnants, started through the CLI
+        self.emptied_but_not_clean()
+        with hosted_cli(self.db, wait=False) as process:
+            try:
+                self.assertTrue(select.select([process.stdout], [], [], 10)[0], "hosted server did not start")
+                first, second = process.stdout.readline(), process.stdout.readline()
+            finally:
+                process.send_signal(signal.SIGINT)
+                process.wait(timeout=10)
+            self.assertEqual(process.returncode, 0, process.stderr.read())
+        self.assertRegex(first, r"^Hosted startup: compacted the database file \(\d+ free pages removed\)\.$")
+        self.assertIn(f"Open {ORIGIN}/", second)
+
+
 @unittest.skipUnless(HAS_CRYPTO, "install requirements-hosted.txt for hosted acceptance")
 class HostedProjections(unittest.TestCase):
     """L21: /projections POST needs session + exact Origin + CSRF; assumptions are household-shared."""
@@ -626,11 +817,12 @@ class HostedProjections(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.db = Path(tmp.name).resolve() / "fictional.db"
-        seed_fictional.seed(self.db)
+        seed_fictional.seed(self.db, transactions=False)  # L24: rows are added after the hosted start
         self.now = NOW
         ctx = running(self.db, self.rsa, lambda: self.now)
         self.server = ctx.__enter__()
         self.addCleanup(ctx.__exit__, None, None, None)
+        seed_fictional.add_transactions(self.db)
         self.a, self.b = {}, {}
         assert login(self.server, self.rsa, self.a, email="member.alpha@gmail.com")[0] == 204
         assert login(self.server, self.rsa, self.b, sub="200002", email=CONFIG.members[1],

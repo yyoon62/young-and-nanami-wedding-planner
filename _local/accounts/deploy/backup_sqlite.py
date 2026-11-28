@@ -13,6 +13,7 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from hosted_auth import AUTH_TABLES, db_path, external, offline_lock, private, state_lock
+from hosted_guard import describe, violations, EXPORT_COMMAND
 from server import DEFAULT_DB
 
 
@@ -40,6 +41,10 @@ def checked_image(db, current=None):
     names = tables(db)
     if not TABLES <= names or db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
         raise ValueError("Snapshot failed dashboard schema or integrity checks.")
+    found = violations(db)
+    if found:  # the timer runs without the service: never archive (or restore) data the host must not hold
+        raise ValueError(f"Snapshot refused: {describe(found)}. Transaction data must not be on the host; "
+                         f"install a file made by {EXPORT_COMMAND} instead.")
     with db:
         for table in AUTH_TABLES:
             if table in names:

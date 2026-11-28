@@ -7,6 +7,9 @@ There is deliberately no default path, so this can never touch the normal dashbo
 Seeding is refused when the database already holds any account. Every record is invented;
 the transaction rows carry sentinel text/amounts so a test can prove they never leave the
 database (hosted mode gates the Transactions tab, but the rows still exist at rest).
+
+Since L24 a hosted start refuses a database that already holds those rows. To rehearse hosted mode seed with
+--no-transactions, start the dashboard, then run --add-transactions to prove they stay hidden.
 """
 import argparse
 from contextlib import closing
@@ -39,7 +42,7 @@ ACCOUNTS = (  # institution, nickname, kind, side, currency, balance, owner
 )
 
 
-def seed(path):
+def seed(path, transactions=True):
     path = Path(path)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.close(os.open(path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600))  # private from the start
@@ -63,28 +66,48 @@ def seed(path):
                            (account_id, (today - timedelta(days=31 * months)).isoformat(),
                             str((Decimal(balance) * Decimal(factor)).quantize(step)), currency, side))
         checking = db.execute("SELECT id FROM accounts WHERE nickname='Fictional Checking'").fetchone()[0]
-        # A source link plus coverage makes these rows visible to the *local* Transactions page, so a
-        # leak in hosted mode would actually show them (unlinked/uncovered rows are filtered out).
+        # The Bridge link is balance-level data (it travels in a scrubbed export); coverage and rows are not.
         db.execute("""INSERT INTO source_links (source, local, stamp, sign, snapshot, status)
                       VALUES (?,?,0,0,'','Fictional')""", (TX_SOURCE, checking))
-        epoch = date(1970, 1, 1)
-        db.execute("""INSERT INTO transaction_coverage (source, account_id, currency, start_at, end_at, revision)
-                      VALUES (?,?,'USD',?,?,1)""",
-                   (TX_SOURCE, checking, (today - timedelta(days=120) - epoch).days * 86400,
-                    (today + timedelta(days=70) - epoch).days * 86400))
-        posted = today.isoformat()
-        for tx_id, amount, merchant, description in (
-            ("fictional-tx-1", SENTINEL_AMOUNTS[0], SENTINEL_MERCHANT, SENTINEL_DESCRIPTION),
-            ("fictional-tx-2", SENTINEL_AMOUNTS[1], SENTINEL_MERCHANT, SENTINEL_DESCRIPTION + " B"),
-            ("fictional-tx-3", "2500.00", "FICTIONAL PAYROLL CO", "FICTIONAL PAYROLL"),
-        ):
-            db.execute("""INSERT INTO account_transactions (account_id, tx_id, source, posted_date,
-                          pending_date, amount, currency, description, payee, merchant, pending,
-                          pending_active) VALUES (?,?,?,?,NULL,?,'USD',?,?,?,0,0)""",
-                       (checking, tx_id, TX_SOURCE, posted, amount, description, merchant, merchant))
-        db.execute("""INSERT INTO transaction_merchant_rules (account_id, source, currency, merchant, category)
-                      VALUES (?,?,'USD',?,'Fictional category')""", (checking, TX_SOURCE, SENTINEL_MERCHANT))
+        if transactions:
+            _transactions(db, checking, today)
         save_assumptions(db, "Household", "USD", Assumptions(income=Decimal(PROJECTION_INCOME)))
+
+
+def _transactions(db, checking, today):
+    """Fictional transaction rows. Coverage plus the source link make them visible to the *local* Transactions
+    page, so a leak in hosted mode would actually show them (unlinked/uncovered rows are filtered out)."""
+    epoch = date(1970, 1, 1)
+    db.execute("""INSERT INTO transaction_coverage (source, account_id, currency, start_at, end_at, revision)
+                  VALUES (?,?,'USD',?,?,1)""",
+               (TX_SOURCE, checking, (today - timedelta(days=120) - epoch).days * 86400,
+                (today + timedelta(days=70) - epoch).days * 86400))
+    posted = today.isoformat()
+    for tx_id, amount, merchant, description in (
+        ("fictional-tx-1", SENTINEL_AMOUNTS[0], SENTINEL_MERCHANT, SENTINEL_DESCRIPTION),
+        ("fictional-tx-2", SENTINEL_AMOUNTS[1], SENTINEL_MERCHANT, SENTINEL_DESCRIPTION + " B"),
+        ("fictional-tx-3", "2500.00", "FICTIONAL PAYROLL CO", "FICTIONAL PAYROLL"),
+    ):
+        db.execute("""INSERT INTO account_transactions (account_id, tx_id, source, posted_date,
+                      pending_date, amount, currency, description, payee, merchant, pending,
+                      pending_active) VALUES (?,?,?,?,NULL,?,'USD',?,?,?,0,0)""",
+                   (checking, tx_id, TX_SOURCE, posted, amount, description, merchant, merchant))
+    db.execute("""INSERT INTO transaction_merchant_rules (account_id, source, currency, merchant, category)
+                  VALUES (?,?,'USD',?,'Fictional category')""", (checking, TX_SOURCE, SENTINEL_MERCHANT))
+
+
+def add_transactions(path):
+    """Insert the fictional transaction rows into an already seeded database, even while a server runs on it.
+
+    Hosted tests and rehearsals use this AFTER the hosted dashboard has started: since L24 a hosted start
+    refuses a database that already holds transaction rows, but "gated off, not absent" must stay testable.
+    """
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("BEGIN IMMEDIATE")
+        checking = db.execute("SELECT id FROM accounts WHERE nickname='Fictional Checking'").fetchone()
+        if checking is None:
+            raise SystemExit("Seed the database first.")
+        _transactions(db, checking[0], date.today())
 
 
 def add_session(path, email):
@@ -106,13 +129,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--add-session", metavar="EMAIL")
+    parser.add_argument("--no-transactions", action="store_true",
+                        help="seed balances only (the hosted dashboard refuses a database with transaction rows)")
+    parser.add_argument("--add-transactions", action="store_true",
+                        help="add the fictional transaction rows to a seeded database, for gating checks while hosted")
     args = parser.parse_args()
     os.umask(0o077)
     if args.add_session:
         add_session(args.db, args.add_session)
         print("Fictional session added.")
+    elif args.add_transactions:
+        add_transactions(args.db)
+        print("Fictional transaction rows added.")
     else:
-        seed(args.db)
+        seed(args.db, transactions=not args.no_transactions)
         print("Fictional database seeded.")
 
 

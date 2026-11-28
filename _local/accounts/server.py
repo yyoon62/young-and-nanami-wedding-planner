@@ -18,6 +18,7 @@ from bridge import Bridge, Problem
 from bulk import Batch, schema
 from history import install as install_history, net_worth
 import net_worth_ui
+from hosted_guard import Refused, reclaim, require_clean
 from hosted_auth import (Auth, Config, Rejected, CHALLENGE_TTL, SESSION_TTL, db_path, external,
                          load_env_file, offline_lock, private, require_crypto)
 from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo, sanitize_domain
@@ -124,8 +125,7 @@ def init_db(path):
         install_terms(db)
 
 
-NAV = (("/", "Accounts"), ("/transactions", "Transactions"),
-       ("/new", "Add account"), ("/servicers", "Statements"), ("/federal-preview", "Federal preview"))
+NAV = (("/", "Accounts"), ("/transactions", "Transactions"), ("/new", "Add account"))
 
 
 def nav(current=None):
@@ -920,13 +920,15 @@ def serve(path, port, provider=None, logo_dir=None, *, hosted=None, keys=None, c
         if hosted:
             require_crypto()
             path = db_path(path)
+            locks.enter_context(offline_lock(path))
+            os.close(os.open(path, os.O_CREAT | os.O_RDONLY | os.O_NOFOLLOW, 0o600))
+            require_clean(path)  # read-only, before init_db or any other write: no transaction data on the host
             if logo_dir:
                 logo_dir = external(logo_dir)
                 logo_dir.mkdir(mode=0o700, exist_ok=True)
                 private(logo_dir, directory=True)
-            locks.enter_context(offline_lock(path))
-            os.close(os.open(path, os.O_CREAT | os.O_RDONLY | os.O_NOFOLLOW, 0o600))
         init_db(path)
+        reclaimed = reclaim(path) if hosted else 0  # purge deleted rows from free pages; the guard counts rows, not bytes
         if hosted:
             auth = Auth(path, hosted, keys=keys, **({"clock": clock} if clock is not None else {}))
             # Construct unbound so state_lock is available even if binding fails.
@@ -941,6 +943,7 @@ def serve(path, port, provider=None, logo_dir=None, *, hosted=None, keys=None, c
         else:
             server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.auth = auth
+    server.reclaimed = reclaimed
     server.token = None if hosted else secrets.token_urlsafe(32)
     server.db = path
     server.batch = Batch(path, provider, validate) if provider else None
@@ -988,6 +991,8 @@ if __name__ == "__main__":
         logo_dir = None if args.demo else path.parent / "logos"
         try:
             server = stack.enter_context(serve(path, args.port, provider, logo_dir=logo_dir, hosted=hosted))
+        except Refused as exc:
+            parser.exit(1, f"Hosted startup refused: {exc}\n")
         except (OSError, ValueError, sqlite3.Error) as exc:
             if not hosted:
                 raise
@@ -996,6 +1001,8 @@ if __name__ == "__main__":
         if args.demo:
             with closing(sqlite3.connect(path)) as db, db:
                 seed(db)
+        if server.reclaimed:
+            print(f"Hosted startup: compacted the database file ({server.reclaimed} free pages removed).", flush=True)
         address = hosted.origin if hosted else f"http://127.0.0.1:{server.server_port}"
         print(f"Open {address}/ · Ctrl-C to stop", flush=True)
         try:

@@ -141,8 +141,9 @@ class BrowserFlow(unittest.TestCase):
             before = page.locator("main").inner_text()
             for field in ["Cedar", "Birch", "USD 11.10", "JPY -500"]:
                 self.assertIn(field, before)
-            open_link = page.get_by_role("link", name="Federal preview")
-            open_link.click()
+            self.assertEqual(page.get_by_role("link", name="Federal preview").count(), 0)  # no longer in the nav
+            open_preview = lambda: page.goto(origin.rstrip("/") + "/federal-preview")
+            open_preview()
             page.wait_for_load_state()
             select, result = page.locator("#loan"), page.locator("#result")
 
@@ -181,7 +182,7 @@ class BrowserFlow(unittest.TestCase):
             self.assertEqual(requests[start:], [])
             page.get_by_role("link", name="Cancel and return to accounts").click()
             self.assertEqual(page.locator("main").inner_text(), before)
-            open_link.click()
+            open_preview()
             page.wait_for_load_state()
             inspect()
             self.assertTrue(select.is_hidden())
