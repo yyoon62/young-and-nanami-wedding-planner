@@ -113,3 +113,63 @@ class Fixture:
         return post_transactions(self.db, path, urlencode(data).encode(), token=TOKEN,
                                  allowed_views=allowed_views, can_sync=can_sync)
 
+
+
+from contextlib import contextmanager
+import socket
+from unittest import mock
+
+
+@contextmanager
+def block_network(allow_loopback=False):
+    """Fail any attempt to resolve or connect (optionally allowing 127.0.0.1/::1 for local servers)."""
+    real_connect, real_create, real_resolve = socket.socket.connect, socket.create_connection, socket.getaddrinfo
+
+    def local(address):
+        return isinstance(address, tuple) and address[0] in ("127.0.0.1", "::1", "localhost")
+
+    def connect(self, address):
+        if allow_loopback and local(address):
+            return real_connect(self, address)
+        raise AssertionError(f"network blocked: {address!r}")
+
+    def create(address, *a, **k):
+        if allow_loopback and local(address):
+            return real_create(address, *a, **k)
+        raise AssertionError(f"network blocked: {address!r}")
+
+    def resolve(host, *a, **k):
+        if allow_loopback and host in ("127.0.0.1", "::1", "localhost"):
+            return real_resolve(host, *a, **k)
+        raise AssertionError(f"network blocked: {host!r}")
+
+    with mock.patch.object(socket.socket, "connect", connect), \
+            mock.patch.object(socket, "create_connection", create), \
+            mock.patch.object(socket, "getaddrinfo", resolve):
+        yield
+
+
+def put_row(db, account, source, currency, day, amount, description, *, payee="", transfer=None):
+    """Insert a posted fictional transaction directly (months of history without a sync)."""
+    from transactions import _merchant
+    with db:
+        db.execute("""INSERT INTO account_transactions (account_id, tx_id, source, posted_date, pending_date,
+            amount, currency, description, payee, merchant, pending, pending_active, is_transfer, transfer_manual)
+            VALUES (?,?,?,?,NULL,?,?,?,?,?,0,0,?,?)""",
+                   (account, f"{description}-{day}-{amount}", source, day, amount, currency, description, payee,
+                    _merchant(payee or description), bool(transfer), transfer is not None))
+
+
+def cover(db, start_iso, end_iso):
+    """Mark every linked account as fetched over [start, end) so months count as covered."""
+    from transactions import _midnight
+    from datetime import date
+    lo, hi = _midnight(date.fromisoformat(start_iso)), _midnight(date.fromisoformat(end_iso))
+    with db:
+        db.execute("DELETE FROM transaction_coverage")
+        db.execute("""INSERT INTO transaction_coverage SELECT l.source, a.id, a.currency, ?, ?, 1
+                      FROM source_links l JOIN accounts a ON a.id=l.local""", (lo, hi))
+
+
+def source_of(db, account):
+    return db.execute("SELECT source FROM source_links WHERE local=?", (account,)).fetchone()[0]

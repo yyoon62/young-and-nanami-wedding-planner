@@ -470,7 +470,7 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
     scope = "Household" if household_matching else view
     # A competing edge of the other leg may be six days from the displayed row.
     # Three days of query padding can falsely turn an ambiguous edge into a pair.
-    rows = _dicts(db.execute(f"""SELECT t.*, a.kind, a.owner, a.nickname, a.institution,
+    rows = _dicts(db.execute(f"""SELECT t.*, a.kind, a.owner, a.nickname, a.institution, a.logo_domain,
         r.is_transfer AS merchant_transfer {_VISIBLE}
         LEFT JOIN transaction_merchant_rules r ON r.account_id=t.account_id AND r.source=t.source
             AND r.currency=t.currency AND r.merchant=t.merchant

@@ -271,7 +271,7 @@ class TransactionsTest(Fixture, unittest.TestCase):
         self.cat('"><b>Groceries</b>')
         self.post(row, action="category", category='"><b>Groceries</b>')
         rendered = html("")
-        for raw in ("<script>", "<svg", "<img", "<b>Groceries", "style=", "https://"):
+        for raw in ("<script>", "<svg onload", "<img", "<b>Groceries", "style=", "https://"):
             self.assertNotIn(raw, rendered)
         for safe in ("&lt;script&gt;", "&lt;svg", "&lt;img", "&lt;b&gt;Groceries", "-10.123",
                      "Not linked; transaction data unavailable", TOKEN, 'action="/transactions/edit"'):

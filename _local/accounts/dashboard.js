@@ -66,3 +66,27 @@
     }
   });
 })();
+
+// Transactions: filters apply as they change (no submit button). Without JS a noscript button appears.
+(() => {
+  const form = document.querySelector("form[data-autofilter]");
+  if (!form) return;
+  let timer = 0;
+  const go = () => { window.clearTimeout(timer); form.requestSubmit(); };
+  form.addEventListener("change", event => {
+    if (event.target.matches("input[type=search], input[name=q]")) return; // q applies on input
+    go();
+  });
+  const find = form.querySelector("input[name=q]");
+  if (find) {
+    find.addEventListener("input", () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => { sessionStorage.setItem("txFocus", "q"); form.requestSubmit(); }, 350);
+    });
+    if (sessionStorage.getItem("txFocus") === "q") {
+      sessionStorage.removeItem("txFocus");
+      find.focus();
+      find.setSelectionRange(find.value.length, find.value.length);
+    }
+  }
+})();

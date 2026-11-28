@@ -663,12 +663,12 @@ class Handler(BaseHTTPRequestHandler):
                     db.execute("BEGIN")
                     body = render_transactions(db, urlsplit(self.path).query, token=self.token,
                                                allowed_views={"Household", *PEOPLE},
-                                               can_sync=bool(self.server.batch))
+                                               can_sync=bool(self.server.batch), logo_dir=self.server.logo_dir)
             except RouteProblem as exc:
                 return self.send(exc.status, page(f'<p class="notice" role="alert">{escape(str(exc))}</p>',
                                                   current=TX_PATH, heading="Transactions"))
             banner = "".join(f'<p class="notice" role="status">{escape(n)}</p>' for n in notices)
-            return self.send(200, page(banner + body, current=TX_PATH, heading="Transactions"))
+            return self.send(200, page(banner + body, current=TX_PATH, heading="Transactions"), scripts=True)
         if path == "/new":
             return self.send(200, form({"currency": "USD", "asof": str(date.today()), "owner": "Unspecified",
                                         "update_method": DEFAULT_METHOD}, path, self.token))
@@ -749,7 +749,8 @@ class Handler(BaseHTTPRequestHandler):
                                                allowed_views={"Household", *PEOPLE},
                                                can_sync=bool(self.server.batch))
             except RouteProblem as exc:
-                return self.send(exc.status, page(problem_body(exc), current=TX_PATH, heading="Transactions"))
+                return self.send(exc.status, page(problem_body(exc), current=TX_PATH, heading="Transactions"),
+                                 scripts=True)
             if result.sync:
                 try:
                     sync_res = sync_transactions(self.server.batch, include_pending=result.include_pending)
