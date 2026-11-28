@@ -34,7 +34,79 @@ Grant Type Code:XX
 """
 
 
+RATE_FILE = """Loan Type Code:D1
+Loan Type Description:DIRECT STAFFORD SUBSIDIZED
+Loan Award ID:FICTIONAL-AWARD
+Loan Outstanding Principal Balance:$2,000.00
+Loan Outstanding Principal Balance as of Date:04/30/2026
+Loan Outstanding Interest Balance:$10.00
+Loan Outstanding Interest Balance as of Date:04/30/2026
+Loan Interest Rate Type Code:F
+Loan Interest Rate Type Description:FIXED
+Loan Interest Rate:4.50%
+Loan Actual Interest Rate:4.50%
+Loan Statutory Interest Rate:4.99%
+Loan Repayment Plan Type Code:SF
+Loan Type Code:D2
+Loan Outstanding Principal Balance:$500.00
+Loan Outstanding Principal Balance as of Date:04/30/2026
+Loan Outstanding Interest Balance:$0.00
+Loan Outstanding Interest Balance as of Date:04/30/2026
+Loan Interest Rate Type:FIXED
+Loan Interest Rate:6.50%
+Loan Type Code:D3
+Loan Outstanding Principal Balance:$300.00
+Loan Outstanding Principal Balance as of Date:04/30/2026
+Loan Interest Rate Type Code:F
+Loan Interest Rate Type Description:FIXED
+Loan Interest Rate:4,5%
+"""
+
+
 class BrowserFlow(unittest.TestCase):
+    def test_rates_are_displayed_for_reading_only(self):
+        """L23 slice D (display-only): the selected loan's listed rates appear; nothing is sent, saved or filled in."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "fictional.db"
+            with serve(db, 0) as server:
+                thread = Thread(target=server.serve_forever)
+                thread.start()
+                try:
+                    with sync_playwright() as pw:
+                        browser = pw.chromium.launch(channel=os.environ.get("BROWSER_CHANNEL", "chrome"))
+                        ctx = browser.new_context(service_workers="block")
+                        requests, console = [], []
+                        ctx.on("request", lambda r: requests.append((r.method, r.url, r.post_data_buffer)))
+                        page = ctx.new_page()
+                        page.on("console", lambda m: console.append(m.text))
+                        page.on("pageerror", lambda e: console.append(str(e)))
+                        page.goto(f"http://127.0.0.1:{server.server_port}/federal-preview")
+                        start = len(requests)
+                        with page.expect_file_chooser() as chooser:
+                            page.get_by_role("button", name="Choose My Aid Data file").click()
+                        chooser.value.set_files({"name": "fictional.txt", "mimeType": "text/plain", "buffer": RATE_FILE.encode()})
+                        page.locator("#status:not(:empty)").wait_for()
+                        select, result = page.locator("#loan"), page.locator("#result")
+                        select.select_option("0")
+                        text = result.inner_text()
+                        for expected in ("Principal as of: 04/30/2026", "Rate type: FIXED", "Interest rate: 4.50%",
+                                         "Actual interest rate: 4.50%", "Statutory interest rate: 4.99%",
+                                         "type a rate you have confirmed into the account’s edit drawer yourself"):
+                            self.assertIn(expected, text)
+                        select.select_option("1")           # older layout name: not attributed, shown as nothing, no error
+                        self.assertNotIn("Interest rate", result.inner_text())
+                        select.select_option("2")           # malformed value is flagged, never trusted
+                        self.assertIn("Interest rate: Unrecognized rate", result.inner_text())
+                        self.assertEqual(page.locator("input").evaluate_all("els => els.map(e => e.type)"), ["file"])
+                        self.assertEqual(page.evaluate("[localStorage.length, sessionStorage.length, document.cookie]"), [0, 0, ""])
+                        self.assertEqual(requests[start:], [])
+                        self.assertEqual(console, [])
+                        browser.close()
+                finally:
+                    server.shutdown()
+                    thread.join()
+
+
     def test_preview(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "fictional.db"
