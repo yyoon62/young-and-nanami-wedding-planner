@@ -88,7 +88,7 @@ Use this runbook only after review. The Pi serves an HTTP backend on **127.0.0.1
    systemctl --user daemon-reload && systemctl --user restart accounts-dashboard.service
    ```
 
-   With Bridge enabled, any signed-in member can press **Sync balances** (balances only). Transactions are synced only on a host that opted in (section 3b). Remove the drop-in and restart to disable.
+   With Bridge enabled, any signed-in member can press **Sync balances** (balances only). Transactions are synced only on a host that opted in (section 3c). Remove the drop-in and restart to disable.
 
 ## 2a. Move your existing balances to the Pi (scrubbed export)
 
@@ -127,7 +127,7 @@ sudo ls -l /home/acctdash/.local/share/planner-accounts/      # expect -rw------
 
 **4. Start** with `systemctl --user start accounts-dashboard.service` (section 3). The guard passes, the app's own migration adds its empty tables, and the first sign-in pins each Google identity. Check balances and the history chart against the Mac. If you later enrol Bridge on the Pi (section 2.5), the exported links should make the first sync report existing accounts as updated or unchanged, not added: `source_links` keys depend on the Bridge host and path, not on the token, so this is expected, but it is the same duplicate check as the release checklist and was **not** verified against a real Bridge. The Bridge credential itself is never part of the export.
 
-**The guard.** (Section 3b: a host that opted in with `--transactions` additionally allows `hosted_guard.TRANSACTION_TABLES`; everything else below still applies to it.) On every `--hosted` start, before the app opens the database for writing, the server reads the file read-only and lists any table outside the allowlist that holds rows (the built-in category names the app seeds itself, and the Pi's own sign-in and quota tables, are allowed). If any exist it exits with status 1 and prints which table and how many rows, for example `Hosted startup refused: table account_transactions holds 3 rows. Transaction data must not be on the host. On the machine that holds your data run python3 deploy/export_scrubbed.py --out FILE and install that file instead.` The file is left byte-identical and nothing is migrated. `deploy/backup-sqlite.sh` applies the same rule to the snapshot it archives or restores, so the nightly timer cannot archive such a database either. Do **not** respond by deleting the offending rows on the Pi; build a fresh export and install it.
+**The guard.** (Section 3c: a host that opted in with `--transactions` additionally allows `hosted_guard.TRANSACTION_TABLES`; everything else below still applies to it.) On every `--hosted` start, before the app opens the database for writing, the server reads the file read-only and lists any table outside the allowlist that holds rows (the built-in category names the app seeds itself, and the Pi's own sign-in and quota tables, are allowed). If any exist it exits with status 1 and prints which table and how many rows, for example `Hosted startup refused: table account_transactions holds 3 rows. Transaction data must not be on the host. On the machine that holds your data run python3 deploy/export_scrubbed.py --out FILE and install that file instead.` The file is left byte-identical and nothing is migrated. `deploy/backup-sqlite.sh` applies the same rule to the snapshot it archives or restores, so the nightly timer cannot archive such a database either. Do **not** respond by deleting the offending rows on the Pi; build a fresh export and install it.
 
 **Why the export is the only supported transfer path.** The guard counts rows, not bytes. A file in which transactions were deleted has empty tables but can still hold their text in SQLite free pages, so it passes the guard. To close that gap a hosted start compacts the file (SQLite `VACUUM`) when it has free pages and logs `Hosted startup: compacted the database file (N free pages removed).`; that purges SQLite's own pages but cannot reach copies a filesystem or flash storage may keep elsewhere. Backups are unaffected (they compact in memory before encrypting). A file made by the export has no such history, so it is the one path with a guarantee. Copying the DB file, restoring an old archive, or `sqlite3 .dump | sqlite3` are not supported.
 
@@ -181,7 +181,34 @@ systemctl --user list-timers accounts-sync.timer
 - **Budget:** each run is one SimpleFIN request (plus up to 3 retries on failure); the shared limit is 24 per day.
 - Remove by `systemctl --user disable --now accounts-sync.timer`.
 
-## 3b. Transactions on the Pi (opt-in, L30b)
+## 3b. Discord notifications (every sync, a daily digest, problem alerts)
+
+Optional. Without `~/.config/planner-accounts/notify.env` everything below is silent and does nothing.
+
+- **Channels:** `#accounts-sync` (one quiet line per sync: the daily timer and the **Sync balances** button) and `#pi-health` (a daily digest at ~07:00, plus alerts that ping you).
+- **Webhooks, not the bot.** Create one webhook per channel (Channel settings → Integrations → Webhooks). A webhook can only post to its channel; do **not** put a bot token on the Pi. Write the file as the service user, mode `0600` in a `0700` directory, never in Git or in chat:
+
+  ```ini
+  DISCORD_SYNC_WEBHOOK=https://discord.com/api/webhooks/<id>/<token>
+  DISCORD_HEALTH_WEBHOOK=https://discord.com/api/webhooks/<id>/<token>
+  DISCORD_PING_USER=<your numeric Discord user id>
+  ```
+
+  A file that is world-readable, has other keys, or a URL that is not exactly a Discord webhook turns notifications off with one stderr line (no secret in it). Revoke a leaked URL by deleting that webhook in Discord.
+- **What is posted:** counts, ages and statuses only: `✅ Sync (scheduled): 22 unchanged · requests 2/24`, uptime, load, CPU temperature, disk and memory use, whether the dashboard and timers are healthy, newest backup age. Never balances, account or institution names, amounts or provider messages (they are never passed to the message builders; `test_notify.py` pins it). Discord keeps messages and shows them on lock screens, which is why.
+- **Alerts** come from an hourly check: dashboard not answering, last good sync or newest backup older than 36 hours, disk over 80%, memory over 90%, CPU over 80 °C, a failed `accounts-*` unit. An alert pings once when the problem starts, again after 24 hours if it is still there, and a no-ping "Recovered" line follows when it ends. A failed sync also pings. If Discord itself is unreachable the alert is retried the next hour, and nothing here can make a sync fail.
+- **Install the units** (as the service user, or with the `--machine` prefix from section 3):
+
+  ```sh
+  cd ~/planner/_local/accounts/deploy
+  install -m 644 accounts-health-digest.service accounts-health-digest.timer accounts-health-check.service accounts-health-check.timer ~/.config/systemd/user/
+  systemctl --user daemon-reload
+  systemctl --user enable --now accounts-health-digest.timer accounts-health-check.timer
+  ```
+
+  Try one by hand: `systemctl --user start accounts-health-check.service` then read its journal. Remove by disabling the two timers and deleting `notify.env`.
+
+## 3c. Transactions on the Pi (opt-in, L30b)
 
 By the household's decision (2026-11-28) the Pi is the **one main copy** and holds transactions too. This is an explicit opt-in on three switches, so a host that did not choose it keeps refusing transaction data exactly as in section 2a:
 
