@@ -35,6 +35,7 @@ SECTION_KIND = {
     "Other": "Other",
 }
 DEFAULT_METHOD = "Manual entry"
+REMOVE_WARNING = "This account and all its saved balance history will be permanently deleted."
 KINDS = ("Checking", "Savings", "Cash", "Brokerage", "Retirement", "Pension",
          "Health savings", "Digital assets", "Credit card", "Mortgage", "Student loan",
          "Personal loan", "Auto loan", "Line of credit", "Other")
@@ -214,7 +215,7 @@ def inline_edit_drawer(r, today, token, view, opened=False, values=None, error=N
             f'<div class="drawer-left"><button type="submit">Save changes</button>'
             f'<button type="button" class="secondary drawer-cancel">Cancel</button></div>'
             f'<details class="inline-pop remove-pop"><summary class="danger-link">Remove account…</summary>'
-            f'<div class="remove-confirm"><span>Delete this snapshot permanently?</span>'
+            f'<div class="remove-confirm"><span>{REMOVE_WARNING}</span>'
             f'<button type="submit" formaction="/remove/{rid}" formnovalidate class="danger-btn">Confirm remove</button>'
             f'</div></details></div></form></td></tr>')
 
@@ -287,7 +288,7 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
 
 
 def dashboard(rows, today, view, token, timeline, has_sync=False, notices=(), error=None,
-              open_edit=None, edit_values=None, use_logos=False):
+              open_edit=None, edit_values=None, use_logos=False, has_backdated=False):
     active = [r for r in rows if not r["excluded"]]
     excluded = [r for r in rows if r["excluded"]]
     totals = {}
@@ -359,7 +360,7 @@ def dashboard(rows, today, view, token, timeline, has_sync=False, notices=(), er
         f'<div class="top-bar"><nav class="owner-tabs" aria-label="Inventory views">{links}</nav>'
         f'<div class="top-actions">{sync_html}<a class="{add_cls}" href="/new">+ Add account</a></div></div>'
         f'<div class="cards">{cards}</div>'
-        f'{history_panel(timeline, money)}'
+        f'{history_panel(timeline, money, has_backdated=has_backdated)}'
         f'{table}{excluded_html}'
         f'<details class="help"><summary>How totals work</summary><p>Household counts every active account once. '
         f'Click Young, Nanami, or both on any row to assign ownership (selecting both marks it joint; individual views '
@@ -448,13 +449,16 @@ class Handler(BaseHTTPRequestHandler):
             rows = db.execute(f"""SELECT * FROM accounts WHERE {owner_scope}
                                  ORDER BY excluded, side, institution COLLATE NOCASE, nickname COLLATE NOCASE, id""",
                               (view, view)).fetchall()
-            points = db.execute(f"""SELECT h.* FROM balance_history AS h JOIN accounts AS a ON a.id = h.account_id
+            points = db.execute(f"""SELECT h.*, a.asof AS current_asof
+                                   FROM balance_history AS h JOIN accounts AS a ON a.id = h.account_id
                                    WHERE a.excluded = 0 AND {owner_scope} ORDER BY h.asof, h.account_id""",
                                 (view, view)).fetchall()
+        has_backdated = any(p["asof"] > p["current_asof"] for p in points)
         return self.send(status, dashboard(rows, date.today(), view, self.server.token, net_worth(points),
                                            has_sync=bool(self.server.batch), notices=notices, error=error,
                                            open_edit=open_edit, edit_values=edit_values,
-                                           use_logos=bool(self.server.logo_dir)), scripts=True)
+                                           use_logos=bool(self.server.logo_dir), has_backdated=has_backdated),
+                         scripts=True)
 
     def do_GET(self):
         if not self.local_host():
@@ -506,9 +510,9 @@ class Handler(BaseHTTPRequestHandler):
                 row = db.execute("SELECT * FROM accounts WHERE id=?", (match[2],)).fetchone()
                 if row and match[1] == "remove":
                     return self.send(200, page(f"""<h2>Remove {escape(row['nickname'])}?</h2>
-<p>This deletes this account and its saved balance history.</p><form method="post" action="{path}" class="edit-form">
+<p>{REMOVE_WARNING}</p><form method="post" action="{path}" class="edit-form">
 <input type="hidden" name="token" value="{self.server.token}">
-<div class="bar"><button>Remove account</button><a href="/" class="button secondary">Cancel</a></div></form>""", current="/"))
+<div class="bar"><button>Confirm remove</button><a href="/" class="button secondary">Cancel</a></div></form>""", current="/"))
                 if row:
                     return self.send(200, form(dict(row), path, self.server.token))
         self.send(404, "Account or page not found.")

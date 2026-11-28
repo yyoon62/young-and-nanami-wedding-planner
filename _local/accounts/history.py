@@ -95,7 +95,7 @@ def sparkline(series, label):
             f'</svg><div class="history-dates"><time>{series[0][0]}</time><time>{series[-1][0]}</time></div>')
 
 
-def history_panel(timeline, money):
+def history_panel(timeline, money, *, has_backdated=False):
     intro = (
         '<section class="history" aria-labelledby="history-heading"><h2 id="history-heading">Net worth history</h2>'
         '<p>Past totals use today’s owners and exclusions. Each account starts at its first saved date; '
@@ -104,6 +104,9 @@ def history_panel(timeline, money):
     )
     if not timeline:
         return intro + '<p>No dated balances in this view yet.</p></section>'
+    if has_backdated:
+        intro += ('<p class="history-backdated">After a backdated edit, history can show later saved balances '
+                  'than the account table.</p>')
 
     first_seen = {}
     for i, (_, totals) in enumerate(timeline):

@@ -164,6 +164,7 @@ class HistoryFlow(unittest.TestCase):
                 status, html = request(server, view)
                 self.assertEqual(status, 200)
                 self.assertLess(html.index('id="history-heading"'), html.index('class="acct-table"'))
+                self.assertNotIn('class="history-backdated"', html)
                 for currency, points in zip(("USD", "JPY"), expected):
                     self.assertEqual(table(html, currency), [(DAY + d, v) for d, v in points])
                 self.assertEqual(html.count('class="history-plot"'), sum(len(points) >= 2 for points in expected))
@@ -173,6 +174,23 @@ class HistoryFlow(unittest.TestCase):
             self.assertEqual(table(request(server)[1], "USD")[0], (DAY + "01", "USD 100.00"))
             self.assertEqual(request(server, "/exclude/1", excluded="1")[0], 303)
             self.assertEqual(table(request(server)[1], "USD"), [(DAY + "03", "USD -20.00")])
+
+    def test_backdated_note_only_for_views_that_include_the_edited_account(self):
+        with running(self.path) as server:
+            populate(server)
+            self.assertEqual(request(server, "/edit/1", **dict(BASE, inline="1", balance="90"))[0], 303)
+            for view in ("/", "/?view=Young"):
+                html = request(server, view)[1]
+                self.assertIn('class="history-backdated"', html)
+                self.assertIn("USD 70.00</strong>", html)  # Account table totals use 90 - 20.
+                self.assertEqual(table(html, "USD"), [(DAY + "01", "USD 90.00"),
+                                                      (DAY + "03", "USD 70.00"),
+                                                      (DAY + "05", "USD 100.00")])
+            html = request(server, "/?view=Nanami")[1]
+            self.assertNotIn('class="history-backdated"', html)
+            self.assertEqual(table(html, "USD"), [(DAY + "03", "USD -20.00")])
+            self.assertEqual(request(server, "/exclude/1", excluded="1")[0], 303)
+            self.assertNotIn('class="history-backdated"', request(server)[1])
 
     def test_currency_turnover_absence_reappearance_and_exact_amounts(self):
         with running(self.path) as server:
