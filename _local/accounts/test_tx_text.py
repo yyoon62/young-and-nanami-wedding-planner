@@ -155,9 +155,21 @@ class Rows(Fixture, unittest.TestCase):
         self.assertIn('title="SimpleFIN · Fictional institution · Bank"', payroll)    # full account text in the tooltip
         self.assertIn('<td class="date-cell" title="Posted">', payroll)
         credit = self.tr(html, "Payment thank you")
-        self.assertIn('<span class="acct-sub tx-flow">Review card credit</span>', credit)      # short visible label
+        self.assertIn('<span class="acct-sub tx-flow">⚠️ to confirm</span>', credit)      # short visible label
         self.assertEqual(html.count('class="badge"'), 0)
         self.assertEqual(html.count("overridden"), 0)
+
+    def test_cash_flow_label_is_gone_everywhere_on_rows_and_only_transfers_carry_one(self):
+        html = self.html()
+        rows = html[html.index("<tbody>"):html.index("</tbody>")]
+        self.assertNotIn("Cash flow", rows)
+        self.assertNotIn("Cash flow", self.html("month=2026-12&q=cash"))          # not even a hidden search term
+        self.assertIn("No transactions match", self.html("month=2026-12&q=cash+flow"))
+        self.post(self.row("Maple Shop", "2026-12")["row_id"], action="transfer", transfer="yes", month="2026-12")
+        marked = self.tr(self.html(), "Maple Shop")
+        self.assertIn("↔️ Transfer ▾", marked)                                     # the chip names it, once
+        self.assertNotIn("tx-flow", marked)
+        self.assertNotRegex(self.tr(html, "Corner Cafe"), r"tx-flow")             # an ordinary row has no label
 
     def test_every_row_has_a_visible_default_emoji_and_the_old_faint_one_is_gone(self):
         from tx_categories import CUSTOM_EMOJI, UNCATEGORIZED_EMOJI

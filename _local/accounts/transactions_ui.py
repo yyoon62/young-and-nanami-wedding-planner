@@ -101,7 +101,22 @@ def _stamp(stamp):
 
 _ORIGIN = {"manual": "(set by you)", "rule": "(merchant rule)", "stamp": "(saved rule)", "default": "(built-in default)",
            "suggested": "✨ suggested by AI"}
-_SHOWN_FLOWS = ("Transfer", "Matched transfer", "Review card credit", "Pending")   # other flows are tooltip-only
+# Plain wording for the internal flow values (they stay as they are: Projections reads them). "Cash flow*" has no
+# wording at all: an ordinary row carries no label, only transfers (↔️), card payments to confirm and pending do.
+_FLOW_WORDS = {"Transfer (manual)": "marked as a transfer by you", "Transfer (merchant rule)": "transfer by merchant rule",
+               "Transfer (category)": "transfer by category", "Matched transfer": "matched with its other side",
+               "Review card credit": "card payment credit to confirm", "Pending": "pending"}
+
+
+def _flow_label(r):
+    """The one short visible label of a row, or ''. The chip already says it for a category-less transfer."""
+    if r["flow"] == "Review card credit":
+        return "⚠️ to confirm"
+    if r["flow"] == "Pending":
+        return "pending"
+    if r["effective_transfer"] and r["category"] and not is_transfer_category(r["category"]):
+        return "↔️ transfer"
+    return ""
 
 
 def _data_dir(db):
@@ -229,7 +244,7 @@ def _category_cell(r, f, token, categories, *, up, opened, attempt, error):
     can_rule = not r["pending"] and bool(r["merchant"])
     who = (r["clean_key"] or r["description"] or r["merchant"])[:40]
     tip = " · ".join(x for x in ("Change category", _ORIGIN.get(r["category_source"]),
-                                 r["flow"] if r["flow"] != "Cash flow" else "") if x)
+                                 _FLOW_WORDS.get(r["flow"], "")) if x)
     menu = (_pick_menu(f, token, categories, r["category"], row=r["row_id"], who=who, rule=can_rule,
                        attempt=attempt, error=error) if opened else "")
     return (f'<details class="inline-pop tx-pick{" up" if up else ""}"{" open" if opened else ""} '
@@ -433,7 +448,8 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         if f["currency"] and f["currency"] != r["currency"]:
             return False
         if q and not any(q in r[k].casefold() for k in
-                         ("description", "payee", "category", "nickname", "institution", "flow")):
+                         ("description", "payee", "category", "nickname", "institution")) \
+                and q not in _flow_label(r).casefold():
             return False
         if f["cat"] and (r["category"] or "Uncategorized").casefold() != f["cat"].casefold():
             return False
@@ -446,9 +462,8 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         payee = f' title="Payee: {escape(r["payee"])}"' if r["payee"] else ""
         marker = ('<span class="acct-sub tx-flag" title="Possible internal transfer · still counted. '
                   'If confirmed, mark each leg as Transfer.">↔️ possible transfer</span>' if r["suggested_transfer"] else "")
-        flow = (f'<span class="acct-sub tx-flow">{escape(r["flow"])}</span>'
-                if r["flow"].startswith(_SHOWN_FLOWS) and not (r["effective_transfer"] and not r["category"])
-                else "")      # a transfer without a category already says so on its chip
+        label = _flow_label(r)
+        flow = f'<span class="acct-sub tx-flow">{escape(label)}</span>' if label else ""
         shown = _category_cell(r, f, token, categories, up=index >= len(shown_rows) - 3,
                                opened=open_pick == r["row_id"], attempt=attempt, error=error if open_pick == r["row_id"] else "")
         drawer_row = ""

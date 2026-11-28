@@ -392,7 +392,7 @@ class TransactionsTest(Fixture, unittest.TestCase):
         self.assertIn("Transfer = money between your own accounts; not counted as spending.", rendered)
         for old_wording in ("Merchant transfer rule", "transfer category", "Merchant transfer"):
             self.assertNotIn(old_wording, rendered)
-        self.assertIn("Cash flow (merchant rule)", rendered)
+        self.assertNotIn("Cash flow (merchant rule)", rendered)       # internal value only, never shown (L26-10)
         edit("Credit card payment", action="transfer_rule", merchant_transfer="none")
         self.assertEqual(self.row("Credit card payment", "2026-12")["flow"], "Matched transfer")
         self.assertEqual(self.row("New eligible", "2026-12")["category"], "Test category")
