@@ -32,7 +32,7 @@ class Fixture(Demo):
         return deepcopy(self.payload)
 
 
-class ReviewFlow(unittest.TestCase):
+class SyncFlow(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -50,123 +50,98 @@ class ReviewFlow(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as db, db:
             return db.execute(sql).fetchall()
 
-    def review(self):
-        self.batch.run("discover", {})
-        fields = {"review": self.batch.review[0], "owner": "Young", "o1": "Nanami"}
-        for i in range(12):
-            fields[f"s{i}"] = "on"
-            fields[f"m{i}"] = "1" if i == 0 else "new"
-            fields[f"d{i}"] = "debt" if i == 0 else "asset"
-        return fields
-
-    def test_atomic_review_validation_and_racing_manual_edit(self):
-        f = self.review()
-        with self.assertRaises(Problem):
-            self.batch.run("apply", dict(f, d11=""))
-        self.assertEqual(self.sql("select balance from accounts"), [("30.00",)])
-        self.sql("update accounts set balance='25.00'")
-        with self.assertRaisesRegex(Problem, "changed since review"):
-            self.batch.run("apply", f)
-        self.assertEqual(self.sql("select * from source_links"), [])
-        self.batch.run("apply", self.review())
-        with self.assertRaisesRegex(Problem, "expired"):
-            self.batch.run("apply", f)
-
-    def test_restart_refresh_conflicts_errors_and_no_deletion(self):
-        self.batch.run("apply", self.review())
+    def test_one_click_sync_infers_sign_and_preserves_local_overrides(self):
+        notices = self.batch.sync()
+        self.assertIn("12 added", notices[0])
+        # Seeded manual card (id=1) + 12 synced accounts = 13 rows total
+        rows = self.sql("select id, institution, nickname, side, balance, owner from accounts order by id")
+        self.assertEqual(len(rows), 13)
+        # First synced row (id=2) had -20.01 -> automatically debt; id=3 had 10.10 -> asset
+        self.assertEqual(rows[1][3:5], ("debt", "20.01"))
+        self.assertEqual(rows[2][3:5], ("asset", "10.10"))
+        # User tags owner, flips side manually on id=4, and excludes id=5
+        self.sql("update accounts set owner='Nanami' where id=2")
+        self.sql("update accounts set side='debt', side_manual=1 where id=4")
+        self.sql("update accounts set excluded=1 where id=5")
         self.restart()
-        f = self.review()
-        with self.assertRaisesRegex(Problem, "cannot create"):
-            self.batch.run("apply", f)
-        self.assertEqual(len(self.sql("select * from accounts")), 12)
-        self.sql("update accounts set balance='0.27', asof='2024-01-01' where id=2")
         ac = self.provider.payload["accounts"]
         for a in ac:
             a["balance-date"] += 86400
-        ac[0].update(name="Renamed", balance="-21.88")
-        ac[2]["balance"] = "-2.00"             # sign reversal
-        ac[3]["balance-date"] -= 2*86400       # older than accepted source timestamp
+        ac[0]["balance"] = "-21.88"            # updated debt
+        ac[1]["balance"] = "-5.00"             # sign flip on non-overridden row -> flips to debt
+        ac[2]["balance"] = "15.00"             # positive on manually-overridden debt -> stays debt
+        ac[3]["balance-date"] -= 2 * 86400     # older than accepted source timestamp -> held
         ac[4]["balance"] = "0"                 # legitimate zero
-        ac[5]["balance"] = "0.001"             # unsupported precision
-        ac[6]["balance"] = "3.33"              # unselected
-        ac[7]["balance-date"] -= 86400
-        ac[7]["balance"] = "99.99"             # conflicting timestamp
-        ac[8]["currency"] = "USD"
-        ac.append(ac[9].copy())                # repeated full identity
+        ac[5]["balance"] = "0.001"             # unsupported precision -> held
+        ac[8]["currency"] = "USD"              # currency change -> held
+        ac.append(ac[9].copy())                # repeated full identity -> held
         del ac[11]                             # missing, never remove
         self.provider.payload["errlist"] = [dict(code="act.failed", conn_id="2", account_id="2",
-                                                msg="PRIVATE-FICTIONAL-ERROR")]
-        selected = {"r"+str(i): "on" for i in range(1, 13) if i != 7}
-        notice = self.batch.run("refresh", selected)
+                                                 msg="PRIVATE-FICTIONAL-ERROR")]
+        notice = self.batch.sync()
         self.assertIn("Account lookup failed", str(notice))
         self.assertNotIn("PRIVATE", str(notice))
-        rows = self.sql("select owner,nickname,balance from accounts order by id")
-        self.assertEqual(rows[0], ("Joint", "Household card", "21.88"))
-        self.assertEqual(rows[1], ("Nanami", "Savings", "0.27"))
-        self.assertEqual([r[2] for r in rows[2:]], ["10.10","10.10","0.00","10.10","10.10","10.10",*(["501"]*4)])
-        states = [r[0] for r in self.sql("select status from source_links order by local")]
-        for i, text in [(1,"Local edit"), (2,"sign"), (3,"Older"), (5,"invalid"), (7,"Conflicting"),
-                        (8,"Currency"), (9,"invalid"), (10,"provider error"), (11,"Missing")]:
-            self.assertIn(text, states[i])
+        after = self.sql("select id, owner, side, balance, excluded from accounts where id>=2 order by id")
+        self.assertEqual(after[0], (2, "Nanami", "debt", "21.88", 0))
+        self.assertEqual(after[1], (3, "Unspecified", "debt", "5.00", 0))
+        self.assertEqual(after[2], (4, "Unspecified", "debt", "15.00", 0))  # side_manual preserved
+        self.assertEqual(after[3], (5, "Unspecified", "asset", "10.10", 1)) # older held, excluded preserved
+        self.assertEqual(after[4], (6, "Unspecified", "asset", "0.00", 0))
+        self.assertEqual(after[5], (7, "Unspecified", "asset", "10.10", 0)) # invalid precision held
+        self.assertEqual(len(after), 12)  # missing row never deleted
         self.provider.payload = {}
         with self.assertRaisesRegex(Problem, "v2 account set"):
-            self.batch.run("refresh", selected)
-        self.assertEqual(rows, self.sql("select owner,nickname,balance from accounts order by id"))
+            self.batch.sync()
 
     def test_daily_quota_counts_failed_requests_across_restarts(self):
         self.provider.payload = None
         for _ in range(24):
             with self.assertRaisesRegex(Problem, "v2 account set"):
-                self.batch.run("discover", {})
+                self.batch.sync()
         self.restart()
         with self.assertRaisesRegex(Problem, "Daily guard"):
-            self.batch.run("discover", {})
+            self.batch.sync()
         self.assertEqual(self.provider.calls, 24)
 
-    def test_older_match_and_deleted_link(self):
-        self.sql("update accounts set asof='2025-01-01'")
-        with self.assertRaisesRegex(Problem, "older"):
-            self.batch.run("apply", self.review())
-        self.sql("update accounts set asof='2024-01-01'")
-        self.batch.run("apply", self.review())
-        self.sql("delete from accounts where id=1")
-        self.batch.run("refresh", {"r1": "on"})
-        self.assertEqual(self.sql("select count(*) from accounts"), [(11,)])
-        self.assertIn("not recreated", self.sql("select status from source_links where local=1")[0][0])
-        f = self.review()
-        with self.assertRaises(Problem):
-            self.batch.run("apply", dict(f, m0="new"))
+    def test_deleted_synced_row_is_not_recreated(self):
+        self.batch.sync()
+        self.sql("delete from accounts where id=2")
+        self.batch.sync()
+        self.assertEqual(self.sql("select count(*) from accounts"), [(12,)])
+        self.assertIn("not recreated", self.sql("select status from source_links where local=2")[0][0])
 
     def test_precision_is_not_float_or_round_to_fit(self):
         a = self.provider.payload["accounts"]
         a[1]["balance"] = "999999999999999.9100"
         a[2].update(currency="KWD", balance="0.001")
         a[8]["balance"] = "501.000"
-        self.batch.run("apply", self.review())
-        self.assertEqual(self.sql("select balance from accounts where id in (2,3,9) order by id"),
+        self.batch.sync()
+        self.assertEqual(self.sql("select balance from accounts where id in (3,4,10) order by id"),
                          [("999999999999999.91",), ("0.001",), ("501",)])
 
     def test_malformed_and_future_snapshots_held(self):
         for change in [{"balance-date": int(time.time())+200}, {"balance-date": 0}, {"balance": None},
                        {"balance": "1e3"}, {"currency": "https://example.invalid/points"}, {"conn_id": ""}]:
-            p = Fixture()
-            p.payload["accounts"][0].update(change)
-            b = Batch(self.path, p, validate)
-            b.run("discover", {})
-            self.assertEqual(len(b.review[1]), 11)
-            self.assertTrue(b.review[-1])
+            with tempfile.TemporaryDirectory() as t:
+                db = Path(t) / "x.db"
+                init_db(db)
+                p = Fixture()
+                p.payload["accounts"][0].update(change)
+                notices = Batch(db, p, validate).sync()
+                self.assertIn("11 added", notices[0])
+                self.assertGreater(len(notices), 1)
 
     def test_malformed_signed_balance_does_not_cancel_valid_peer(self):
-        self.batch.run("apply", self.review())
+        self.batch.sync()
         bad, good = self.provider.payload["accounts"][:2]
         for a in (bad, good):
             a["balance-date"] += 86400
         bad["balance"], good["balance"] = "- 1", "21.42"
-        notices = self.batch.run("refresh", {"r1": "on", "r2": "on"})
-        self.assertEqual(notices, ["Provider row 1: invalid, unsupported or duplicate; held."])
+        notices = self.batch.sync()
+        self.assertIn("Provider row 1: invalid, unsupported or duplicate; held.", notices)
         self.assertEqual(self.sql("select balance,status from accounts join source_links on id=local "
-                                  "where id in (1,2) order by id"),
-                         [("20.01", "Missing, invalid or provider error; retained"), ("21.42", "Updated")])
+                                  "where id in (2,3) order by id"),
+                         [("20.01", "Missing or provider error; retained"), ("21.42", "Updated")])
 
 
 class BridgePrivacy(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""Reviewed source identity -> local account. No name-based inference or implicit inserts."""
+"""One-click SimpleFIN balance sync. Infers asset/debt from sign; preserves local overrides."""
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import date
@@ -6,7 +6,6 @@ from decimal import Decimal
 import hashlib
 import json
 import re
-import secrets
 import sqlite3
 from threading import Lock
 import time
@@ -54,7 +53,7 @@ def unpack(payload, namespace, validate):
             for k in ("connections", "accounts", "errlist")):
         raise Problem("Not a v2 account set. Nothing applied.")
     if len(payload["accounts"]) > 200:
-        raise Problem("Batch exceeds the local review limit (200).")
+        raise Problem("Batch exceeds the local limit (200 accounts).")
     entries, seen, warnings, blocked = {}, set(), [], []
     connections = {}
     try:
@@ -67,7 +66,7 @@ def unpack(payload, namespace, validate):
         raise Problem("Invalid or duplicate connection identity.") from None
     if payload.get("errors"):
         blocked.append((None, None))
-        warnings.append("Bridge reported a general warning or quota issue; batch held.")
+        warnings.append("Bridge reported a general warning or quota issue; balances held.")
     reasons = {"con.auth": "Institution sign-in required", "act.failed": "Account lookup failed",
                "act.missingdata": "Incomplete account data", "gen.auth": "Bridge sign-in required",
                "gen.api": "Provider API issue"}
@@ -101,10 +100,11 @@ def unpack(payload, namespace, validate):
             magnitude = signed.removeprefix("-")
             if "." in magnitude and magnitude.partition(".")[2].isdigit():
                 magnitude = magnitude.rstrip("0").rstrip(".")  # exact; never round to fit
+            inferred_side = "debt" if Decimal(signed) < 0 else "asset"
             v = validate(dict(institution=connections[cid], nickname=text(a["name"], 100),
-                              kind="Linked account", side="asset", owner="Unspecified",
+                              kind="Linked account", side=inferred_side, owner="Unspecified",
                               currency=text(a["currency"], 3), balance=magnitude,
-                              asof=str(date.fromtimestamp(stamp)), update_method="Batch refresh"), date.today())
+                              asof=str(date.fromtimestamp(stamp)), update_method="SimpleFIN sync"), date.today())
             entries[key] = Entry(key, v, signed, stamp)
         except (KeyError, TypeError, ValueError, OSError, OverflowError):
             warnings.append(f"Provider row {i}: invalid, unsupported or duplicate; held.")
@@ -123,7 +123,6 @@ class Batch:
     def __init__(self, path, provider, validate):
         self.path, self.provider, self.validate = path, provider, validate
         self.lock = Lock()
-        self.review = None
 
     def fetch(self, db):
         # Commit the attempt BEFORE I/O, including failures, across restarts/processes.
@@ -135,104 +134,72 @@ class Batch:
             db.execute("INSERT INTO fetch_attempts VALUES (?)", (time.time(),))
         return unpack(self.provider.fetch(), self.provider.namespace, self.validate)
 
-    def run(self, action, data):
+    def sync(self):
         with self.lock, closing(sqlite3.connect(self.path)) as db:
             db.row_factory = sqlite3.Row
-            if action == "discover":
-                self.review = None
-                entries, warnings = self.fetch(db)
-                rows, links = inventory(db), mappings(db)
-                self.review = (secrets.token_urlsafe(16), list(entries.values()), rows, links, warnings)
-            elif action == "apply":
-                with db:
-                    db.execute("BEGIN IMMEDIATE")
-                    self.apply(db, data)
-                self.review = None
-            elif action == "refresh":
-                selected = [k for k, l in mappings(db).items() if data.get("r"+str(l["local"]))]
-                if not selected:
-                    raise Problem("Select at least one linked account.")
-                self.review = None
-                try:
-                    entries, warnings = self.fetch(db)
-                except Problem as exc:
-                    with db:
-                        db.executemany("""UPDATE source_links SET status=?,
-                            checked=strftime('%Y-%m-%d %H:%M UTC','now') WHERE source=?""",
-                                       [(str(exc), key) for key in selected])
-                    raise
-                with db:
-                    db.execute("BEGIN IMMEDIATE")
-                    links, rows = mappings(db), inventory(db)
-                    for key in selected:
-                        l, e = links[key], entries.get(key)
-                        row = rows.get(str(l["local"]))
-                        status = refresh_status(row, l, e)
-                        if status == "Updated":
-                            save(db, row["id"], e, l["sign"] or e.sign)
+            entries, warnings = self.fetch(db)
+            added = updated = unchanged = held = 0
+            with db:
+                db.execute("BEGIN IMMEDIATE")
+                links, rows = mappings(db), inventory(db)
+                for key, e in entries.items():
+                    inferred_side = e.values["side"]
+                    if key in links:
+                        link = links[key]
+                        row = rows.get(str(link["local"]))
+                        if not row:
+                            status = "Removed locally; not recreated"
+                            held += 1
+                        elif row["currency"] != e.values["currency"]:
+                            status = "Currency changed; retained"
+                            held += 1
+                        elif e.stamp < link["stamp"] or e.values["asof"] < row["asof"]:
+                            status = "Older source ignored"
+                            held += 1
                         else:
-                            db.execute("""UPDATE source_links SET status=?, checked=strftime('%Y-%m-%d %H:%M UTC','now')
-                                WHERE source=?""", (status, key))
-                return warnings
-            return []
-
-    def apply(self, db, data):
-        if not self.review or data.get("review") != self.review[0]:
-            raise Problem("Review expired. Discover again.")
-        _, entries, old_rows, old_links, _ = self.review
-        rows, links = inventory(db), mappings(db)
-        if rows != old_rows or links != old_links:
-            raise Problem("Inventory changed since review. Discover again.")
-        selected = [(i, e) for i, e in enumerate(entries) if data.get(f"s{i}")]
-        if not selected:
-            raise Problem("Select at least one account.")
-        for i, e in selected:
-            target, side = data.get(f"m{i}"), data.get(f"d{i}")
-            link = links.get(e.key)
-            if link and target != str(link["local"]):
-                raise Problem("A linked identity cannot create or switch accounts.")
-            if side not in ("debt", "asset"):
-                raise Problem("Confirm asset or debt for each selected signed balance.")
-            if target == "new":
-                v = dict(e.values, side=side, owner=data.get(f"o{i}") or data.get("owner", ""))
-                try:
-                    v = self.validate(v, date.today())
-                except ValueError:
-                    raise Problem("Choose a valid default owner or override.") from None
-                local = db.execute(f"INSERT INTO accounts ({','.join(v)}) VALUES ({','.join('?' for _ in v)})",
-                                   tuple(v.values())).lastrowid
-            else:
-                row = rows.get(target)
-                if not row or (row["side"], row["currency"]) != (side, e.values["currency"]):
-                    raise Problem("Choose create or a compatible existing account (same currency and side).")
-                local = row["id"]
-                if not link and db.execute("SELECT 1 FROM source_links WHERE local=?", (local,)).fetchone():
-                    raise Problem("Two sources cannot match the same account.")
-                if row["asof"] > e.values["asof"] or (link and e.stamp < link["stamp"]):
-                    raise Problem("Source is older. Deselect that account; keep its local snapshot.")
-            save(db, local, e, e.sign)
-
-
-def refresh_status(row, link, e):
-    if not row:
-        return "Local account removed; not recreated"
-    if not e:
-        return "Missing, invalid or provider error; retained"
-    if snapshot(row) != link["snapshot"]:
-        return "Local edit retained; discover and confirm again"
-    if row["currency"] != e.values["currency"] or (e.sign and e.sign != link["sign"]):
-        return "Currency or sign changed; review required"
-    if e.stamp < link["stamp"] or e.values["asof"] < row["asof"]:
-        return "Older source ignored; local snapshot retained"
-    if e.stamp == link["stamp"]:
-        return "Unchanged" if row["balance"] == e.values["balance"] else "Conflicting timestamp; review required"
-    return "Updated"
-
-
-def save(db, local, e, sign):
-    db.execute("UPDATE accounts SET balance=?, asof=? WHERE id=?", (e.values["balance"], e.values["asof"], local))
-    row = db.execute("SELECT * FROM accounts WHERE id=?", (local,)).fetchone()
-    db.execute("""INSERT INTO source_links (source,local,stamp,sign,snapshot,status) VALUES (?,?,?,?,?,?)
-                  ON CONFLICT(source) DO UPDATE SET stamp=excluded.stamp, sign=excluded.sign,
-                  snapshot=excluded.snapshot,status=excluded.status,checked=excluded.checked""",
-               (e.key, local, e.stamp, sign, snapshot(row), "Updated"))
+                            new_side = row["side"] if row["side_manual"] else inferred_side
+                            if (row["balance"] == e.values["balance"] and row["asof"] == e.values["asof"]
+                                    and row["side"] == new_side):
+                                db.execute("""UPDATE source_links SET stamp=?, sign=?, status=?,
+                                    checked=strftime('%Y-%m-%d %H:%M UTC','now') WHERE source=?""",
+                                           (max(link["stamp"], e.stamp), e.sign, "Unchanged", key))
+                                unchanged += 1
+                                continue
+                            db.execute("UPDATE accounts SET balance=?, asof=?, side=? WHERE id=?",
+                                       (e.values["balance"], e.values["asof"], new_side, row["id"]))
+                            fresh = db.execute("SELECT * FROM accounts WHERE id=?", (row["id"],)).fetchone()
+                            db.execute("""UPDATE source_links SET stamp=?, sign=?, snapshot=?, status=?,
+                                checked=strftime('%Y-%m-%d %H:%M UTC','now') WHERE source=?""",
+                                       (e.stamp, e.sign, snapshot(fresh), "Updated", key))
+                            updated += 1
+                            continue
+                        db.execute("""UPDATE source_links SET status=?,
+                            checked=strftime('%Y-%m-%d %H:%M UTC','now') WHERE source=?""", (status, key))
+                    else:
+                        v = e.values
+                        local = db.execute("""INSERT INTO accounts
+                            (institution,nickname,kind,side,currency,balance,asof,owner,update_method,excluded,side_manual)
+                            VALUES (?,?,?,?,?,?,?,?,?,0,0)""",
+                            (v["institution"], v["nickname"], v["kind"], v["side"], v["currency"],
+                             v["balance"], v["asof"], v["owner"], v["update_method"])).lastrowid
+                        fresh = db.execute("SELECT * FROM accounts WHERE id=?", (local,)).fetchone()
+                        db.execute("""INSERT INTO source_links (source,local,stamp,sign,snapshot,status)
+                            VALUES (?,?,?,?,?,?)""", (key, local, e.stamp, e.sign, snapshot(fresh), "Added"))
+                        added += 1
+                for key, link in links.items():
+                    if key not in entries:
+                        db.execute("""UPDATE source_links SET status=?,
+                            checked=strftime('%Y-%m-%d %H:%M UTC','now') WHERE source=?""",
+                                   ("Missing or provider error; retained", key))
+                        held += 1
+            parts = []
+            if added:
+                parts.append(f"{added} added")
+            if updated:
+                parts.append(f"{updated} updated")
+            if unchanged:
+                parts.append(f"{unchanged} unchanged")
+            if held:
+                parts.append(f"{held} held")
+            summary = "Synced: " + (", ".join(parts) if parts else "no accounts returned") + "."
+            return [summary, *warnings]

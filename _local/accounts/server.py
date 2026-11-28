@@ -1,4 +1,4 @@
-"""Manual accounts dashboard. Run with python3 server.py (standard library only)."""
+"""Local household financial accounts dashboard. Run with python3 server.py (stdlib only)."""
 import argparse
 from contextlib import closing, ExitStack
 from datetime import date
@@ -15,7 +15,6 @@ from urllib.parse import parse_qs, urlsplit
 from servicers import servicer_get
 from bridge import Bridge, Problem
 from bulk import Batch, schema
-from bulk_ui import display
 
 
 ROOT = Path(__file__).resolve().parent
@@ -23,6 +22,7 @@ DEFAULT_DB = Path.home() / ".local/share/planner-accounts/accounts.sqlite3"
 FIELDS = ("institution", "nickname", "kind", "side", "currency", "balance", "asof", "owner", "update_method")
 PEOPLE = ("Young", "Nanami")
 OWNERS = ("Unspecified", *PEOPLE, "Joint")
+TAG_OWNERS = (*PEOPLE, "Joint")
 DEFAULT_METHOD = "Manual entry"
 KINDS = ("Checking", "Savings", "Cash", "Brokerage", "Retirement", "Pension",
          "Health savings", "Digital assets", "Credit card", "Mortgage", "Student loan",
@@ -37,6 +37,11 @@ def places(currency):
 
 def money(value, currency):
     return f"{currency} {value:,.{places(currency)}f}"
+
+
+def signed_money(value, currency, side):
+    prefix = "-" if side == "debt" and value != 0 else ""
+    return f"{prefix}{money(value, currency)}"
 
 
 def validate(raw, today):
@@ -82,15 +87,18 @@ def init_db(path):
             db.execute("ALTER TABLE accounts ADD COLUMN owner TEXT NOT NULL DEFAULT 'Unspecified'")
         if "update_method" not in columns:
             db.execute("ALTER TABLE accounts ADD COLUMN update_method TEXT NOT NULL DEFAULT 'Manual entry'")
+        if "excluded" not in columns:
+            db.execute("ALTER TABLE accounts ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0")
+        if "side_manual" not in columns:
+            db.execute("ALTER TABLE accounts ADD COLUMN side_manual INTEGER NOT NULL DEFAULT 0")
         schema(db)
 
 
-NAV = (("/", "Accounts"), ("/batch", "Batch balances"), ("/new", "Add account"),
+NAV = (("/", "Accounts"), ("/new", "Add account"),
        ("/servicers", "Statements"), ("/federal-preview", "Federal preview"))
 
 
 def nav(current=None):
-    """Centered compact pill navigation; active page is explicit. Local only."""
     items = "".join(
         f'<a href="{href}"' + (' aria-current="page"' if current == href else '') + f'>{escape(label)}</a>'
         for href, label in NAV)
@@ -98,15 +106,14 @@ def nav(current=None):
 
 
 def mode_banner(server):
-    """One short mode cue: fictional demo vs local manual vs configured; none is live."""
     if getattr(server, "demo", False):
         return ('<p class="mode-banner demo" role="note"><strong>Fictional demo</strong>'
                 ' · discarded on exit · synthetic · no live accounts</p>')
     batch = getattr(server, "batch", None)
     if batch is not None and getattr(batch, "provider", None) is not None:
         label = escape(getattr(batch.provider, "label", "Provider") or "Provider")
-        return ('<p class="mode-banner configured" role="note"><strong>Configured</strong> · ' + label
-                + ' · not live · no automatic sync</p>')
+        return ('<p class="mode-banner configured" role="note"><strong>SimpleFIN connected</strong> · ' + label
+                + ' · saved locally · click Sync balances to refresh</p>')
     return ('<p class="mode-banner manual" role="note"><strong>Local manual</strong>'
             ' · no provider · saved on this computer</p>')
 
@@ -119,45 +126,114 @@ def page(content, current=None, heading="Financial accounts"):
 <main>{nav(current)}<header><small>YOUNG &amp; NANAMI · LOCAL PLANNER</small><h1>{escape(heading)}</h1></header>{content}</main></html>"""
 
 
-def account_card(r, amount, stale):
+def view_url(view):
+    return "/" if view == "Household" else f"/?view={view}"
+
+
+def account_row(r, today, token, view, excluded=False):
+    rid = r["id"]
     name = escape(r["nickname"])
-    date_text = escape(r["asof"])
-    return f"""<article class="account-tile" aria-labelledby="name-{r['id']}">
-<div class="tile-top"><div><small>{escape(r['institution'])}</small><h4 id="name-{r['id']}">{name}</h4></div>
-<a href="/edit/{r['id']}">Edit<span class="sr"> {name}</span></a></div>
-<p class="tile-balance">{amount}</p>
-<div class="tile-tags"><span>{escape(r['kind'])}</span><span>{escape(r['owner'])}</span>
-{'<span class="stale">Stale</span>' if stale else ''}</div>
-<footer><time datetime="{date_text}">As of {date_text}</time><span>{escape(r['update_method'])}</span></footer>
-</article>"""
+    inst = escape(r["institution"])
+    kind = escape(r["kind"])
+    amt = Decimal(r["balance"])
+    c = r["currency"]
+    side = r["side"]
+    stale = (today - date.fromisoformat(r["asof"])).days > 30
+    owner_pills = "".join(
+        f'<button type="submit" name="owner" value="{o}" class="pill-btn{" active" if r["owner"] == o else ""}"'
+        f' aria-pressed="{"true" if r["owner"] == o else "false"}">{o}</button>'
+        for o in TAG_OWNERS)
+    owner_cell = (f'<form method="post" action="/owner/{rid}" class="inline-form owner-pills">'
+                  f'<input type="hidden" name="token" value="{token}">'
+                  f'<input type="hidden" name="view" value="{view}">'
+                  f'{owner_pills}</form>')
+    next_side = "asset" if side == "debt" else "debt"
+    side_toggle = (f'<form method="post" action="/side/{rid}" class="inline-form">'
+                   f'<input type="hidden" name="token" value="{token}">'
+                   f'<input type="hidden" name="view" value="{view}">'
+                   f'<input type="hidden" name="side" value="{next_side}">'
+                   f'<button type="submit" class="side-btn {side}" title="Switch between Asset and Debt">'
+                   f'{side.title()}</button></form>')
+    toggle_label = "Include" if excluded else "Exclude"
+    toggle_val = "0" if excluded else "1"
+    exclude_btn = (f'<form method="post" action="/exclude/{rid}" class="inline-form">'
+                   f'<input type="hidden" name="token" value="{token}">'
+                   f'<input type="hidden" name="view" value="{view}">'
+                   f'<input type="hidden" name="excluded" value="{toggle_val}">'
+                   f'<button type="submit" class="link-btn">{toggle_label}</button></form>')
+    stale_tag = ' <span class="stale-pill">Stale</span>' if stale else ""
+    return (f'<tr class="{"is-excluded" if excluded else ""}">'
+            f'<th scope="row" class="acct-cell"><span class="acct-name">{name}</span>'
+            f'<span class="acct-sub">{inst} · {kind}</span></th>'
+            f'<td class="num bal-cell"><span class="amt {side}">{signed_money(amt, c, side)}</span> {side_toggle}</td>'
+            f'<td class="owner-cell">{owner_cell}</td>'
+            f'<td class="date-cell"><time datetime="{r["asof"]}">{r["asof"]}</time>{stale_tag}</td>'
+            f'<td class="act-cell">{exclude_btn}<a href="/edit/{rid}">Edit<span class="sr"> {name}</span></a></td>'
+            f'</tr>')
 
 
-def dashboard(rows, today, view):
-    totals, lanes = {}, {"asset": [], "debt": []}
-    for r in rows:
+def dashboard(rows, today, view, token, has_sync=False, notices=(), error=None):
+    active = [r for r in rows if not r["excluded"]]
+    excluded = [r for r in rows if r["excluded"]]
+    totals = {}
+    for r in active:
         c, amt = r["currency"], Decimal(r["balance"])
         group = totals.setdefault(c, {"asset": Decimal(0), "debt": Decimal(0)})
         group[r["side"]] += amt
-        stale = (today - date.fromisoformat(r["asof"])).days > 30
-        lanes[r["side"]].append(account_card(r, money(amt, c), stale))
-    cards = "".join(f"""<section class="card"><small>{c} · NET WORTH</small>
-<strong>{money(t['asset']-t['debt'], c)}</strong>
-<div>Assets: {money(t['asset'], c)} · Debts: {money(t['debt'], c)}</div></section>"""
-                    for c, t in sorted(totals.items()))
-    board = "".join(f"""<section class="lane {side}" aria-labelledby="{side}-heading">
-<div class="lane-head"><h3 id="{side}-heading">{title}</h3><span>{len(tiles)}</span></div>
-{''.join(tiles) or f'<p class="lane-empty">No {title.lower()} in this view.</p>'}</section>"""
-                    for side, title, tiles in (("asset", "Assets", lanes["asset"]), ("debt", "Debts", lanes["debt"])))
-    links = "".join(f'<a href="{url}"' + (' aria-current="page"' if label == view else '') + f'>{label}</a>'
-                       for label, url in [("Household", "/"), *((p, f"/?view={p}") for p in PEOPLE)])
-    return page(f'<nav class="owner-tabs" aria-label="Inventory views">{links}</nav>'
-                f'<div class="cards">{cards}</div><div class="bar"><h2>{view} accounts</h2>'
-                f'<a class="button" href="/new">+ Add account</a></div><div class="account-board">{board}</div>'
-                '<details class="help"><summary>How totals work</summary><p>Household counts every account once. '
-                'Each person’s view includes their own accounts plus joint accounts. These views overlap; do not add them together. '
-                'Totals are separate by currency. Balances older than 30 days are marked stale and still included.</p></details>'
-                '<p><a href="/servicers">Record a student loan from a statement</a></p>'
-                '<p><a href="/federal-preview">Preview federal My Aid Data</a> · No accounts will change.</p>', current="/")
+    cards = "".join(
+        f'<section class="card"><small>{c} · NET WORTH</small>'
+        f'<strong>{money(t["asset"] - t["debt"], c)}</strong>'
+        f'<div>Assets: {money(t["asset"], c)} · Debts: {money(t["debt"], c)}</div></section>'
+        for c, t in sorted(totals.items()))
+    links = "".join(
+        f'<a href="{url}"' + (' aria-current="page"' if label == view else '') + f'>{label}</a>'
+        for label, url in [("Household", "/"), *((p, f"/?view={p}") for p in PEOPLE)])
+    sync_html = ""
+    if has_sync:
+        sync_html = (f'<form method="post" action="/sync" class="inline-form">'
+                     f'<input type="hidden" name="token" value="{token}">'
+                     f'<input type="hidden" name="view" value="{view}">'
+                     f'<button type="submit" class="button">↻ Sync balances</button></form>')
+    add_cls = "button secondary" if has_sync else "button"
+    banner = ""
+    if error:
+        banner += f'<p class="notice" role="alert">{escape(error)}</p>'
+    banner += "".join(f'<p class="notice" role="status">{escape(n)}</p>' for n in notices)
+
+    if active:
+        body = "".join(account_row(r, today, token, view, excluded=False) for r in active)
+        table = (f'<div class="table-wrap"><table class="acct-table">'
+                 f'<thead><tr><th>Account</th><th class="num">Balance</th><th>Owner</th>'
+                 f'<th>As of</th><th class="act-col"></th></tr></thead>'
+                 f'<tbody>{body}</tbody></table></div>')
+    else:
+        empty_msg = ("No active accounts in this view. Click <strong>↻ Sync balances</strong> to pull linked accounts, "
+                     "or <strong>+ Add account</strong> to add one manually."
+                     if has_sync else "No active accounts in this view. Click <strong>+ Add account</strong> to start.")
+        table = f'<p class="empty-note">{empty_msg}</p>'
+
+    excluded_html = ""
+    if excluded:
+        ex_body = "".join(account_row(r, today, token, view, excluded=True) for r in excluded)
+        excluded_html = (f'<details class="excluded-box"><summary>Excluded accounts ({len(excluded)})'
+                         f' — not counted in totals</summary>'
+                         f'<div class="table-wrap"><table class="acct-table">'
+                         f'<thead><tr><th>Account</th><th class="num">Balance</th><th>Owner</th>'
+                         f'<th>As of</th><th class="act-col"></th></tr></thead>'
+                         f'<tbody>{ex_body}</tbody></table></div></details>')
+
+    return page(
+        f'{banner}'
+        f'<div class="top-bar"><nav class="owner-tabs" aria-label="Inventory views">{links}</nav>'
+        f'<div class="top-actions">{sync_html}<a class="{add_cls}" href="/new">+ Add account</a></div></div>'
+        f'<div class="cards">{cards}</div>'
+        f'{table}{excluded_html}'
+        f'<details class="help"><summary>How totals work</summary><p>Household counts every active account once. '
+        f'Each person’s view includes their own accounts plus joint accounts (views overlap; do not add them together). '
+        f'Totals are separate by currency. Click Young, Nanami, or Joint on any row to tag it; click Asset/Debt to '
+        f'override sign detection; click Exclude to leave an account out of totals without deleting it. '
+        f'Balances older than 30 days are marked stale and still included.</p></details>',
+        current="/")
 
 
 def form(v, target, token, error="", current=None):
@@ -172,7 +248,7 @@ def form(v, target, token, error="", current=None):
                     for k, text in (("asset", "Asset — money or value you own"), ("debt", "Debt — money you owe")))
     return page(f"""<h2>{'Add' if target=='/new' else 'Edit'} account</h2>
 {f'<p role="alert">{escape(error)}</p>' if error else ''}
-<form method="post" action="{target}">
+<form method="post" action="{target}" class="edit-form">
 <input type="hidden" name="token" value="{token}">
 {field('institution','Institution or holder','maxlength="100" placeholder="e.g. Example Bank or Self"')}
 {field('nickname','Account name','maxlength="100" placeholder="e.g. Joint checking"')}
@@ -188,7 +264,7 @@ Do not enter credentials or account numbers.</p>
 <p>Enter the amount without a minus sign. Use Debt for an amount owed, including an overdraft.</p>
 {field('asof','Balance as of',f'type="date" max="{date.today()}"')}
 <div class="bar"><button>Save account</button><a href="/" class="button secondary">Cancel</a></div></form>{remove}""",
-                     current=current)
+                current=current)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -217,11 +293,20 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_port
         return self.headers.get("Host") in {f"127.0.0.1:{port}", f"localhost:{port}"}
 
+    def render_home(self, view, notices=(), error=None, status=200):
+        with closing(sqlite3.connect(self.server.db)) as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute("""SELECT * FROM accounts WHERE ? = 'Household' OR owner IN (?, 'Joint')
+                                 ORDER BY excluded, side, institution COLLATE NOCASE, nickname COLLATE NOCASE, id""",
+                              (view, view)).fetchall()
+        return self.send(status, dashboard(rows, date.today(), view, self.server.token,
+                                           has_sync=bool(self.server.batch), notices=notices, error=error))
+
     def do_GET(self):
         if not self.local_host():
             return self.send(403, "Local requests only.")
-        if self.path == "/batch":
-            return self.send(200, page(display(self.server, OWNERS), current="/batch", heading="Batch balances"))
+        if urlsplit(self.path).path == "/batch":
+            return self.send(303, "", location="/")
         result = servicer_get(self.path, page=page, form=form, token=self.server.token)
         if result is not None:
             return self.send(*result)
@@ -235,21 +320,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/new":
             return self.send(200, form({"currency": "USD", "asof": str(date.today()), "owner": "Unspecified",
                                         "update_method": DEFAULT_METHOD}, path, self.server.token))
+        if path == "/":
+            view = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("view", ["Household"])
+            if len(view) != 1 or view[0] not in ("Household", *PEOPLE):
+                return self.send(400, "Unknown inventory view.")
+            notices, self.server.notices = self.server.notices, []
+            return self.render_home(view[0], notices=notices)
         with closing(sqlite3.connect(self.server.db)) as db:
             db.row_factory = sqlite3.Row
-            if path == "/":
-                view = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("view", ["Household"])
-                if len(view) != 1 or view[0] not in ("Household", *PEOPLE):
-                    return self.send(400, "Unknown inventory view.")
-                rows = db.execute("""SELECT * FROM accounts WHERE ? = 'Household' OR owner IN (?, 'Joint')
-                                     ORDER BY nickname COLLATE NOCASE, id""", (view[0], view[0])).fetchall()
-                return self.send(200, dashboard(rows, date.today(), view[0]))
             match = re.fullmatch(r"/(edit|remove)/([1-9][0-9]{0,17})", path)
             if match:
                 row = db.execute("SELECT * FROM accounts WHERE id=?", (match[2],)).fetchone()
                 if row and match[1] == "remove":
                     return self.send(200, page(f"""<h2>Remove {escape(row['nickname'])}?</h2>
-<p>This deletes this account's local snapshot.</p><form method="post" action="{path}">
+<p>This deletes this account's local snapshot.</p><form method="post" action="{path}" class="edit-form">
 <input type="hidden" name="token" value="{self.server.token}">
 <div class="bar"><button>Remove account</button><a href="/" class="button secondary">Cancel</a></div></form>""", current="/"))
                 if row:
@@ -262,28 +346,56 @@ class Handler(BaseHTTPRequestHandler):
         target = self.path
         edit = re.fullmatch(r"/edit/([1-9][0-9]{0,17})", target)
         remove = re.fullmatch(r"/remove/([1-9][0-9]{0,17})", target)
-        batch = target in {"/batch/discover", "/batch/select-all", "/batch/apply", "/batch/refresh"} and self.server.batch
-        if not batch and not edit and not remove and target != "/new":
+        owner_act = re.fullmatch(r"/owner/([1-9][0-9]{0,17})", target)
+        exclude_act = re.fullmatch(r"/exclude/([1-9][0-9]{0,17})", target)
+        side_act = re.fullmatch(r"/side/([1-9][0-9]{0,17})", target)
+        sync_act = target == "/sync" and bool(self.server.batch)
+        if not any((edit, remove, owner_act, exclude_act, side_act, sync_act, target == "/new")):
             return self.send(404, "Page not found.")
         length = self.headers.get("Content-Length", "")
-        if not re.fullmatch(r"[0-9]{1,5}", length) or int(length) > (60000 if batch else 8192):
+        if not re.fullmatch(r"[0-9]{1,5}", length) or int(length) > 8192:
             return self.send(413, "Form too large.")
         data = {k: v[0] for k, v in parse_qs(self.rfile.read(int(length)).decode("utf8", "replace")).items()}
         if not secrets.compare_digest(data.get("token", "").encode(), self.server.token.encode()):
             return self.send(403, "Reload the form and try again.")
-        if batch:
-            if target == "/batch/select-all":
-                # Redisplay the form only. Do not fetch, persist choices or apply a mapping.
-                return self.send(200, page(display(self.server, OWNERS, previous=data, select_all=True),
-                                           current="/batch", heading="Batch balances"))
+        back = data.get("view", "Household")
+        back = back if back in ("Household", *PEOPLE) else "Household"
+        if sync_act:
             try:
-                notices = batch.run(target.rsplit("/", 1)[1], data)
+                self.server.notices = self.server.batch.sync()
             except Problem as exc:
-                return self.send(422, page(display(self.server, OWNERS, [], data, error=str(exc)),
-                                           current="/batch", heading="Batch balances"))
-            if notices:
-                return self.send(200, page(display(self.server, OWNERS, notices), current="/batch", heading="Batch balances"))
-            return self.send(303, "", location="/batch")
+                return self.render_home(back, error=str(exc), status=422)
+            return self.send(303, "", location=view_url(back))
+        if owner_act:
+            chosen = data.get("owner", "")
+            if chosen not in OWNERS:
+                return self.send(422, "Invalid owner.")
+            with closing(sqlite3.connect(self.server.db)) as db, db:
+                row = db.execute("SELECT owner FROM accounts WHERE id=?", (owner_act[1],)).fetchone()
+                if not row:
+                    return self.send(404, "Account not found.")
+                new_owner = "Unspecified" if row[0] == chosen else chosen
+                db.execute("UPDATE accounts SET owner=? WHERE id=?", (new_owner, owner_act[1]))
+            return self.send(303, "", location=view_url(back))
+        if exclude_act:
+            val = data.get("excluded", "")
+            if val not in ("0", "1"):
+                return self.send(422, "Invalid exclude flag.")
+            with closing(sqlite3.connect(self.server.db)) as db, db:
+                changed = db.execute("UPDATE accounts SET excluded=? WHERE id=?", (int(val), exclude_act[1])).rowcount
+                if not changed:
+                    return self.send(404, "Account not found.")
+            return self.send(303, "", location=view_url(back))
+        if side_act:
+            side = data.get("side", "")
+            if side not in ("asset", "debt"):
+                return self.send(422, "Invalid side.")
+            with closing(sqlite3.connect(self.server.db)) as db, db:
+                changed = db.execute("UPDATE accounts SET side=?, side_manual=1 WHERE id=?",
+                                     (side, side_act[1])).rowcount
+                if not changed:
+                    return self.send(404, "Account not found.")
+            return self.send(303, "", location=view_url(back))
         if remove:
             with closing(sqlite3.connect(self.server.db)) as db, db:
                 db.execute("DELETE FROM accounts WHERE id=?", (remove[1],))
@@ -295,12 +407,16 @@ class Handler(BaseHTTPRequestHandler):
         params = tuple(values[k] for k in FIELDS)
         with closing(sqlite3.connect(self.server.db)) as db, db:
             if edit:
-                changed = db.execute("UPDATE accounts SET institution=?,nickname=?,kind=?,side=?,currency=?,balance=?,asof=?,owner=?,update_method=? WHERE id=?",
-                                     (*params, edit[1])).rowcount
-                if not changed:
+                prev = db.execute("SELECT side, side_manual FROM accounts WHERE id=?", (edit[1],)).fetchone()
+                if not prev:
                     return self.send(404, "Account not found.")
+                side_manual = 1 if (prev[1] or prev[0] != values["side"]) else 0
+                db.execute("""UPDATE accounts SET institution=?,nickname=?,kind=?,side=?,currency=?,
+                              balance=?,asof=?,owner=?,update_method=?,side_manual=? WHERE id=?""",
+                           (*params, side_manual, edit[1]))
             else:
-                db.execute("INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof,owner,update_method) VALUES (?,?,?,?,?,?,?,?,?)", params)
+                db.execute("""INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof,
+                              owner,update_method,excluded,side_manual) VALUES (?,?,?,?,?,?,?,?,?,0,1)""", params)
         self.send(303, "", location="/")
 
 
@@ -310,6 +426,7 @@ def serve(path, port, provider=None):
     server.token = secrets.token_urlsafe(32)
     server.db = path
     server.batch = Batch(path, provider, validate) if provider else None
+    server.notices = []
     return server
 
 
@@ -318,7 +435,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8765)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--db", type=Path, default=DEFAULT_DB)
-    modes.add_argument("--demo", action="store_true", help="Fictional batch walkthrough, disposable database only")
+    modes.add_argument("--demo", action="store_true", help="Fictional walkthrough, disposable database only")
     modes.add_argument("--bridge", action="store_true", help="Enable configured SimpleFIN Bridge")
     args = parser.parse_args()
     os.umask(0o077)

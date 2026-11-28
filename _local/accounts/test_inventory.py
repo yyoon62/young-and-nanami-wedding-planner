@@ -33,7 +33,7 @@ class HouseholdInventory(unittest.TestCase):
                     return db.execute("SELECT * FROM accounts ORDER BY id").fetchall()
 
             with running(path) as request:
-                self.assertEqual(stored(), [(*legacy, "Unspecified", "Manual entry")])
+                self.assertEqual(stored(), [(*legacy, "Unspecified", "Manual entry", 0, 0)])
                 overview(request, "/?view=Young", [], [])
                 form = request("/new")[1]
                 self.assertIn("<option selected>Unspecified</option>", form)
@@ -65,11 +65,26 @@ class HouseholdInventory(unittest.TestCase):
                 self.assertEqual(request("/edit/17", fields)[0], 303)
 
             with running(path) as request:
-                self.assertEqual(stored(), [(*legacy, "Nanami", "Read co-op statement"), *snapshot[1:]])
+                self.assertEqual(stored(), [(*legacy, "Nanami", "Read co-op statement", 0, 0), *snapshot[1:]])
                 overview(request, "/", [17, 18, 19, 20], ["USD 11.00", "JPY 7"])
                 overview(request, "/?view=Young", [18, 20], ["USD 13.00"])
                 body = overview(request, "/?view=Nanami", [17, 19, 20], ["USD 1.00", "JPY 7"])
-                for text in ("2024-02-29", "Custom units", "Fictional co-op", "Read co-op statement"):
+                for text in ("2024-02-29", "Custom units", "Fictional co-op"):
                     self.assertIn(text, body)
-                self.assertIn("<option selected>Nanami</option>", request("/edit/17")[1])
+                edit17 = request("/edit/17")[1]
+                self.assertIn("<option selected>Nanami</option>", edit17)
+                self.assertIn('value="Read co-op statement"', edit17)
                 self.assertEqual(request("/?view=unknown")[0], 400)
+                # Inline owner pill toggle and exclude/include
+                token = re.search(r'name="token" value="([^"]+)"', body)[1]
+                self.assertEqual(request("/owner/18", dict(token=token, owner="Joint", view="Household"))[0], 303)
+                overview(request, "/?view=Nanami", [17, 18, 19, 20], ["USD 11.00", "JPY 7"])
+                # Clicking active pill again clears back to Unspecified
+                self.assertEqual(request("/owner/18", dict(token=token, owner="Joint", view="Household"))[0], 303)
+                overview(request, "/?view=Nanami", [17, 19, 20], ["USD 1.00", "JPY 7"])
+                # Excluding removes from totals without deleting
+                self.assertEqual(request("/exclude/19", dict(token=token, excluded="1", view="Household"))[0], 303)
+                after_ex = overview(request, "/", [17, 18, 19, 20], ["USD 13.00", "JPY 7"])
+                self.assertIn("Excluded accounts (1)", after_ex)
+                self.assertEqual(request("/exclude/19", dict(token=token, excluded="0", view="Household"))[0], 303)
+                overview(request, "/", [17, 18, 19, 20], ["USD 11.00", "JPY 7"])

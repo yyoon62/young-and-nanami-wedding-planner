@@ -69,7 +69,7 @@ class BrowserFlow(unittest.TestCase):
             before = page.locator("main").inner_text()
             for field in ["Cedar", "Birch", "USD 11.10", "JPY -500"]:
                 self.assertIn(field, before)
-            open_link = page.get_by_role("link", name="Preview federal My Aid Data")
+            open_link = page.get_by_role("link", name="Federal preview")
             open_link.click()
             page.wait_for_load_state()
             select, result = page.locator("#loan"), page.locator("#result")

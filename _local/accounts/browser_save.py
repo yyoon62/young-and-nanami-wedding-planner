@@ -28,7 +28,7 @@ class LocalSave(unittest.TestCase):
                     response = submitted.value
                     self.assertEqual(response.status, 303, f"POST Origin: {response.request.header_value('origin')}")
                     page.wait_for_url(origin + "/")
-                    self.assertEqual(page.get_by_role("article", name="Example loan").count(), 1)
+                    self.assertEqual(page.locator("tbody tr").filter(has_text="Example loan").count(), 1)
                     self.assertIn("USD -12.34", page.locator("main").inner_text())
                     browser.close()
             finally:
