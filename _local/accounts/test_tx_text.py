@@ -144,8 +144,8 @@ class Rows(Fixture, unittest.TestCase):
     def test_provenance_is_a_tooltip_and_only_transfer_review_and_suggested_stay_visible(self):
         html = self.html()
         payroll, cafe, unknown = (self.tr(html, d) for d in ("PAYROLL Fictional", "Corner Cafe", "Totally Unknown"))
-        self.assertIn('title="(built-in default) · Cash flow"', payroll)
-        self.assertIn('title="(set by you) · Cash flow"', cafe)
+        self.assertIn('title="Change category · (built-in default)"', payroll)
+        self.assertIn('title="Change category · (set by you)"', cafe)
         for tr in (payroll, cafe, unknown):
             self.assertNotIn(">Posted<", tr)
             self.assertNotIn("SimpleFIN ·</", tr)

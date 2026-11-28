@@ -501,6 +501,27 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
   .tx-table.tx-compact tr.tx-drawer-row { display: block; }
   .tx-table.tx-compact tr.tx-drawer-row > td { display: block; }
 }
+/* Category chip menu (part 6): the Accounts .inline-pop / .sec-chip / .sec-menu, floated over the table. */
+.table-wrap.tx-wrap { overflow: visible; }
+.tx-table.tx-compact .tx-pick { vertical-align: middle; }
+.tx-table.tx-compact .tx-chip { display: inline-block; font-size: .8rem; padding: .08rem .55rem; cursor: pointer; white-space: nowrap; }
+.tx-table.tx-compact .tx-chip.is-none { background: transparent; border: 1px dashed var(--border-strong); }
+.tx-pick .sec-menu { position: absolute; right: 0; top: 100%; z-index: 30; width: 22rem; max-width: 86vw; white-space: normal;
+  margin-top: .2rem; max-height: 26rem; overflow-y: auto; }
+.tx-pick.up .sec-menu { top: auto; bottom: 100%; margin: 0 0 .2rem; }
+.tx-menu .tx-new { display: flex; gap: 4px; flex: 1 1 100%; margin-top: .15rem; }
+.tx-menu .tx-new input { flex: 1; min-width: 0; min-height: 28px; margin: 0; padding: .1rem .5rem; font-size: .82rem; }
+.tx-menu .tx-apply { flex: 1 1 100%; display: block; line-height: 1.5; font-size: .8rem; color: var(--text-secondary); margin: .1rem 0 0; }
+.tx-menu .tx-apply input { width: auto; min-height: 0; margin: 0 .35rem 0 0; vertical-align: -2px; }
+.tx-menu .tx-apply strong { display: inline; font: inherit; font-weight: 700; }
+.tx-menu-err { flex: 1 1 100%; margin: .1rem 0 0; padding: .25rem .5rem; font-size: .8rem; border-radius: 8px; border: 1px solid #e6b8b3; background: #fdf2f0; }
+.tx-menu .sec-opt { font-size: .78rem; min-height: 26px; }
+@media (max-width: 40rem) {
+  .tx-table.tx-compact tr.acct-row { position: relative; }
+  .tx-table.tx-compact .tx-pick { position: static; }
+  .tx-pick .sec-menu { left: .6rem; right: .6rem; width: auto; max-width: none; max-height: 22rem; }
+  .tx-pick.up .sec-menu { top: auto; bottom: calc(100% - .2rem); }
+}
 /* ==== L26 end ==== */
 
 /* Phone: each transaction becomes a small card so the amount and the edit drawer are never off-screen */

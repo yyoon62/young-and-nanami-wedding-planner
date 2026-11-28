@@ -186,6 +186,60 @@ def _drawer(r, f, token, categories, manual, attempt, error):
         '</form></details>')
 
 
+DATA_UP = 'data-up="1" '
+
+
+def _pick_menu(f, token, categories, current, *, row="", who="", rule=True, attempt=None, error=""):
+    """The category menu of a row's chip, in the Accounts `.sec-menu` / `.sec-opt` look. One click on an emoji +
+    category button posts it (no Save). The default button (first in tree order, so Enter in the name field) is
+    the hidden "Add", never the first category."""
+    attempt = attempt or {}
+    buttons = "".join(
+        f'<button type="submit" name="pick" value="{escape(c)}" class="sec-opt{" active" if c == current else ""}">'
+        f'{default_emoji(c)} {escape(c)}</button>' for c in categories)
+    none = (f'<button type="submit" name="pick" value="" class="sec-opt{" active" if current == "" else ""}">'
+            '🏷️ Uncategorized</button>')
+    problem = f'<p class="tx-menu-err" role="alert">{escape(error)}</p>' if error else ""
+    apply = (f'<label class="check tx-apply"><input type="checkbox" name="apply" value="1"'
+             f'{" checked" if attempt.get("apply") == "1" else ""}> Apply to all <strong class="tx-apply-who">'
+             f'{escape(who)}</strong> on this account</label>') if rule else ""
+    return (f'<form method="post" action="{EDIT}" class="sec-menu tx-menu">'
+            + _hidden(f, token=token, row=row)
+            + '<button type="submit" name="pick_new" value="1" class="sr" tabindex="-1" aria-hidden="true">Add</button>'
+            + buttons + none
+            + '<button type="submit" name="pick_transfer" value="1" class="sec-opt" title="Money between your own '
+            'accounts; not counted as spending">↔️ Transfer</button>'
+            f'<span class="tx-new"><input name="new_category" maxlength="48" autocomplete="off" '
+            f'placeholder="+ New category" aria-label="New category name" '
+            f'value="{escape(attempt.get("new_category", ""))}">'
+            '<button type="submit" name="pick_new" value="1" class="sec-opt">Add</button></span>'
+            + apply + problem + '</form>')
+
+
+def _chip_label(r):
+    category = r["category"]
+    if category:
+        return f'{default_emoji(category)} {escape(category)}'
+    if r["effective_transfer"]:
+        return "↔️ Transfer"
+    return "🏷️ Needs review" if r["category_source"] == "review" else "🏷️ Uncategorized"
+
+
+def _category_cell(r, f, token, categories, *, up, opened, attempt, error):
+    """The row's category chip + its popover (the menu itself is cloned from one <template> on open)."""
+    can_rule = not r["pending"] and bool(r["merchant"])
+    who = (r["clean_key"] or r["description"] or r["merchant"])[:40]
+    tip = " · ".join(x for x in ("Change category", _ORIGIN.get(r["category_source"]),
+                                 r["flow"] if r["flow"] != "Cash flow" else "") if x)
+    menu = (_pick_menu(f, token, categories, r["category"], row=r["row_id"], who=who, rule=can_rule,
+                       attempt=attempt, error=error) if opened else "")
+    return (f'<details class="inline-pop tx-pick{" up" if up else ""}"{" open" if opened else ""} '
+            f'{DATA_UP if up else ""}data-row="{r["row_id"]}" data-cat="{escape(r["category"])}" data-who="{escape(who)}" '
+            f'data-rule="{1 if can_rule else 0}"><summary class="sec-chip tx-chip'
+            f'{"" if r["category"] or r["effective_transfer"] else " is-none"}" title="{escape(tip)}">'
+            f'{_chip_label(r)} ▾</summary>{menu}</details>')
+
+
 def _summary_card(currency, t, cmp, incomplete, f):
     """Opening tag + compact per-currency summary; the caller appends the bars and </article>."""
     net = sign_of(t.net, currency)
@@ -322,7 +376,7 @@ def _logo(r, logo_dir):
 
 
 def render_transactions(db, query, *, token, allowed_views, can_sync=False, today=None,
-                        open_row=None, attempt=None, error=None, logo_dir=None):
+                        open_row=None, open_pick=None, attempt=None, error=None, logo_dir=None):
     """Return fragment for parent page()/send(); read DB in a single parent snapshot."""
     today = today or datetime.now(timezone.utc).date()
     data = _params(query, set(_FILTERS) | {"moved", "edit"})
@@ -401,29 +455,29 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
 
     rows = []
     q = f["q"].casefold().strip()
-    for r in snap.rows:
+
+    def listed(r):
         if f["currency"] and f["currency"] != r["currency"]:
-            continue
+            return False
         if q and not any(q in r[k].casefold() for k in
                          ("description", "payee", "category", "nickname", "institution", "flow")):
-            continue
+            return False
         if f["cat"] and (r["category"] or "Uncategorized").casefold() != f["cat"].casefold():
-            continue
-        if f["review"] == "1" and r["flow"] != "Review card credit":
-            continue
-        category = escape(r["category"])
+            return False
+        return f["review"] != "1" or r["flow"] == "Review card credit"
+
+    shown_rows = [r for r in snap.rows if listed(r)]
+    for index, r in enumerate(shown_rows):
         when = escape(r["posted_date"] or r["pending_date"])
         when_title = "Pending · provider or observed date" if r["pending"] else "Posted"
         payee = f' title="Payee: {escape(r["payee"])}"' if r["payee"] else ""
         marker = ('<span class="acct-sub tx-flag" title="Possible internal transfer · still counted. '
                   'If confirmed, mark each leg as Transfer.">↔️ possible transfer</span>' if r["suggested_transfer"] else "")
-        # A transfer is not spending, so it needs no category; say so instead of "Needs review".
-        label_cell = category or ("" if r["effective_transfer"] else
-                                  "Needs review" if r["category_source"] == "review" else "Uncategorized")
-        tip = " · ".join(x for x in (_ORIGIN.get(r["category_source"]), r["flow"]) if x)
         flow = (f'<span class="acct-sub tx-flow">{escape(r["flow"])}</span>'
-                if r["flow"].startswith(_SHOWN_FLOWS) else "")
-        shown = f'<span class="tx-cat" title="{escape(tip)}">{label_cell}</span>' if label_cell else ""
+                if r["flow"].startswith(_SHOWN_FLOWS) and not (r["effective_transfer"] and not r["category"])
+                else "")      # a transfer without a category already says so on its chip
+        shown = _category_cell(r, f, token, categories, up=index >= len(shown_rows) - 3,
+                               opened=open_pick == r["row_id"], attempt=attempt, error=error if open_pick == r["row_id"] else "")
         badge = _BADGE if r["category_source"] == "suggested" else ""
         drawer_row = ""
         if open_row == r["row_id"]:
@@ -446,13 +500,14 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
             f'<td class="cat-cell">{shown}{badge}{flow}{marker}</td>'
             f'<td class="num"><span class="cur">{escape(r["currency"])}</span> {_amount(r)}</td>'
             f'<td class="act-cell">{edit}</td></tr>{drawer_row}')
-    shared = (f'<form id="tx-act" method="post" action="{EDIT}" hidden>' + _hidden(f, token=token) + '</form>')
+    shared = (f'<form id="tx-act" method="post" action="{EDIT}" hidden>' + _hidden(f, token=token) + '</form>'
+              + '<template id="tx-pick-tpl">' + _pick_menu(f, token, categories, None) + '</template>')
     table = (
-        shared + '<div class="table-wrap"><table class="acct-table tx-table tx-compact"><thead><tr><th>Date</th>'
+        shared + '<div class="table-wrap tx-wrap"><table class="acct-table tx-table tx-compact"><thead><tr><th>Date</th>'
         '<th>Transaction</th><th>Owner</th><th>Category</th><th class="num">Amount</th>'
         '<th><span class="sr">Edit</span></th></tr></thead><tbody>'
         + "".join(rows) + "</tbody></table></div>" if rows else "<p>No transactions match this list.</p>")
-    alert = f'<p class="notice" role="alert">{escape(error)}</p>' if error else ""
+    alert = f'<p class="notice" role="alert">{escape(error)}</p>' if error and open_pick is None else ""
     review_chip = (f'<p class="filter-chip">Showing card payments to confirm only · '
                    f'<a href="{escape(_location(dict(f, review="", currency="")))}">Clear filter</a></p>'
                    if f["review"] == "1" else "")
@@ -506,7 +561,8 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     except UnicodeError:
         raise RouteProblem(400, "Invalid transaction form.") from None
     keys = set(_FILTERS) | {"token"} | ({"row", "category", "new_category", "apply", "transfer",
-                                         "merchant_transfer", "action", "enabled", "owner", "act"}
+                                         "merchant_transfer", "action", "enabled", "owner", "act",
+                                         "pick", "pick_new", "pick_transfer"}
                                         if path == EDIT else {"include_pending"})
     data = _params(raw, keys)
     if not token or not secrets.compare_digest(data.get("token", "").encode("utf-8"), token.encode("utf-8")):
@@ -530,6 +586,19 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
         return PostResult(_location(f), True, pending == "1")
     if data.get("action") in ("classifier", "classify_now"):
         return _classifier_action(db, data, f)
+    picked = [k for k in ("pick", "pick_new", "pick_transfer") if k in data]
+    if picked:
+        # The row chip's menu (one click saves). One choice per post; a typed name is only used by "Add".
+        if len(picked) != 1 or "action" in data or data.get("pick_new", "1") != "1" or data.get("pick_transfer", "1") != "1":
+            raise RouteProblem(400, "Invalid category choice.")
+        kind, value = picked[0], data[picked[0]]
+        data = {k: v for k, v in data.items() if k not in ("pick", "pick_new", "pick_transfer")}
+        data["action"] = kind
+        if kind == "pick":
+            data["category"] = value
+            data.pop("new_category", None)
+        elif kind == "pick_new":
+            data.setdefault("new_category", "")
     row = data.get("row", "")
     if not re.fullmatch(r"[1-9][0-9]{0,18}", row) or int(row) > 2**63 - 1:
         raise RouteProblem(400, "Invalid transaction row.")
@@ -557,8 +626,10 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     except ValueError as exc:
         message = str(exc) or "Enter a printable category of up to 48 characters."
         try:
+            picking = action in ("pick", "pick_new", "pick_transfer")
             body = render_transactions(db, urlencode(f), token=token, allowed_views=allowed_views,
-                                       can_sync=can_sync, open_row=int(row), attempt=data, error=message)
+                                       can_sync=can_sync, open_row=None if picking else int(row),
+                                       open_pick=int(row) if picking else None, attempt=data, error=message)
         except Exception:
             body = None
         raise RouteProblem(422, message, body=body) from None

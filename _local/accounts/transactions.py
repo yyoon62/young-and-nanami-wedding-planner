@@ -613,7 +613,8 @@ def manual_index(db):
     return index
 
 
-ACTIONS = ("category", "rule", "transfer", "transfer_rule", "save", "add_category", "owner", "owner_reset")
+ACTIONS = ("category", "rule", "transfer", "transfer_rule", "save", "add_category", "owner", "owner_reset",
+           "pick", "pick_new", "pick_transfer")
 
 
 def edit_transaction(db, row_id, view, month, *, action, category="", transfer="", merchant_transfer="",
@@ -638,13 +639,13 @@ def edit_transaction(db, row_id, view, month, *, action, category="", transfer="
     if action == "transfer_rule" and not merchant_transfer:
         raise ValueError("Choose a merchant transfer rule setting.")
     category = category.strip() if isinstance(category, str) else ""
-    if action in ("category", "rule", "save"):
+    if action in ("category", "rule", "save", "pick", "pick_new"):
         if category:
             _optional_text(category, 48)
             category = canonical(db, category)
             if category is None:
                 raise ValueError("Choose a category from the list, or add it first.")
-        if (action == "rule" or (action == "save" and apply)) and not (category or new_category.strip()):
+        if (action == "rule" or (action in ("save", "pick") and apply)) and not (category or new_category.strip()):
             raise ValueError("Choose a category to apply to this merchant.")
     found = _dicts(db.execute(f"""SELECT t.*, a.owner AS account_owner {_VISIBLE} {_SCOPE} AND t.row_id=?
         AND coalesce(t.posted_date,t.pending_date)>=? AND coalesce(t.posted_date,t.pending_date)<?
@@ -663,12 +664,37 @@ def edit_transaction(db, row_id, view, month, *, action, category="", transfer="
     if action == "transfer":
         _set_transfer(db, row_id, transfer)
         return True
+    if action == "pick_transfer":
+        # Chip menu "↔️ Transfer": this row, or with the toggle every row of the merchant on this account.
+        if apply and (row["pending"] or not row["merchant"]):
+            raise ValueError("A merchant rule needs a posted transaction with a merchant.")
+        _set_transfer(db, row_id, "yes")
+        if apply:
+            _set_merchant_transfer(db, key, clean, "yes")
+        return True
     if action == "transfer_rule":
         if row["pending"] or not row["merchant"]:
             raise ValueError("A merchant rule needs a posted transaction with a merchant.")
         _set_merchant_transfer(db, key, clean, merchant_transfer)
         return True
     apply = apply or action == "rule"
+    if action in ("pick", "pick_new"):
+        # One click from the row chip. The choice is the user's: it is always stored on the row as manual (even when
+        # it equals the current one, which pins an AI/rule category), or as a live merchant rule with the toggle.
+        # Choosing a category undoes a manual transfer mark on this row.
+        if action == "pick_new" or new_category.strip():
+            category = add_category(db, new_category)       # blank or duplicate raises: "Enter a category name." / exists
+        if apply:
+            if row["pending"] or not row["merchant"]:
+                raise ValueError("A merchant rule needs a posted transaction with a merchant.")
+            _set_category_rule(db, key, clean, category)
+            db.execute("UPDATE account_transactions SET category='', category_manual=0 WHERE row_id=?", (row_id,))
+        else:
+            db.execute("UPDATE account_transactions SET category=?, category_manual=1 WHERE row_id=?",
+                       (category, row_id))
+        if row["transfer_manual"] and row["is_transfer"]:
+            _set_transfer(db, row_id, "auto")
+        return True
     if action in ("category", "rule", "save"):
         if new_category.strip():
             category = add_category(db, new_category)

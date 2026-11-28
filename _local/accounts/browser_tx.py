@@ -297,6 +297,88 @@ class BrowserTx(unittest.TestCase):
                 self.assertGreaterEqual(inner["x"], 0, sel)
             self.assertGreaterEqual(first.locator("button.pill-btn").first.bounding_box()["height"], 28)
 
+    def category_of(self, description):
+        with closing(sqlite3.connect(self.path)) as db:
+            return db.execute("SELECT category, category_manual FROM account_transactions WHERE description=? "
+                              "ORDER BY row_id", (description,)).fetchall()
+
+    def test_category_chip_one_click_saves_toggle_new_category_escape_and_last_rows_do_not_clip(self):
+        seed_fictional(self.path, joint_card=True)
+        with block_network(allow_loopback=True), running(self.path) as origin, self.browser() as page:
+            page.goto(origin + "/transactions?month=2026-11&currency=USD")
+            fuel = lambda: page.locator("tr.acct-row", has_text="Harbor Fuel")
+            chip = fuel().locator("details.tx-pick > summary")
+            expect(chip).to_contain_text("Uncategorized")
+            self.assertEqual(page.locator("details.tx-pick .sec-menu").count(), 0)         # menus are cloned on open
+            chip.click()
+            menu = fuel().locator(".sec-menu")
+            expect(menu).to_be_visible()
+            self.assertEqual(menu.locator("button[name=pick]").first.evaluate("e => document.activeElement === e"), True)
+            page.keyboard.press("Escape")
+            expect(menu).not_to_be_visible()
+            chip.focus()
+            page.keyboard.press("Enter")                                                     # keyboard operable
+            expect(menu).to_be_visible()
+            with page.expect_navigation():                                                   # one click saves, no Save button
+                menu.get_by_role("button", name="Transport").click()
+            self.assertTrue(page.url.endswith("#" + fuel().get_attribute("id")), page.url)
+            self.assertIn("currency=USD", page.url)
+            expect(fuel().locator("details.tx-pick > summary")).to_contain_text("Transport")
+            self.assertEqual(page.locator("details.tx-pick[open]").count(), 0)
+            self.assertEqual(self.category_of("Harbor Fuel"), [("Transport", 1)])
+            self.assertEqual(self.rules(), [])
+            # The toggle makes a merchant rule; New category refuses a duplicate with the menu still open.
+            noodle = page.locator("tr.acct-row", has_text="Noodle House")
+            noodle.locator("details.tx-pick > summary").click()
+            noodle.locator(".tx-apply input").check()
+            expect(noodle.locator(".tx-apply")).to_contain_text("Apply to all noodle house on this account")
+            noodle.locator("input[name=new_category]").fill("transport")
+            noodle.locator("input[name=new_category]").press("Enter")                      # Enter = Add, never the first category
+            page.wait_for_load_state()
+            noodle = page.locator("tr.acct-row", has_text="Noodle House")
+            expect(noodle.locator(".tx-menu-err")).to_contain_text("already exists")
+            expect(noodle.locator("details.tx-pick[open]")).to_have_count(1)
+            self.assertEqual(self.category_of("Noodle House"), [("", 0)])
+            noodle.locator("input[name=new_category]").fill("Takeout")
+            with page.expect_navigation():
+                noodle.get_by_role("button", name="Add", exact=True).click()
+            self.assertEqual(self.category_of("Noodle House"), [("", 0)])                  # the kept toggle made it a rule
+            self.assertEqual(self.rules(), [("noodle house", "Takeout", "noodle house")])
+            page.reload()
+            page.locator("tr.acct-row", has_text="Corner Coffee").locator("details.tx-pick > summary").click()
+            expect(page.locator("tr.acct-row", has_text="Corner Coffee").get_by_role("button", name="Takeout")).to_be_visible()
+            page.keyboard.press("Escape")
+            # Last rows: the menu opens upward inside the window and the page does not grow.
+            last = page.locator("tr.acct-row").last
+            last.scroll_into_view_if_needed()
+            height = page.evaluate("document.documentElement.scrollHeight")
+            last.locator("details.tx-pick > summary").click()
+            box = last.locator(".sec-menu").bounding_box()
+            self.assertGreaterEqual(box["y"], 0)
+            self.assertLessEqual(box["y"] + box["height"], 900)
+            self.assertLess(box["y"], last.bounding_box()["y"])                              # above its own row
+            self.assertEqual(page.evaluate("document.documentElement.scrollHeight"), height)
+            self.assertEqual(page.evaluate("document.documentElement.scrollWidth"), 1280)
+
+    def test_category_chip_apply_toggle_rule_and_phone_menu_stays_on_screen(self):
+        seed_fictional(self.path, joint_card=True)
+        with block_network(allow_loopback=True), running(self.path) as origin, \
+                self.browser({"width": 390, "height": 844}) as page:
+            page.goto(origin + "/transactions?month=2026-11")
+            row = page.locator("tr.acct-row", has_text="Harbor Fuel")
+            row.locator("details.tx-pick > summary").click()
+            menu = row.locator(".sec-menu")
+            box = menu.bounding_box()
+            self.assertGreaterEqual(box["x"], 0)
+            self.assertLessEqual(box["x"] + box["width"], 390)
+            self.assertEqual(page.evaluate("document.documentElement.scrollWidth"), 390)
+            row.locator(".tx-apply input").check()
+            with page.expect_navigation():
+                menu.get_by_role("button", name="Transport").click()
+            self.assertEqual(self.rules(), [("harbor fuel", "Transport", "harbor fuel")])
+            self.assertEqual(self.category_of("Harbor Fuel"), [("", 0)])                    # follows the live rule
+            expect(page.locator("tr.acct-row", has_text="Harbor Fuel")).to_contain_text("Transport")
+
     def test_projections_apply_one_click_then_advanced_toggles(self):
         seed_fictional(self.path)
         with block_network(allow_loopback=True), running(self.path) as origin, self.browser() as page:
