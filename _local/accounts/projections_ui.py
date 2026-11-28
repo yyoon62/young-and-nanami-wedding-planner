@@ -360,9 +360,10 @@ def _compare(plan, a, money):
         return ", ".join(f"{escape(d.name)} ({escape(_when(plan, run.outcomes[d.key].payoff_month))})" for d in done)
 
     def row(label, run, note=""):
-        return (f'<tr><th scope="row">{label}</th><td>{escape(_when(plan, run.last_payoff_month))} '
-                f'<span class="acct-sub">(month {run.last_payoff_month})</span></td>'
-                f'<td class="num">{money(run.total_interest)}</td><td>{payoff_order(run)}{note}</td></tr>')
+        return (f'<tr><th scope="row">{label}</th><td data-label="Debt-free"><div class="cell">'
+                f'{escape(_when(plan, run.last_payoff_month))} <span class="acct-sub">(month {run.last_payoff_month})</span></div></td>'
+                f'<td class="num" data-label="Total interest">{money(run.total_interest)}</td>'
+                f'<td data-label="Payoff order"><div class="cell">{payoff_order(run)}{note}</div></td></tr>')
 
     ava, snow = c.avalanche, c.snowball
     if c.winner:
@@ -380,7 +381,7 @@ def _compare(plan, a, money):
             'orders. Avalanche: highest current rate first (re-picked each month, so a promo ending changes the target); '
             'snowball: smallest balance first. A paid-off debt’s planned payment rolls over. Neither order is assumed to '
             'win: both are computed.</p>'
-            '<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable payoff order comparison">'
+            '<div class="table-wrap stack-table" tabindex="0" role="region" aria-label="Scrollable payoff order comparison">'
             '<table class="acct-table"><thead><tr><th scope="col">Order</th><th scope="col">Debt-free</th>'
             '<th scope="col" class="num">Total interest</th><th scope="col">Payoff order</th></tr></thead><tbody>'
             + row("Avalanche", ava) + row("Snowball", snow)
@@ -469,11 +470,13 @@ def _debt_section(plan, entries, run, a, currency, scale, money, observed=None):
                 notes.append('<span class="acct-sub">Add a planned or minimum payment on Accounts; only extra payments reduce it.</span>')
             if e.stale:
                 notes.append('<span class="acct-sub">Balance is stale; the schedule starts from it anyway.</span>')
+            note_html = "".join(f'<div class="acct-sub debt-note">{n}</div>' for n in notes)
             rows.append(
-                f'<tr><th scope="row">{escape(e.name)}<div class="acct-sub">{escape(e.institution)}</div></th>'
-                f'<td class="num">{money(d.balance)}<div class="acct-sub">as of <time>{escape(e.asof)}</time>{stale}</div></td>'
-                f'<td>{rate}</td><td class="num">{pay}</td><td>{payoff}</td><td class="num">{total}</td>'
-                f'<td class="num">{money(sched.first_interest)}</td><td>{"<br>".join(notes)}</td></tr>')
+                f'<tr><th scope="row">{escape(e.name)}<div class="acct-sub">{escape(e.institution)}</div>{note_html}</th>'
+                f'<td class="num" data-label="Balance"><div class="cell">{money(d.balance)}<div class="acct-sub">as of <time>{escape(e.asof)}</time>{stale}</div></div></td>'
+                f'<td data-label="Rate"><div class="cell">{rate}</div></td><td class="pay" data-label="Payment"><div class="cell">{pay}</div></td>'
+                f'<td data-label="Payoff"><div class="cell">{payoff}</div></td><td class="num" data-label="Total interest">{total}</td>'
+                f'<td class="num" data-label="Interest this month">{money(sched.first_interest)}</td></tr>')
             if sched.rows:
                 shown = sched.rows[:120]
                 body = "".join(
@@ -497,11 +500,11 @@ def _debt_section(plan, entries, run, a, currency, scale, money, observed=None):
                  'payments, from positive net savings) go to debts without a rate first, then the highest current rate; '
                  'a paid-off debt’s payment rolls over. The table above includes them.</p>') if run.extra > 0 else ""
         parts.append(
-            '<div class="table-wrap debt-table" tabindex="0" role="region" aria-label="Scrollable debt table">'
+            '<div class="table-wrap debt-table stack-table" tabindex="0" role="region" aria-label="Scrollable debt table">'
             '<table class="acct-table"><thead><tr><th scope="col">Account</th><th scope="col" class="num">Balance</th>'
-            '<th scope="col">Rate</th><th scope="col" class="num">Payment</th><th scope="col">Payoff</th>'
+            '<th scope="col">Rate</th><th scope="col" class="pay">Payment</th><th scope="col">Payoff</th>'
             '<th scope="col" class="num">Total interest</th><th scope="col" class="num">Interest this month</th>'
-            '<th scope="col">Notes</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>'
+            '</tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>'
             f'<p>Current monthly interest cost of these debts: <strong>{money(interest_now)}</strong> '
             '(at today’s rates, before payments).</p>' + extra + _compare(plan, a, money) + "".join(details))
     parts.append('</section>')
