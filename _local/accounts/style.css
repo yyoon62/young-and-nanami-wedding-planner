@@ -416,6 +416,7 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
 .tx-table .owner-cell .inline-form + .inline-form { margin-left: .25rem; }
 .tx-reset { font-size: .95rem; vertical-align: middle; }
 .tx-ovr { margin-left: .2rem; font-style: italic; }
+.tx-form small.tx-hint { display: block; margin: .1rem 0 .55rem; color: var(--text-muted); }
 .tx-card .tx-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
 .tx-card .tx-card-head .partial-flag { margin-left: 0; }
 .card .tx-sum { color: #2b2320; font-size: 1rem; line-height: 1.55; margin: .15rem 0 .2rem; }

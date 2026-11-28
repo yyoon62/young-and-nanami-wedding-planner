@@ -153,7 +153,7 @@ def _drawer(r, f, token, categories, manual, attempt, error):
     cats = _option("", "Uncategorized", chosen) + "".join(_option(c, c, chosen) for c in names)
     transfer = attempt.get("transfer") or (("yes" if r["is_transfer"] else "no") if r["transfer_manual"] else "auto")
     choices = "".join(_option(value, label, transfer) for value, label in
-                      (("auto", "Automatic"), ("yes", "Transfer"), ("no", "Not a transfer")))
+                      (("auto", "Automatic"), ("yes", "Yes, a transfer"), ("no", "No, not a transfer")))
     can_rule = not r["pending"] and bool(r["merchant"])
     rules = ""
     if can_rule:
@@ -164,11 +164,13 @@ def _drawer(r, f, token, categories, manual, attempt, error):
         note = (f" {others} other row(s) with a category you set by hand will not change." if others > 0 else "")
         rule_choice = attempt.get("merchant_transfer") or {None: "none", 1: "yes", 0: "no"}[r["merchant_transfer"]]
         rule_choices = "".join(_option(value, label, rule_choice) for value, label in
-                               (("none", "No rule"), ("yes", "Transfer"), ("no", "Not a transfer")))
+                               (("none", "No rule"), ("yes", "Yes, always a transfer"), ("no", "No, never a transfer")))
+        who = escape((key or r["description"] or r["merchant"])[:40])
         rules = (f'<label class="check"><input type="checkbox" name="apply" value="1"'
                  f'{" checked" if attempt.get("apply") == "1" else ""}> Apply to this merchant on this account '
                  f'({escape(r["currency"])}){scope}.</label><small>{note.strip()}</small>'
-                 f'<label>Merchant transfer rule<select name="merchant_transfer">{rule_choices}</select></label>')
+                 f'<label>Always treat “{who}” on this account as a transfer'
+                 f'<select name="merchant_transfer">{rule_choices}</select></label>')
     problem = f'<p class="notice" role="alert">{escape(error)}</p>' if error else ""
     return (
         f'<details class="inline-pop tx-drawer"{" open" if error else ""}><summary class="sec-chip">Edit</summary>'
@@ -178,7 +180,8 @@ def _drawer(r, f, token, categories, manual, attempt, error):
         f'<label>New category<input name="new_category" maxlength="48" autocomplete="off" '
         f'value="{escape(attempt.get("new_category", ""))}" placeholder="e.g. Pets"></label>'
         '<button class="button secondary" name="action" value="add_category">Add category</button>'
-        f'<label>Transfer<select name="transfer">{choices}</select></label></div>'
+        f'<label>Is this transaction a transfer?<select name="transfer">{choices}</select></label></div>'
+        '<small class="tx-hint">Transfer = money between your own accounts; not counted as spending.</small>'
         + rules + '<div class="drawer-left"><button name="action" value="save">Save</button></div>'
         '</form></details>')
 

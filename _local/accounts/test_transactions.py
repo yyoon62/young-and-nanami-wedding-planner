@@ -386,7 +386,11 @@ class TransactionsTest(Fixture, unittest.TestCase):
         self.assertTrue(self.row("Manual transfer", "2026-12")["effective_transfer"])
         rendered = render_transactions(self.db, "month=2026-12", token=TOKEN, allowed_views=VIEWS)
         self.assertIn('name="merchant_transfer"', rendered)
-        self.assertIn('<option value="no" selected>Not a transfer</option>', rendered)
+        self.assertIn('<option value="no" selected>No, never a transfer</option>', rendered)
+        self.assertIn("Always treat “local merchant” on this account as a transfer", rendered.replace("&quot;", '"'))
+        self.assertIn("Transfer = money between your own accounts; not counted as spending.", rendered)
+        for old_wording in ("Merchant transfer rule", "transfer category", "Merchant transfer"):
+            self.assertNotIn(old_wording, rendered)
         self.assertIn("Cash flow (merchant rule)", rendered)
         edit("Credit card payment", action="transfer_rule", merchant_transfer="none")
         self.assertEqual(self.row("Credit card payment", "2026-12")["flow"], "Matched transfer")
