@@ -147,7 +147,8 @@ class Export(Base):
             db.execute("CREATE TABLE future_notes (note TEXT)")
             db.execute("INSERT INTO future_notes VALUES ('ZZ-SENTINEL-COFFEE')")
             db.execute("ALTER TABLE accounts ADD COLUMN l29_extra TEXT DEFAULT 'kept?'")
-            db.execute("ALTER TABLE account_transactions ADD COLUMN owner_override TEXT")  # L26
+            if "owner_override" not in [r[1] for r in db.execute("PRAGMA table_info(account_transactions)")]:
+                db.execute("ALTER TABLE account_transactions ADD COLUMN owner_override TEXT")  # L26 (now built in)
             db.execute("UPDATE account_transactions SET owner_override='Young'")
         result = self.export(source)
         self.assertEqual(rows(self.out, "SELECT name FROM sqlite_schema WHERE name='future_notes'"), [])
