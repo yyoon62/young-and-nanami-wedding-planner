@@ -389,6 +389,9 @@ def _classifier_action(db, data, f):
             set_setting(db, "failures", 0)
             set_setting(db, "next_try_at", 0)
             set_setting(db, "status", "")
+        else:  # an explicit "Classify now" clears an earlier pause/backoff
+            set_setting(db, "failures", 0)
+            set_setting(db, "next_try_at", 0)
     if data["action"] == "classify_now":
         run_classifier(db.execute("PRAGMA database_list").fetchone()[2], hosted=False)
     return PostResult(_location(f))
