@@ -21,7 +21,7 @@ from bulk import fingerprint, text
 
 
 DAY = 86400
-PAGE = 55 * DAY
+PAGE = 30 * DAY
 INITIAL_LOOKBACK = 90 * DAY
 OVERLAP = 5 * DAY
 VIEWS = ("Household", "Young", "Nanami")
@@ -145,16 +145,20 @@ _ERRORS = {"con.auth": "Institution sign-in required", "act.failed": "Account lo
            "gen.api": "Provider API issue"}
 
 
+_QUOTA_RE = re.compile(r"\b(?:quota|rate[\s-]*limit|too many requests|requests?\s+per\s+day|daily\s+limit)\b")
+_RANGE_RE = re.compile(r"\b(?:date\s+range|start-?date|end-?date|days?|window)\b")
+
+
 def _api_reason(entry):
     msg = (entry.get("msg") or "").lower() if isinstance(entry, dict) and isinstance(entry.get("msg"), str) else ""
-    if any(k in msg for k in ("range", "days", "date", "window", "limit")):
-        if any(k in msg for k in ("rate", "quota", "too many", "request")):
-            return "Approaching SimpleFIN daily request limit"
-        return "Provider rejected requested date range"
-    if any(k in msg for k in ("rate", "quota", "too many", "request")):
+    if _QUOTA_RE.search(msg):
         return "Approaching SimpleFIN daily request limit"
-    if "version" in msg:
+    if _RANGE_RE.search(msg):
+        return "Provider rejected requested date range"
+    if re.search(r"\bversion\b", msg):
         return "Provider rejected protocol version"
+    if re.search(r"\b(?:param|query|argument|unknown)\b", msg):
+        return "Provider rejected a query parameter"
     return _ERRORS["gen.api"]
 
 
@@ -162,17 +166,23 @@ def _unpack(provider, data, links, start, end, include_pending):
     if not isinstance(data, dict) or not all(isinstance(data.get(k), list)
             for k in ("connections", "accounts", "errlist")) or len(data["accounts"]) > 200:
         raise Problem("Invalid v2 transaction AccountSet; window held.")
+    soft_warnings = []
     if data["errlist"] or data.get("errors", []) != []:
-        reasons = set()
+        hard_reasons = set()
         for e in data["errlist"]:
             code = e.get("code") if isinstance(e, dict) else None
             if code == "gen.api":
-                reasons.add(_api_reason(e))
+                reason = _api_reason(e)
+                if reason == "Approaching SimpleFIN daily request limit" and data["accounts"]:
+                    soft_warnings.append(reason)
+                else:
+                    hard_reasons.add(reason)
             else:
-                reasons.add(_ERRORS.get(code, "Provider error") if isinstance(code, str) else "Provider error")
+                hard_reasons.add(_ERRORS.get(code, "Provider error") if isinstance(code, str) else "Provider error")
         if data.get("errors", []) != []:
-            reasons.add("Provider warning or quota issue")
-        raise Problem("; ".join(sorted(reasons)) + "; window held.")
+            hard_reasons.add("Provider warning or quota issue")
+        if hard_reasons:
+            raise Problem("; ".join(sorted(hard_reasons)) + "; window held.")
     seen, found, rows = set(), set(), []
     try:
         connections = set()
@@ -227,7 +237,7 @@ def _unpack(provider, data, links, start, end, include_pending):
         raise Problem("Malformed or duplicate transaction data; window held.") from None
     if found != links.keys():
         raise Problem("A linked account was missing; window held. Check the configured Bridge connection.")
-    return rows
+    return rows, sorted(set(soft_warnings))
 
 
 def _apply(db, rows, links, coverage, start, end, final):
@@ -276,6 +286,7 @@ def _apply(db, rows, links, coverage, start, end, final):
 class SyncResult:
     windows: int
     caught_up: bool
+    warnings: tuple = ()
 
 
 def sync_transactions(batch, *, include_pending=False, now=None):
@@ -302,17 +313,20 @@ def sync_transactions(batch, *, include_pending=False, now=None):
                     for s, link in links.items())
         if start >= end:
             raise Problem("Local clock precedes saved transaction coverage; check the clock.")
-        done = 0
+        done, warnings = 0, []
         while start < end and done < 5:
             stop = min(start + PAGE, end)
             final = stop == end
             _reserve(db)
-            rows = _unpack(provider, _fetch(provider, start, stop, final and include_pending),
-                           links, start, stop, final and include_pending)
+            rows, soft = _unpack(provider, _fetch(provider, start, stop, final and include_pending),
+                                 links, start, stop, final and include_pending)
             _apply(db, rows, links, coverage, start, stop, final)
             coverage = _coverage(db)
             start, done = (stop if final else stop - OVERLAP), done + 1
-        return SyncResult(done, start == end)
+            if soft:
+                warnings.extend(soft)
+                break  # Stop paging immediately when Bridge warns about daily quota.
+        return SyncResult(done, start == end, tuple(dict.fromkeys(warnings)))
 
 
 # Match only corroborated, narrowly defined checking/savings → credit-card

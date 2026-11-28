@@ -117,7 +117,7 @@ class TransactionsTest(unittest.TestCase):
         self.add("Excluded", tx("ignored", "2026-11-12", "-100", "Excluded"))
         self.add("Yen checking", tx("local", "2026-11-09", "-40", "Credit card payment"))
         self.accounts["Provider-only account"] = self.accounts["Joint checking"] | {"id": "unlinked"}
-        self.assertEqual(self.sync().windows, 2)
+        self.assertEqual(self.sync().windows, 4)
         self.assertTrue(all(left[1] - OVERLAP == right[0] < left[1] < right[1]
                             for left, right in zip(self.calls, self.calls[1:])))
         self.assertEqual(self.calls[-1][1], NOW)
@@ -186,7 +186,7 @@ class TransactionsTest(unittest.TestCase):
         self.account("Bank")
         self.account("Card", "Credit card")
         self.add("Bank", tx("old", "2026-09-16", "-1", "First included second"),
-                 tx("cut", "2026-11-10", "-2", "Second page boundary"),
+                 tx("cut", "2026-10-16", "-2", "Second page boundary"),
                  tx("end", "2026-12-15T12:00:00", "-3", "Endpoint exclusive"))
         fail = lambda data: data | {"errlist": [{"code": "act.missingdata", "msg": "<private>"}]}
         self.alter = lambda data: fail(data) if len(self.calls) == 2 else data
@@ -208,7 +208,7 @@ class TransactionsTest(unittest.TestCase):
         result = self.sync()
         self.assertTrue(result.caught_up)
         self.assertEqual(self.calls[3][0], first[1] - OVERLAP)
-        self.assertEqual(self.row("Second page boundary", "2026-11")["amount"], "-2")
+        self.assertEqual(self.row("Second page boundary", "2026-10")["amount"], "-2")
         self.assertEqual(len(self.snap("2026-12").rows), 0)
         before_repeat = len(self.calls)
         self.assertEqual(self.sync(now=NOW + DAY).windows, 1)
@@ -239,7 +239,7 @@ class TransactionsTest(unittest.TestCase):
 
     def test_overlap_catches_correction_near_first_pagination_boundary(self):
         self.account("Bank")
-        corrected = tx("boundary", "2026-11-09", "-1", "Boundary purchase")
+        corrected = tx("boundary", "2026-10-15", "-1", "Boundary purchase")
         self.add("Bank", corrected)
 
         def respond(data):
@@ -249,8 +249,8 @@ class TransactionsTest(unittest.TestCase):
 
         self.alter = respond
         self.assertTrue(self.sync().caught_up)
-        self.assertEqual(self.snap("2026-11").totals["USD"].spending, Decimal("1.25"))
-        self.assertEqual(len(self.snap("2026-11").rows), 1)
+        self.assertEqual(self.snap("2026-10").totals["USD"].spending, Decimal("1.25"))
+        self.assertEqual(len(self.snap("2026-10").rows), 1)
 
     def test_fail_closed_on_bad_response_and_no_provider_text_in_errors(self):
         self.account("Bank")
@@ -261,8 +261,8 @@ class TransactionsTest(unittest.TestCase):
         for alter, message in [
             (lambda _: (200, b'{"errlist":[],"errlist":[]}'), "unreadable"),
             (lambda d: d | {"errors": ["<provider message>"]}, "warning or quota"),
-            (lambda d: d | {"errlist": [{"code": "gen.api", "msg": "Date range limited <secret>"}]}, "requested date range"),
-            (lambda d: d | {"errlist": [{"code": "gen.api", "msg": "Daily request quota <secret>"}]}, "daily request limit"),
+            (lambda d: d | {"errlist": [{"code": "gen.api", "msg": "Requested date range exceeds limit of 60 days <secret>"}]}, "requested date range"),
+            (lambda d: d | {"accounts": [], "errlist": [{"code": "gen.api", "msg": "Daily request quota <secret>"}]}, "daily request limit"),
             (lambda d: d | {"accounts": [d["accounts"][0] | {"currency": "JPY"}]}, "currency mismatch"),
             (lambda d: d | {"accounts": [d["accounts"][0] | {"transactions": None}]}, "transaction list"),
             (lambda d: d | {"accounts": [d["accounts"][0]] * 2}, "duplicate"),
