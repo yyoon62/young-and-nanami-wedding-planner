@@ -12,7 +12,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from hosted import AUTH_TABLES, db_path, external, offline_lock, private, state_lock
+from hosted_auth import AUTH_TABLES, db_path, external, offline_lock, private, state_lock
 from server import DEFAULT_DB
 
 
@@ -91,7 +91,8 @@ def backup(path, dry_run):
     if not re.fullmatch(r"(?:[A-F0-9]{40}|[A-F0-9]{64})", recipient):
         raise ValueError("Set ACCOUNTS_BACKUP_RECIPIENT to the full recovery key fingerprint.")
     raw = online_image(path)
-    command = [*GPG, "--force-mdc", "--trust-model", "always", "--recipient", recipient, "--encrypt"]
+    # Choose the same MDC archive format on both Bookworm and newer GnuPG versions.
+    command = [*GPG, "--rfc4880", "--force-mdc", "--trust-model", "always", "--recipient", recipient, "--encrypt"]
     if dry_run:
         subprocess.run(command, input=raw, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         print("Dry-run: SQLite snapshot and encryption verified; no file written.")
@@ -122,8 +123,9 @@ def restore(path, archive, dry_run):
         # any output until successful exit and then SQLite integrity validation.
         result = subprocess.run([*GPG, "--status-fd", "2", "--decrypt", str(archive)],
                                 capture_output=True, check=True)
-        if b"[GNUPG:] DECRYPTION_OKAY" not in result.stderr.splitlines():
-            raise ValueError("Expected a successfully decrypted GPG archive.")
+        status = set(result.stderr.splitlines())
+        if not {b"[GNUPG:] DECRYPTION_OKAY", b"[GNUPG:] GOODMDC"} <= status:
+            raise ValueError("Expected a successfully decrypted, integrity-protected GPG archive.")
         with closing(sqlite3.connect(":memory:")) as snapshot:
             snapshot.deserialize(result.stdout)
             image = checked_image(snapshot, path)

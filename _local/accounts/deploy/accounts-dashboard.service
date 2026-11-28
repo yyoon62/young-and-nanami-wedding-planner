@@ -4,9 +4,8 @@ After=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=%h/.config/planner-accounts/hosted.env
 WorkingDirectory=%h/planner/_local/accounts
-ExecStart=/usr/bin/python3 %h/planner/_local/accounts/server.py --port 8765 --bridge --hosted
+ExecStart=%h/.local/share/planner-accounts-venv/bin/python %h/planner/_local/accounts/server.py --port 8765 --bridge --hosted --hosted-env %h/.config/planner-accounts/hosted.env
 UMask=0077
 NoNewPrivileges=yes
 Restart=on-failure

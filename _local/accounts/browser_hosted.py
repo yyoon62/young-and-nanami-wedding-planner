@@ -67,7 +67,9 @@ window.google = {accounts: {id: {
                 expect(page.locator(".card strong")).to_have_text("USD 120.25")
                 page.get_by_role("link", name="Federal preview").click()
                 expect(page.get_by_role("button", name="Choose My Aid Data file")).to_be_visible()
-                page.get_by_role("button", name="Sign out").click()
+                with page.expect_response(lambda r: r.url == origin + "/logout" and r.request.method == "POST") as logout:
+                    page.get_by_role("button", name="Sign out").click()
+                self.assertEqual(logout.value.status, 303)
                 expect(page.get_by_role("heading", name="Sign in to the private dashboard")).to_be_visible()
                 self.assertNotIn("accounts-session", [c["name"] for c in context.cookies()])
                 self.assertEqual(context.request.get(origin + "/new").status, 401)

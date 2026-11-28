@@ -1,4 +1,4 @@
-"""Opt-in household authentication. Standard library only; no Google client secret."""
+"""Opt-in household authentication; only hosted token verification loads cryptography."""
 import base64
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
@@ -18,6 +18,7 @@ import time
 from urllib.parse import urlsplit
 
 SESSION_TTL = 3600
+GOOGLE_ID_TOKEN_TTL = 3600  # Google GIS documents a one-hour ID token, independent of app sessions.
 CHALLENGE_TTL = 300
 GOOGLE_HOST = "www.googleapis.com"
 GOOGLE_KEYS = "/oauth2/v3/certs"
@@ -25,6 +26,7 @@ LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 DOMAIN = rf"{LABEL}(?:\.{LABEL})+"
 RANDOM = r"[A-Za-z0-9_-]{43}"
 AUTH_TABLES = ("hosted_sessions", "hosted_challenges")
+ENV_KEYS = {"GOOGLE_CLIENT_ID", "LOANS_MEMBERS", "LOANS_ORIGIN", "LOANS_SESSION_KEY"}
 
 
 class Rejected(Exception):
@@ -43,12 +45,41 @@ def external(path):
 
 
 def private(path, directory=False):
-    s = path.lstat()
+    check_private(path.lstat(), directory)
+
+
+def check_private(s, directory=False):
     check = stat.S_ISDIR if directory else stat.S_ISREG
     mode = 0o700 if directory else 0o600
     if (not check(s.st_mode) or s.st_uid != os.getuid() or stat.S_IMODE(s.st_mode) != mode
             or (not directory and s.st_nlink != 1)):
         raise ValueError(f"State must be owned by the service user and mode {mode:o}.")
+
+
+def load_env_file(path):
+    """Read a literal four-key config, not shell or systemd EnvironmentFile syntax."""
+    path = external(path)
+    private(path.parent, directory=True)
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+        check_private(os.fstat(stream.fileno()))
+        raw = stream.read(8193)
+    if len(raw) > 8192:
+        raise ValueError("Hosted env file is too large.")
+    try:
+        lines = raw.decode("ascii").splitlines()
+    except UnicodeError:
+        raise ValueError("Hosted env file must use ASCII KEY=value lines.") from None
+    env = {}
+    for line in lines:
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if key not in ENV_KEYS or not sep or key in env:
+            raise ValueError("Expected one literal KEY=value line for each hosted setting.")
+        env[key] = value
+    if set(env) != ENV_KEYS:
+        raise ValueError("Expected all four hosted settings in the private env file.")
+    return env
 
 
 def db_path(path):
@@ -194,19 +225,32 @@ class GoogleKeys:
             return self.keys.get(kid)
 
 
+def require_crypto():
+    """Fail at hosted startup, before touching credentials or SQLite."""
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding, rsa
+    except ImportError:
+        raise ValueError("Install requirements-hosted.txt in the hosted Python environment.") from None
+    return InvalidSignature, hashes, padding, rsa
+
+
 def verify_signature(jwk, signing_input, signature):
     if not jwk:
         return False
     n, e = (int.from_bytes(decode(jwk[k]), "big") for k in ("n", "e"))
     bits = n.bit_length()
     width = (bits + 7) // 8
-    s = int.from_bytes(signature, "big")
-    if not (2048 <= bits <= 4096 and n % 2 and e == 65537 and len(signature) == width and s < n):
+    if not (2048 <= bits <= 4096 and n % 2 and e == 65537 and len(signature) == width):
         return False
-    # Compare the ENTIRE EMSA-PKCS1-v1_5 block for SHA-256, not a hash prefix or suffix.
-    digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(signing_input).digest()
-    expected = b"\x00\x01" + b"\xff" * (width - len(digest_info) - 3) + b"\x00" + digest_info
-    return hmac.compare_digest(pow(s, e, n).to_bytes(width, "big"), expected)
+    invalid_signature, hashes, padding, rsa = require_crypto()
+    key = rsa.RSAPublicNumbers(e, n).public_key()
+    try:
+        key.verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
+    except invalid_signature:
+        return False
+    return True
 
 
 def verify(token, config, nonce, keys, now):
@@ -222,7 +266,7 @@ def verify(token, config, nonce, keys, now):
         c = json.loads(decode(body), object_pairs_hook=unique)
         nbf = c.get("nbf", c["iat"])
         if not (type(c["exp"]) is type(c["iat"]) is type(nbf) is int and max(c["iat"], nbf) <= now + 30
-                and now < c["exp"] <= c["iat"] + SESSION_TTL + 30
+                and now < c["exp"] <= c["iat"] + GOOGLE_ID_TOKEN_TTL + 30
                 and c["iss"] in ("accounts.google.com", "https://accounts.google.com")
                 and c["aud"] == config.client and c.get("azp", config.client) == config.client
                 and c["nonce"] == nonce):

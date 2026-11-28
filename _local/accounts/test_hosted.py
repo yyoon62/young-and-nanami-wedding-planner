@@ -6,10 +6,13 @@ from dataclasses import replace
 from http.client import HTTPConnection
 from http.cookies import SimpleCookie
 import json
+from importlib.util import find_spec
 import os
 from pathlib import Path
 import re
 import sqlite3
+import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -19,7 +22,7 @@ from unittest.mock import patch
 from urllib.parse import urlencode
 
 from demo_batch import Demo
-from hosted import CHALLENGE_TTL, SESSION_TTL, Config, GoogleKeys, Rejected, db_path
+from hosted_auth import Auth, CHALLENGE_TTL, SESSION_TTL, Config, GoogleKeys, Rejected, db_path, offline_lock
 from server import serve
 from test_history import BASE, DAY
 
@@ -30,6 +33,7 @@ CONFIG = Config.load(ENV)
 ORIGIN = CONFIG.origin
 FORM = "application/x-www-form-urlencoded"
 NOW = 1800000000
+HAS_CRYPTO = find_spec("cryptography") is not None
 
 
 def b64(raw):
@@ -165,7 +169,66 @@ class Startup(unittest.TestCase):
                 self.assertIn(message, p.stderr)
             self.assertFalse(db.exists())
 
-    @patch("hosted.HTTPSConnection", autospec=True)
+    def test_hosted_env_refuses_insecure_file_before_reading_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp).resolve()
+            envfile, link, db = (folder / name for name in ("hosted.env", "linked.env", "never.sqlite"))
+            envfile.write_text("".join(f"{k}={v}\n" for k, v in ENV.items()))
+            envfile.chmod(0o644)
+            link.symlink_to(envfile)
+            command = [sys.executable, "server.py", "--hosted", "--bridge", "--db", str(db), "--hosted-env"]
+            for path, reason in ((envfile, "mode 600"), (link, "without symlinks")):
+                r = subprocess.run(command + [str(path)], env=dict(os.environ, HOME=str(folder)), capture_output=True,
+                                   text=True, timeout=5)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn(reason, r.stderr)
+                self.assertFalse(db.exists())
+            envfile.chmod(0o600)
+            with envfile.open("a") as stream:
+                stream.write("LOANS_ORIGIN=https://new.example.test\n")
+            r = subprocess.run(command + [str(envfile)], capture_output=True, text=True, timeout=5)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("one literal KEY=value", r.stderr)
+            self.assertFalse(db.exists())
+
+    def test_missing_hosted_dependency_fails_before_sqlite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp).resolve() / "missing-library.sqlite"
+            env = dict(os.environ, **ENV)
+            env.pop("PYTHONPATH", None)
+            r = subprocess.run([sys.executable, "-S", "server.py", "--hosted", "--db", db], env=env,
+                               capture_output=True, text=True, timeout=5)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("requirements-hosted.txt", r.stderr)
+            self.assertFalse(db.exists())
+
+    @unittest.skipUnless(HAS_CRYPTO, "install requirements-hosted.txt for hosted acceptance")
+    def test_hosted_and_bridge_start_with_private_env_without_fetching(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp).resolve()
+            envfile = home / "hosted.env"
+            envfile.write_text("".join(f"{k}={v}\n" for k, v in ENV.items()))
+            envfile.chmod(0o600)
+            state = home / ".local/share/planner-accounts"
+            state.mkdir(mode=0o700, parents=True)
+            access = state / "bridge.access"
+            access.write_text("https://fictional:neverfetch@beta-bridge.simplefin.org/simplefin/synthetic")
+            access.chmod(0o600)
+            with subprocess.Popen([sys.executable, "server.py", "--port", "0", "--hosted", "--bridge",
+                                   "--hosted-env", envfile], env=dict(os.environ, HOME=str(home), GOOGLE_CLIENT_ID=""),
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+                try:
+                    self.assertTrue(select.select([process.stdout], [], [], 5)[0], "hosted server did not start")
+                    self.assertIn(f"Open {ORIGIN}/", process.stdout.readline())
+                    with closing(sqlite3.connect(state / "accounts.sqlite3")) as db:
+                        self.assertEqual(db.execute("SELECT COUNT(*) FROM fetch_attempts").fetchone(), (0,))
+                finally:
+                    if process.poll() is None:
+                        process.send_signal(signal.SIGINT)
+                    process.wait(timeout=5)
+                self.assertEqual(process.returncode, 0, process.stderr.read())
+
+    @patch("hosted_auth.HTTPSConnection", autospec=True)
     def test_google_key_endpoint_is_fixed_and_does_not_follow_redirects(self, connect):
         connection = connect.return_value
         response = connection.getresponse.return_value
@@ -185,6 +248,7 @@ class Startup(unittest.TestCase):
         self.assertEqual(connect.call_count, 2)
 
 
+@unittest.skipUnless(HAS_CRYPTO, "install requirements-hosted.txt for hosted acceptance")
 class HostedFlow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -223,7 +287,7 @@ class HostedFlow(unittest.TestCase):
         for target in ("/?view=Household", "//", "/%2f", "/batch", "/sync", "/owner/1", "/rename/1",
                        "/section/1", "/exclude/1", "/side/1", "/new", "/new?servicer=uas", "/edit/1",
                        "/remove/1", "/logo/chase.com", "/servicers", "/federal-preview", "/preview.js",
-                       "/dashboard.js", "/favicon.ico", "/style.css", "/api/future", "/auth/logout"):
+                       "/dashboard.js", "/favicon.ico", "/style.css", "/api/future", "/logout"):
             with self.subTest(target=target):
                 self.assert_private(request(self.server, target), 401)
                 self.assert_private(request(self.server, target, {"token": token}, origin=ORIGIN), 401)
@@ -256,16 +320,22 @@ class HostedFlow(unittest.TestCase):
                                         jar=owner, origin=ORIGIN), 303)
         for owner in (a, b):
             html = self.assert_private(request(self.server, "/", jar=owner), 200)
-            for marker in (b"USD 120.30", b"JPY 500", b"Net worth history", b"2024-11-", b"&lt;img src=x"):
+            for marker in (b"USD 120.30", b"JPY 500", b"Net worth history", b"2024-11-", b"&lt;img src=x",
+                           b'<form method="post" action="/logout">'):
                 self.assertIn(marker, html)
             self.assertNotIn(xss.encode(), html)
+        self.assert_private(request(self.server, "/logout", jar=a), 404)
+        self.assert_private(request(self.server, "/logout?token=" + one, jar=a), 404)
+        self.assert_private(request(self.server, "/new", jar=a), 200)
         for bad_token, bad_origin in ((one, "https://unapproved.test"), (one, None), (two, ORIGIN), ("", ORIGIN)):
             self.assert_private(request(self.server, "/rename/1", {"token": bad_token, "nickname": "not applied"},
                                         jar=a, origin=bad_origin,
                                         headers={"Host": "unapproved.test", "X-Forwarded-Origin": ORIGIN}), 403)
-            self.assert_private(request(self.server, "/auth/logout", {"token": bad_token}, jar=a, origin=bad_origin), 403)
+            self.assert_private(request(self.server, "/logout", {"token": bad_token}, jar=a, origin=bad_origin), 403)
         replay = a.copy()
-        out = request(self.server, "/auth/logout", {"token": one}, jar=a, origin=ORIGIN)
+        self.assert_private(request(self.server, "/logout?ignore=1", {"token": one}, jar=a, origin=ORIGIN), 404)
+        self.assert_private(request(self.server, "/new", jar=a), 200)
+        out = request(self.server, "/logout", {"token": one}, jar=a, origin=ORIGIN)
         self.assert_private(out, 303)
         self.assertEqual(a, {})
         self.assertIn("Max-Age=0; Path=/; HttpOnly; SameSite=Lax; Secure", out[1]["Set-Cookie"])
@@ -278,6 +348,7 @@ class HostedFlow(unittest.TestCase):
             (dict(aud="another-client"), 401), (dict(azp="another-client"), 401),
             (dict(iss="https://google-attacker.test"), 401), (dict(exp=NOW), 401),
             (dict(iat=NOW + 60), 401), (dict(nbf=NOW + 60), 401), (dict(exp=True), 401),
+            (dict(exp=NOW + 7200), 401),
             (dict(email="stranger@gmail.com"), 403), (dict(email_verified="true"), 403),
             (dict(email=CONFIG.members[1]), 403), (dict(sub=""), 401),
             (dict(header={"alg": "none", "kid": "fixture"}), 401),
@@ -332,9 +403,10 @@ class HostedFlow(unittest.TestCase):
     def test_session_and_identity_pins_are_stored_in_sqlite(self):
         jar = {}
         self.assert_private(login(self.server, self.rsa, jar), 204)
-        # Flush an independent instance's read of persistent auth and leave the
-        # actual listener lifecycle covered by the backup/restore test.
-        from hosted import Auth
+        # The hosted listener registers the same lock used by the restore tool.
+        with self.assertRaisesRegex(ValueError, "Stop the hosted dashboard"), offline_lock(self.db):
+            self.fail("A running hosted listener must hold the offline lock.")
+        # An independent auth instance sees persistent sessions, not process-local state.
         auth = Auth(self.db, CONFIG, keys=self.rsa.keys, clock=lambda: self.now)
         self.assertEqual(auth.session(jar[CONFIG.name("session")])[1], csrf(self.server, jar))
         with closing(sqlite3.connect(self.db)) as db:

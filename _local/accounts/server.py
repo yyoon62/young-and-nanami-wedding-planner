@@ -17,7 +17,8 @@ from servicers import servicer_get
 from bridge import Bridge, Problem
 from bulk import Batch, schema
 from history import history_panel, install as install_history, net_worth
-from hosted import Auth, Config, Rejected, CHALLENGE_TTL, SESSION_TTL, db_path, external, offline_lock, private
+from hosted_auth import (Auth, Config, Rejected, CHALLENGE_TTL, SESSION_TTL, db_path, external,
+                         load_env_file, offline_lock, private, require_crypto)
 from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo, sanitize_domain
 
 
@@ -231,7 +232,6 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
     amt = Decimal(r["balance"])
     c = r["currency"]
     side = r["side"]
-    asof = escape(r["asof"])
     stale = (today - date.fromisoformat(r["asof"])).days > 30
     owner = r["owner"]
     owner_pills = "".join(
@@ -283,7 +283,7 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
             f'<div class="acct-sub-row"><span class="acct-sub">{inst}</span>{sec_pop}</div></div></div></th>'
             f'<td class="num bal-cell"><span class="amt {side}">{signed_money(amt, c, side)}</span> {side_toggle}</td>'
             f'<td class="owner-cell">{owner_cell}</td>'
-            f'<td class="date-cell"><time datetime="{asof}">{asof}</time>{stale_tag}</td>'
+            f'<td class="date-cell"><time datetime="{r["asof"]}">{r["asof"]}</time>{stale_tag}</td>'
             f'<td class="act-cell">{exclude_btn}'
             f'<a href="/edit/{rid}" class="edit-trigger" data-edit="{rid}" aria-controls="edit-row-{rid}"'
             f' aria-expanded="{"true" if opened else "false"}">Edit<span class="sr"> {name}</span></a></td>'
@@ -494,7 +494,7 @@ class Handler(BaseHTTPRequestHandler):
     def sign_out_form(self):
         if not getattr(self, "session_row", None):
             return ""
-        return ('<form method="post" action="/auth/logout">'
+        return ('<form method="post" action="/logout">'
                 f'<input type="hidden" name="token" value="{self.token}">'
                 '<button type="submit" class="secondary">Sign out</button></form>')
 
@@ -636,7 +636,8 @@ class Handler(BaseHTTPRequestHandler):
                     allowed = bool(db.execute("SELECT 1 FROM accounts WHERE logo_domain=? LIMIT 1", (domain,)).fetchone())
             if not allowed:
                 return self.send(404, "Not found.")
-            found = cached_logo(self.server.logo_dir, domain, fetcher=self.server.logo_fetcher)
+            found = cached_logo(self.server.logo_dir, domain, fetcher=self.server.logo_fetcher,
+                                hosted=bool(self.server.auth))
             if found:
                 return self.send_bytes(200, found[0], found[1], cache="private, max-age=86400")
             return self.send_bytes(200, fallback_svg(domain.split(".")[0]).encode(), "image/svg+xml")
@@ -682,7 +683,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise Rejected()
                 if not self.exact_origin():
                     raise Rejected(403)
-                if raw_target == "/auth/logout":
+                if raw_target == "/logout":
                     return self.auth_post(raw_target)
                 # Read/validate before dispatch, even for unknown routes.
                 data = self.read_form(8192)
@@ -807,6 +808,7 @@ def serve(path, port, provider=None, logo_dir=None, *, hosted=None, keys=None, c
     with ExitStack() as locks:
         auth = None
         if hosted:
+            require_crypto()
             path = db_path(path)
             if logo_dir:
                 logo_dir = external(logo_dir)
@@ -844,10 +846,13 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--db", type=Path)
     parser.add_argument("--hosted", action="store_true", help="Require approved household Google sign-in")
+    parser.add_argument("--hosted-env", type=Path, help="Load hosted settings from a private env file")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--demo", action="store_true", help="Fictional walkthrough, disposable database only")
     modes.add_argument("--bridge", action="store_true", help="Enable configured SimpleFIN Bridge")
     args = parser.parse_args()
+    if args.hosted_env and not args.hosted:
+        parser.error("--hosted-env requires --hosted.")
     if (args.demo and (args.hosted or args.db)) or (args.bridge and args.db and not args.hosted):
         parser.error("--demo cannot be combined with --hosted or --db; --bridge with --db requires --hosted.")
     os.umask(0o077)
@@ -855,7 +860,9 @@ if __name__ == "__main__":
         path, provider, hosted = args.db or DEFAULT_DB, None, None
         if args.hosted:
             try:
-                hosted = Config.load(os.environ)
+                hosted = Config.load(load_env_file(args.hosted_env) if args.hosted_env else os.environ)
+                path = external(path)
+                require_crypto()
                 path = db_path(path)
             except (OSError, ValueError) as exc:
                 parser.exit(1, f"Hosted startup refused: {exc}\n")

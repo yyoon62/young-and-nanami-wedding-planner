@@ -5,7 +5,16 @@ Use this runbook only after review. The Pi serves an HTTP backend on **127.0.0.1
 ## 1. Set up the Pi and client devices
 
 1. Flash a current **64-bit Raspberry Pi OS Lite** image (Bookworm or newer, Python 3.11+). In Raspberry Pi Imager choose a neutral hostname (for example `accounts-pi`), a dedicated non-root service user, and SSH key authentication if you need remote shell access. Boot on a trusted network, update packages and check that time sync works (`timedatectl status`); incorrect time breaks TLS and Google token verification.
-2. Install `git`, `python3`, `ca-certificates`, and `gnupg` with `apt`. Check `python3 -c 'import sqlite3; assert hasattr(sqlite3.Connection,"serialize") and hasattr(sqlite3.Connection,"deserialize")'`. There is no pip install for the app. Clone the private planner repo as the service user into `~/planner` with restricted Git access; deploy only a reviewed release commit containing `_local/accounts/`. Do not clone or copy the notes repo or other personal data to the Pi.
+2. Install `git`, `python3`, `python3-venv`, `ca-certificates`, and `gnupg` with `apt`. Check `python3 -c 'import sqlite3; assert hasattr(sqlite3.Connection,"serialize") and hasattr(sqlite3.Connection,"deserialize")'`. Clone the private planner repo as the service user into `~/planner` with restricted Git access; deploy only a reviewed release commit containing `_local/accounts/`. Do not clone or copy the notes repo or other personal data to the Pi. Install the hosted-only verifier into its dedicated venv:
+
+   ```sh
+   umask 077
+   python3 -m venv "$HOME/.local/share/planner-accounts-venv"
+   "$HOME/.local/share/planner-accounts-venv/bin/python" -m pip install \
+     -r "$HOME/planner/_local/accounts/requirements-hosted.txt"
+   ```
+
+   Keep the venv private and update it with reviewed releases. Ordinary local mode and the backup tool do not need the venv or any Python packages. Do not run the hosted service with system Python.
 3. Follow the [official Tailscale Linux install](https://tailscale.com/download/linux), then `sudo tailscale up` and authorize the Pi in your household tailnet. In the Tailscale admin console enable **MagicDNS** and [HTTPS certificates](https://tailscale.com/kb/1153/enabling-https). HTTPS certificate transparency can expose the device’s DNS name; do not put names or financial details in it.
 4. Invite the second member to the **same tailnet**. Install Tailscale on each phone (App Store/Play Store) and Mac, sign in to the invited/authorized tailnet account, and connect. Those identities assign network access; they need not be the Google identities used by the app. Ensure tailnet policy permits the two member identities to reach the Pi on TCP 443 and no other access than intended. If using tags and `grants`, grant the two identities `tcp:443` on the Pi tag and remove any broader rule that would also match that tag; check Tailscale policy tests. Keep administrator SSH access separate.
 5. On the Pi run:
@@ -29,7 +38,15 @@ Use this runbook only after review. The Pi serves an HTTP backend on **127.0.0.1
      "$HOME/.local/share/planner-accounts" "$HOME/.config/systemd/user"
    ```
 
-   Set `~/.config/planner-accounts/hosted.env` to `0600`, outside Git. Fill in all values privately (the following are nonworking examples):
+   Create the file privately **before** entering any settings. The command below refuses to overwrite an existing file. Edit in a private terminal with an editor that does not make public backup files:
+
+   ```sh
+   (umask 077; set -C; : > "$HOME/.config/planner-accounts/hosted.env")
+   nano "$HOME/.config/planner-accounts/hosted.env"
+   ls -l "$HOME/.config/planner-accounts/hosted.env"
+   ```
+
+   Expect a service-user-owned regular file (`-rw-------`), no links, outside Git. `--hosted-env` checks the directory and the opened file before reading its values and before entering Bridge/SQLite. The unit does **not** load it as a systemd `EnvironmentFile`; don't source it as shell code. Use four literal `KEY=value` lines (no quotes, `export`, or interpolations). The following are nonworking examples:
 
    ```ini
    GOOGLE_CLIENT_ID=123456-fictional.apps.googleusercontent.com
@@ -39,7 +56,15 @@ Use this runbook only after review. The Pi serves an HTTP backend on **127.0.0.1
    ```
 
    Generate the session key locally with `python3 -c 'import secrets; print(secrets.token_hex(32))'` in a private terminal; don't put it in command history or logs. List exactly two distinct Google-hosted primary mailboxes. Use the dotless canonical Gmail spelling (`@gmail.com` only, no `+` alias); the Google-signed spelling may contain dots. For Workspace use the actual primary address, not an alias or a consumer Google Account registered with third-party email. Confirm the two identities on the first sign-ins: the app pins each email to its stable Google `sub` on first verified exchange. Subsequent subject changes fail closed; do not edit pins casually. Rotate the session key and restart if sessions may be compromised; remove obsolete allowlist entries and restart before re-enrolling anyone.
-4. First run the release checks with **no Bridge credential and a separate, fictional database**. To test real GIS later on this fresh Pi without enrolling Bridge, run `server.py --port 8765 --hosted --db /absolute/private/smoke/fictional.sqlite3` with the four values exported in a private terminal (using only your own env file). Stop this process before starting the service. The data directory must be owned by the app user and `0700`, SQLite file `0600`, outside Git with no symlinks. Never reuse the hosted DB in an ordinary unhosted server on the same proxied port.
+4. First run the release checks with **no Bridge credential and a separate, fictional database**. To test real GIS later on this fresh Pi without enrolling Bridge, run:
+
+   ```sh
+   "$HOME/.local/share/planner-accounts-venv/bin/python" "$HOME/planner/_local/accounts/server.py" \
+     --port 8765 --hosted --hosted-env "$HOME/.config/planner-accounts/hosted.env" \
+     --db /absolute/private/smoke/fictional.sqlite3
+   ```
+
+   Replace the smoke DB path with your own. Stop this process before starting the service. The data directory must be owned by the app user and `0700`, SQLite file `0600`, outside Git with no symlinks. Never reuse the hosted DB in an ordinary unhosted server on the same proxied port.
 5. Once approved for actual use, follow [Bridge setup](../BULK.md) using `python3 "$HOME/planner/_local/accounts/bridge.py" setup` and the private hidden prompt. This saves the revocable Access URL at `~/.local/share/planner-accounts/bridge.access` (`0600`); never put it in the unit, env file, logs or Git. It is not included in SQLite backups. Enroll again on recovery if needed; revoke old credentials when retiring the original Pi.
 
 ## 3. Install the user service
@@ -51,6 +76,7 @@ cd "$HOME/planner/_local/accounts"
 install -m 644 deploy/accounts-dashboard.service ~/.config/systemd/user/
 sudo loginctl enable-linger "$USER"
 systemctl --user daemon-reload
+systemd-analyze --user verify "$HOME/.config/systemd/user/accounts-dashboard.service"
 systemctl --user enable --now accounts-dashboard.service
 systemctl --user status accounts-dashboard.service
 ss -ltn 'sport = :8765'
@@ -104,7 +130,9 @@ Rehearse with a fictional archive and check exact amounts, dates, history and au
 
 ## 6. Release checklist (before real records)
 
-- Run the fixture-only checks from `_local/accounts`: `python3 -m unittest discover -v` (incl. OpenSSL-signed fixtures and real GPG when installed); `"$TMPDIR/l05-browser-venv/bin/python" -m unittest -v browser_bulk browser_save browser_preview browser_history browser_hosted` (last test stubs the external Google library, not the dashboard).
-- From separate phone and Mac browsers on the tailnet, verify Google accepts the exact HTTPS origin and returns from its popup (try iOS Safari and desktop/mobile Chrome used by the household). Both approved Google users must see the same fictional dashboard; a different account cannot gain access even if its device can reach Serve. With Tailscale disconnected/off-tailnet verify the dashboard cannot be reached. Check no console CSP violations for the Google popup, inline editor, history chart, or preview. Do not weaken CSP or expose via Funnel to fix sign-in.
+- Run the fixture-only checks from `_local/accounts`: use a temporary venv with `-r requirements-hosted.txt` for `python -m unittest discover -v` (OpenSSL-signed fixtures and real GPG when installed). Run the unchanged Chrome suite with `"$TMPDIR/l05-browser-venv/bin/python" -m unittest -v browser_bulk browser_save browser_preview browser_history`. Separately use a temporary venv with hosted requirements plus Playwright for `python -m unittest -v browser_hosted`; it stubs GIS, not the dashboard.
+- **Real GIS / `.ts.net`:** From separate phone and Mac browsers on the tailnet, verify Google accepts the exact HTTPS origin and returns from its popup (try iOS Safari and desktop/mobile Chrome used by the household). Both approved Google users must see the same fictional dashboard; a different Google account cannot gain access even if its device can reach Serve. Check no console CSP violations for Google, the editor, chart, or preview. Do not weaken CSP or expose via Funnel to fix sign-in. [Google's GIS credential reference](https://developers.google.com/identity/gsi/web/reference/js-reference#credential) documents a one-hour ID-token lifetime; the app checks issue, not-before when present, and expiry, independently of dashboard session lifetime.
+- **Tailnet ACL:** Verify approved tailnet users can reach only the intended endpoint and a disallowed tailnet identity cannot. With Tailscale disconnected/off-tailnet, verify the dashboard cannot be reached. Inspect Serve status and confirm Funnel is not enabled.
 - Before login, `curl -si "$ORIGIN/"` should return only the sign-in page; `curl -si "$ORIGIN/logo/chase.com"` and requests to `/new`, `/style.css`, `/dashboard.js` should be 401 with `Cache-Control: no-store`. After sign-in test edit/save, view history, and sign out; reload a protected route and ensure it denies access. In HTTPS response headers check session cookie has `__Host-`, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`; check logout clears it with the same attributes.
-- Reboot-test Serve, `systemctl --user` startup and the mounted backup timer. Rehearse a dry-run and encrypted restore with fictional SQLite on the target OS. Confirm rollback steps and recovery key availability. **Only then** decide whether to provision real Bridge and household data.
+- **Pi / systemd / backups:** Verify the units on Pi with `systemd-analyze --user verify`, reboot-test Serve, `systemctl --user` startup and the mounted backup timer, and rehearse a dry-run and encrypted restore with fictional SQLite on the target OS. Confirm rollback steps and recovery key availability.
+- **Real Bridge:** Only after the above checks and explicit approval, provision Bridge separately. Verify a real refresh against source balances/dates and repeat once to check for duplicates; the offline tests do not establish a working account connection.

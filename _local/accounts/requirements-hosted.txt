@@ -1,0 +1,2 @@
+# Only --hosted needs this. Ordinary local mode and SQLite backups use stdlib Python.
+cryptography>=46.0.7,<49

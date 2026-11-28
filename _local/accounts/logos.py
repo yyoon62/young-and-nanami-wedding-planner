@@ -160,7 +160,7 @@ def hosted_fetch(url):
     return None
 
 
-def cached_logo(logo_dir, domain, fetcher=_default_fetch):
+def cached_logo(logo_dir, domain, fetcher=_default_fetch, *, hosted=False):
     """Return (bytes, content_type) from local cache, fetching once over HTTPS if missing."""
     clean = sanitize_domain(domain)
     if not clean or not logo_dir:
@@ -186,14 +186,21 @@ def cached_logo(logo_dir, domain, fetcher=_default_fetch):
             continue
         ext, mime = detected
         base.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=base, prefix=f".{clean}.", delete=False) as temp:
-            tmp = Path(temp.name)
-            try:
-                temp.write(raw)
-                temp.close()
-                tmp.replace(base / f"{clean}.{ext}")
-            finally:
-                tmp.unlink(missing_ok=True)
+        if hosted:
+            # Simultaneous authenticated requests must not share a staging name.
+            with tempfile.NamedTemporaryFile(dir=base, prefix=f".{clean}.", delete=False) as temp:
+                tmp = Path(temp.name)
+                try:
+                    temp.write(raw)
+                    temp.close()
+                    tmp.replace(base / f"{clean}.{ext}")
+                finally:
+                    tmp.unlink(missing_ok=True)
+        else:
+            tmp = base / f".{clean}.{ext}.tmp"
+            tmp.write_bytes(raw)
+            tmp.chmod(0o600)
+            tmp.replace(base / f"{clean}.{ext}")
         return bytes(raw), mime
     return None
 

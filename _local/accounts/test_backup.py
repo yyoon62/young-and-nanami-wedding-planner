@@ -9,8 +9,9 @@ import tempfile
 import unittest
 
 from demo_batch import Demo
-from test_history import BASE, DAY
-from test_hosted import NOW, ORIGIN, RSA, challenge, csrf, login, request, running
+from hosted_auth import Auth, Rejected, digest, offline_lock, state_lock
+from test_history import BASE, DAY, request, running
+from test_hosted import CONFIG, NOW
 
 
 @unittest.skipUnless(shutil.which("gpg"), "GnuPG is needed for real backup tests")
@@ -20,7 +21,6 @@ class BackupFlow(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(tmp.cleanup)
         cls.root = Path(tmp.name).resolve()
-        cls.rsa = RSA(cls.root)
         cls.recovery = cls.root / "r"
         cls.encrypt_only = cls.root / "p"
         cls.destination = cls.root / "backup-disk"
@@ -59,15 +59,22 @@ class BackupFlow(unittest.TestCase):
 
     def test_online_wal_backup_and_atomic_offline_restore(self):
         db_path = self.state / "fictional.db"
+        db_path.touch(0o600)  # Match hosted bootstrap permissions without loading hosted crypto.
         account = dict(BASE, nickname="PRIVATE-LAB-MARKER", balance="100.10")
-        a, b, pending = {}, {}, {}
-        with running(db_path, self.rsa, lambda: NOW, provider=Demo()) as server:
-            self.assertEqual(login(server, self.rsa, a)[0], 204)
-            token = csrf(server, a)
+        sid, csrf = "S" * 43, "CSRF-SYNTHETIC-BACKUP-MARKER"
+        with offline_lock(db_path), running(db_path, Demo()) as server:
+            # Seed auth state directly. Testing backup never needs the hosted crypto package.
+            auth = Auth(db_path, CONFIG, clock=lambda: NOW)
+            with auth.db() as db:
+                db.execute("INSERT INTO hosted_identities VALUES (?,?)", (CONFIG.members[0], "100001"))
+                db.execute("INSERT INTO hosted_sessions VALUES (?,?,?,?)",
+                           (digest(sid), CONFIG.members[0], csrf, NOW + 3600))
+            cookie = sid + "." + auth.signature(sid)
+            self.assertIsNotNone(auth.session(cookie))
             with closing(sqlite3.connect(db_path)) as wal:
                 self.assertEqual(wal.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
-                self.assertEqual(request(server, "/sync", dict(token=token), jar=a, origin=ORIGIN)[0], 303)
-                self.assertEqual(request(server, "/new", dict(account, token=token), jar=a, origin=ORIGIN)[0], 303)
+                self.assertEqual(request(server, "/sync", view="Household")[0], 303)
+                self.assertEqual(request(server, "/new", **account)[0], 303)
                 with wal:
                     wal.execute("BEGIN IMMEDIATE")
                     wal.execute("UPDATE accounts SET nickname = 'NOT-COMMITTED' WHERE nickname = ?", (account["nickname"],))
@@ -80,12 +87,12 @@ class BackupFlow(unittest.TestCase):
                     self.assertNotIn(account["nickname"].encode(), archive.read_bytes())
                 self.assertIn("Stop the hosted dashboard", self.invoke("restore", db_path, "--archive", archive,
                                                                         "--dry-run", home=self.recovery, okay=False))
-            self.assertEqual(login(server, self.rsa, b, email="member.beta@workspace.example", hd="workspace.example",
-                                   sub="200002")[0], 204)
-            pending_credential = self.rsa.make(challenge(server, pending))
+            with auth.db() as db:
+                db.execute("INSERT INTO hosted_identities VALUES (?,?)", (CONFIG.members[1], "200002"))
+            pending, _ = auth.challenge()
         decrypted = self.gpg(self.recovery, "--decrypt", str(archive))
         # Auth data removed before encryption, not simply discarded at restore.
-        self.assertNotIn(token.encode(), decrypted)
+        self.assertNotIn(csrf.encode(), decrypted)
         self.assertNotIn(b"NOT-COMMITTED", decrypted)
         snapshot = sqlite3.connect(":memory:")
         with closing(snapshot):
@@ -99,14 +106,26 @@ class BackupFlow(unittest.TestCase):
         corrupted = self.destination / "truncated.sqlite3.gpg"
         corrupted.write_bytes(archive.read_bytes()[:-30])
         corrupted.chmod(0o600)
-        self.invoke("restore", db_path, "--archive", corrupted, home=self.recovery, okay=False)
+        tampered = self.destination / "tampered.sqlite3.gpg"
+        data = bytearray(archive.read_bytes())
+        data[-40] ^= 0x40
+        tampered.write_bytes(data)
+        tampered.chmod(0o600)
+        for damaged in (corrupted, tampered):
+            self.invoke("restore", db_path, "--archive", damaged, home=self.recovery, okay=False)
+            self.assertEqual(db_path.read_bytes(), before)
+        with state_lock(db_path, "backup", "test lock"):
+            self.assertIn("Another backup or restore is in progress",
+                          self.invoke("backup", db_path, "--dry-run", okay=False))
+            self.assertIn("Another backup or restore is in progress",
+                          self.invoke("restore", db_path, "--archive", archive, home=self.recovery, okay=False))
         self.assertEqual(db_path.read_bytes(), before)
         self.invoke("backup", db_path, recipient="0" * 40, okay=False)
-        self.assertEqual(set(self.destination.iterdir()), {archive, corrupted})
+        self.assertEqual(set(self.destination.iterdir()), {archive, corrupted, tampered})
         self.assertIn("sessions and sign-in challenges revoked",
                       self.invoke("restore", db_path, "--archive", archive, home=self.recovery))
         self.assertEqual({p.name for p in self.state.iterdir()},
-                         {"fictional.db", "fictional.db.hosted-lock", "fictional.db.backup-lock", "logos"})
+                         {"fictional.db", "fictional.db.hosted-lock", "fictional.db.backup-lock"})
         with closing(sqlite3.connect(db_path)) as db:
             self.assertEqual(db.execute("SELECT nickname,balance,currency,asof FROM accounts WHERE nickname=?",
                                         (account["nickname"],)).fetchall(),
@@ -116,12 +135,10 @@ class BackupFlow(unittest.TestCase):
                                         (account["nickname"],)).fetchone(), ("100.10",))
             self.assertEqual(db.execute("SELECT COUNT(*) FROM source_links").fetchone(), (12,))
             self.assertEqual(db.execute("SELECT COUNT(*) FROM hosted_identities").fetchone(), (2,))
-        with running(db_path, self.rsa, lambda: NOW) as server:
-            self.assertEqual(request(server, "/new", jar=a)[0], 401)
-            self.assertEqual(request(server, "/new", jar=b)[0], 401)
-            self.assertEqual(request(server, "/auth/exchange", dict(credential=pending_credential), jar=pending,
-                                     origin=ORIGIN)[0], 401)
-            self.assertEqual(login(server, self.rsa, {}, email="member.beta@workspace.example", hd="workspace.example",
-                                   sub="replacement")[0], 403)
-            self.assertEqual(login(server, self.rsa, a)[0], 204)
-            self.assertIn(account["nickname"].encode(), request(server, "/", jar=a)[2])
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM hosted_sessions").fetchone(), (0,))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM hosted_challenges").fetchone(), (0,))
+        self.assertIsNone(auth.session(cookie))
+        with self.assertRaises(Rejected):
+            auth.exchange(pending, "not-a-token")  # Cleared challenge short-circuits before verification.
+        with running(db_path) as server:
+            self.assertIn(account["nickname"], request(server)[1])
