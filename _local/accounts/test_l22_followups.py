@@ -120,13 +120,15 @@ class EmojiAndPage(Fixture, unittest.TestCase):
         self.assertIn(f'>{DEFAULT_EMOJI["Dining"]}</span> Maple', html)
         self.assertIn(">🧶</span> Totally Unknown", html)        # effective source is "suggested"
 
-    def test_privacy_is_one_line_with_the_full_statement_in_details(self):
+    def test_privacy_statement_lives_in_the_info_box_only(self):
         html = self.html()
-        panel = html[html.index('<details class="classifier"'):]
-        panel = panel[:panel.index('<h2')] if '<h2' in panel else panel
-        self.assertIn("Only cleaned merchant names (no amounts, dates or accounts) are sent, once each.", panel)
-        self.assertRegex(panel, r'<details class="classifier-details"><summary>Privacy details</summary>.*A bare person')
-        self.assertIn("Not available when the dashboard is hosted.", panel)
+        self.assertNotIn('class="classifier"', html)
+        box = html[html.index('<details class="tx-info">'):]
+        self.assertIn("Only cleaned merchant names (no amounts, dates or accounts) are sent, once each.", box)
+        self.assertIn("A bare person’s name or an employer in a description cannot be recognised", box)
+        self.assertIn("Not available when the dashboard is hosted.", box)
+        self.assertIn("↻ Refresh categories", box)
+        self.assertEqual(html.count("↻ Refresh categories"), 1)
 
     def test_projection_suggestions_directly_follow_the_chart_in_the_page(self):
         """L29 reverses the L23-0 default (suggestions above the chart): the chart now sits right under the tab bar."""

@@ -98,8 +98,8 @@ def _stamp(stamp):
     return datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-_BADGE = '<span class="badge" title="Suggested by the classifier; not confirmed">suggested</span>'
-_ORIGIN = {"manual": "(set by you)", "rule": "(merchant rule)", "stamp": "(saved rule)", "default": "(built-in default)"}
+_ORIGIN = {"manual": "(set by you)", "rule": "(merchant rule)", "stamp": "(saved rule)", "default": "(built-in default)",
+           "suggested": "✨ suggested by AI"}
 _SHOWN_FLOWS = ("Transfer", "Matched transfer", "Review card credit", "Pending")   # other flows are tooltip-only
 
 
@@ -108,41 +108,36 @@ def _data_dir(db):
     return Path(row[2]).parent if row and row[2] else None
 
 
-def _classifier_panel(db, f, token):
+def _categories_info(db, f, token):
+    """The classifier's only home on the page: a section of the ℹ️ box with the privacy facts, the key/status
+    lines and the "↻ Refresh categories" action (its own form: it must not carry the toggle's checkbox)."""
     on, st = classifier_enabled(db), classifier_stats(db)
     key, source, problem = load_key(_data_dir(db))
     key_line = (f"Key found ({source})." if key else (problem or "No key found.") + " Nothing is sent without a key.")
     if not on:
-        status = "Off."
+        status = "Auto-categorize is off."
     elif key is None:
         status = "On, but nothing is sent until a usable key is found."   # never next to a stale "last run" line
     else:
-        status = st["status"] or "On, waiting for the next sync or Classify now."
-    form = (f'<form method="post" action="{EDIT}" class="drawer-form classifier-form">'
-            + _hidden(f, token=token)
-            + '<label class="check"><input type="checkbox" name="enabled" value="1"'
-            + (" checked" if on else "") + '> Suggest categories and an emoji with Claude Haiku. '
-            '<strong>Merchant names are sent to Anthropic.</strong></label>'
-            '<div class="drawer-left"><button name="action" value="classifier">Save</button></div></form>')
-    # Its own form: sharing the checkbox form would post "enabled" with classify_now, which the route rejects.
-    now_form = (f'<form method="post" action="{EDIT}" class="drawer-form classifier-form">'
-                + _hidden(f, token=token)
-                + '<div class="drawer-left"><button class="button secondary" name="action" '
-                'value="classify_now">Classify now</button></div></form>' if on else "")
-    form += now_form
-    totals = f'{st["suggested"]} suggested · {st["review"]} need review · {st["pending"]} waiting'
-    title = "Category suggestions · on" if on else "Category suggestions (off by default)"
-    return (f'<details class="classifier"{" open" if on and key is None else ""}><summary>{title}</summary>'
-            + form +
-            f'<p class="acct-sub">{escape(key_line)} Model: {escape(model_name())}.<br>'
-            f'{escape(status)}<br>Merchants so far: {totals}.</p>'
-            '<p class="acct-sub">Only cleaned merchant names (no amounts, dates or accounts) are sent, once each.</p>'
-            '<details class="classifier-details"><summary>Privacy details</summary>'
-            '<p class="acct-sub">Only cleaned merchant text (for example “maple cafe”) leaves this computer, once per '
-            'merchant: never amounts, dates, accounts, owners or ids. Descriptions that look like Zelle, Venmo, '
-            'payroll, transfers or checks are not sent. A bare person’s name or an employer in a description '
-            'cannot be recognised and would be sent. Suggestions are labelled, never override anything you set, '
-            'and are not counted as confirmed. Not available when the dashboard is hosted.</p></details></details>')
+        status = st["status"] or "On, waiting for the next sync or a refresh."
+    refresh = (f'<form method="post" action="{EDIT}" class="drawer-form tx-refresh">'
+               + _hidden(f, token=token)
+               + '<button class="button secondary" name="action" value="classify_now">↻ Refresh categories</button>'
+               '</form>')
+    bullets = (
+        "✨ A category suggested by AI looks like any other chip (✨ in its tooltip). A category you choose is never "
+        "overwritten or re-sent; a low-confidence guess shows as Uncategorized for you to pick.",
+        "Only cleaned merchant names (no amounts, dates or accounts) are sent, once each.",
+        "Only cleaned merchant text (for example “maple cafe”) leaves this computer, once per merchant: never amounts, "
+        "dates, accounts, owners or ids.",
+        "Descriptions that look like Zelle, Venmo, payroll, transfers or checks are not sent. A bare person’s name or "
+        "an employer in a description cannot be recognised and would be sent.",
+        "Suggestions never override anything you set and are not counted as confirmed. Not available when the "
+        "dashboard is hosted.",
+        f"{key_line} Model: {model_name()}.",
+        status,
+        f'Merchants so far: {st["suggested"]} suggested · {st["review"]} uncategorized · {st["pending"]} waiting.')
+    return ("<h4>Categories</h4><ul>" + "".join(f"<li>{escape(t)}</li>" for t in bullets) + "</ul>" + refresh)
 
 
 def _drawer(r, f, token, categories, manual, attempt, error):
@@ -222,7 +217,7 @@ def _chip_label(r):
         return f'{default_emoji(category)} {escape(category)}'
     if r["effective_transfer"]:
         return "↔️ Transfer"
-    return "🏷️ Needs review" if r["category_source"] == "review" else "🏷️ Uncategorized"
+    return "🏷️ Uncategorized"
 
 
 def _category_cell(r, f, token, categories, *, up, opened, attempt, error):
@@ -338,7 +333,6 @@ def _bars(cmp, f, totals):
             f' <span class="bar-cmp">last month {fmt(prev, c) if prev is not None else "—"}'
             f' · {len(cmp.avg_months) or ""}{"-mo avg" if cmp.avg is not None else "3-mo avg"} '
             f'{fmt(avg, c) if avg is not None else "—"}'
-            + (f' · includes {cmp.suggested[name]} suggested' if cmp.suggested.get(name) else "")
             + '</span></span></a></li>')
     basis = (f'Compared with {escape(month_label(cmp.prev_month))} and the average of '
              f'{len(cmp.avg_months)} full month(s) before {escape(month_label(cmp.month))}. ' if cmp.avg is not None
@@ -479,7 +473,6 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
                 else "")      # a transfer without a category already says so on its chip
         shown = _category_cell(r, f, token, categories, up=index >= len(shown_rows) - 3,
                                opened=open_pick == r["row_id"], attempt=attempt, error=error if open_pick == r["row_id"] else "")
-        badge = _BADGE if r["category_source"] == "suggested" else ""
         drawer_row = ""
         if open_row == r["row_id"]:
             # The drawer opens in a row of its own below this one (like the Accounts drawer): the one-line row stays intact.
@@ -498,7 +491,7 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
             f'<span class="acct-sub tx-acct" title="SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}">'
             f'{escape(r["nickname"])}</span></div></div></th>'
             + _owner_cell(r) +
-            f'<td class="cat-cell">{shown}{badge}{flow}{marker}</td>'
+            f'<td class="cat-cell">{shown}{flow}{marker}</td>'
             f'<td class="num"><span class="cur">{escape(r["currency"])}</span> {_amount(r)}</td>'
             f'<td class="act-cell">{edit}</td></tr>{drawer_row}')
     shared = (f'<form id="tx-act" method="post" action="{EDIT}" hidden>' + _hidden(f, token=token) + '</form>'
@@ -515,8 +508,9 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
     return (
         '<script defer src="/dashboard.js"></script>'
         '<section class="history" aria-labelledby="cash-flow"><h2 id="cash-flow">Monthly cash flow</h2>'
-        + alert + moved + search + sync + '<div class="tx-tools">' + _classifier_panel(db, f, token)
-        + info_box(coverage, can_sync=can_sync and "Household" in allowed_views) + '</div>' + summary
+        + alert + moved + search + sync + '<div class="tx-tools">'
+        + info_box(coverage, can_sync=can_sync and "Household" in allowed_views,
+                   categories_html=_categories_info(db, f, token)) + '</div>' + summary
         + '</section><section><h2>Transactions</h2>' + review_chip + table + '</section>')
 
 

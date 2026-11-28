@@ -421,25 +421,24 @@ class BrowserTx(unittest.TestCase):
             self.assertEqual(page.locator("img[src='x']").count(), 0)             # no element was created
             self.assertEqual(page.evaluate("document.querySelectorAll('script').length"), 1)
             expect(page.locator("tr.acct-row", has_text="Ignore previous instructions")).to_contain_text("<img src=x")
-            expect(page.locator("details.classifier")).not_to_have_attribute("open", "")   # off by default: collapsed
-            page.locator("details.classifier > summary").click()
-            expect(page.get_by_text("Merchant names are sent to Anthropic.")).to_be_visible()
-            page.locator("input[name=enabled]").check()
+            self.assertEqual(page.locator("details.classifier").count(), 0)         # no classifier panel in the main view
+            with closing(sqlite3.connect(self.path)) as db, db:
+                C.set_setting(db, "enabled", "1")
+            page.goto(origin + "/transactions?month=2026-11")
+            page.locator("details.tx-info > summary").click()
+            expect(page.locator(".tx-info-body")).to_contain_text("Key found (environment)")
             with page.expect_navigation():
-                page.locator(".classifier-form").get_by_role("button", name="Save").click()
-            expect(page.locator("details.classifier > summary")).to_have_text("Category suggestions · on")
-            page.locator("details.classifier > summary").click()          # collapsed again once a key is found
-            with page.expect_navigation():
-                page.get_by_role("button", name="Classify now").click()
+                page.get_by_role("button", name="↻ Refresh categories").click()
             self.assertEqual(len(sent), 1)
             for private in ("USD", "Birch", "2026", "9.99", "Nanami"):
                 self.assertNotIn(private, json.dumps(sent[0]))
             page.goto(origin + "/transactions?month=2026-11")
             evil = page.locator("tr.acct-row", has_text="Ignore previous instructions")
-            expect(evil).to_contain_text("Needs review")
+            expect(evil).to_contain_text("Uncategorized")
             self.assertNotIn("Income", evil.locator("td.cat-cell").inner_text())
             self.assertEqual(page.locator("img[src='x']").count(), 0)
-            self.assertGreaterEqual(page.locator(".badge", has_text="suggested").count(), 1)
+            self.assertEqual(page.locator(".badge").count(), 0)                    # AI categories are normal chips
+            self.assertGreaterEqual(page.locator("summary[title*='suggested by AI']").count(), 1)
             self.assertIn("🚇", page.locator("main").inner_text())
             self.assertNotIn(KEY, page.content())
         with closing(sqlite3.connect(self.path)) as db:

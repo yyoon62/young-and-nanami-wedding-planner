@@ -101,9 +101,9 @@ class Acceptance(Base, unittest.TestCase):
             notices = C.after_sync(self.path, transport=spy)
         self.assertEqual((spy.calls, result.sent, notices), ([], 0, []))
         html = self.page()
-        self.assertIn("Merchant names are sent to Anthropic.", html)
-        self.assertIn("Category suggestions (off by default)", html)
-        self.assertNotIn('name="enabled" value="1" checked', html)
+        self.assertIn("Auto-categorize is off.", html)
+        self.assertNotIn("Category suggestions", html)                 # no panel in the main view (L26-7)
+        self.assertNotIn('name="enabled"', html)
         self.enable()
         result = self.run_it(spy, environ={})
         self.assertEqual((spy.calls, result.sent), ([], 0))
@@ -162,11 +162,12 @@ class Acceptance(Base, unittest.TestCase):
         bakery = next(r for r in snap.rows if r["description"].startswith("SQ *FRESH BAKERY"))
         self.assertEqual((bakery["category"], bakery["category_source"], bakery["emoji"]), ("Dining", "suggested", "🥐"))
         html = self.page()
-        self.assertIn('<span class="badge" title="Suggested by the classifier; not confirmed">suggested</span>', html)
+        self.assertNotIn('class="badge"', html)                       # an AI category is a normal chip ...
         self.assertIn("🥐", html)
-        self.assertIn("includes 3 suggested", html)                   # Dining: two cached + fresh bakery
-        self.assertIn("includes 2 suggested", html)                   # Shopping: fresh books + dormant shop (not the ruled one)
-        self.assertIn("Needs review", html)                            # the withheld person-like merchant
+        self.assertIn("Change category · ✨ suggested by AI", html)    # ... with a ✨ in its tooltip
+        self.assertNotIn("includes 3 suggested", html)
+        self.assertNotIn("Needs review", html)                         # the withheld person-like merchant is Uncategorized
+        self.assertIn("🏷️ Uncategorized ▾", html)
         # A second run sends nothing.
         again = self.run_it(fake)
         self.assertEqual((len(fake.calls), again.sent), (1, 0))
@@ -206,8 +207,9 @@ class Acceptance(Base, unittest.TestCase):
         self.assertNotIn("<img src=x", html)
         self.assertNotIn('onerror=alert(1)>', html.replace("&lt;img src=x onerror=alert(1)&gt;", ""))
         self.assertIn("&lt;img src=x onerror=alert(1)&gt;", html)
-        self.assertIn("Needs review", html)
-        self.assertEqual(html.count('class="badge"'), 1)                # only "Good Shop" is a (valid) suggestion
+        self.assertNotIn("Needs review", html)
+        self.assertEqual(html.count("✨ suggested by AI"), 1)           # only "Good Shop" is a (valid) suggestion
+        self.assertEqual(html.count("🏷️ Uncategorized ▾"), 3)           # the three low-confidence/invalid ones
 
     # ---- 12 ----
     def test_failures_keep_valid_items_retry_with_backoff_and_never_break_the_page(self):
@@ -222,7 +224,7 @@ class Acceptance(Base, unittest.TestCase):
             result = self.run_it(fake)
             self.assertIn(text, result.status)
             self.assertEqual((self.cache(), self.setting("failures"), self.setting("next_try_at")), ({}, "1", str(NOW + 300)))
-            self.assertIn("Category suggestions", self.page())                  # no error wall
+            self.assertIn("How these numbers work", self.page())               # no error wall
         # Backoff doubles, caps at six hours, and blocks calls until due.
         fake = Fake(C.TransportError(500))
         with self.db:
@@ -406,7 +408,6 @@ class Candidates(Base, unittest.TestCase):
             os.environ.pop("ANTHROPIC_API_KEY", None)
             self.enable()
             html = self.page()
-            self.assertIn('<details class="classifier" open>', html)                 # needs attention: shown open
             self.assertIn("No key found. Nothing is sent without a key.", html)
             self.assertIn("On, but nothing is sent until a usable key is found.", html)
             self.assertNotIn("Key found", html)
@@ -414,17 +415,15 @@ class Candidates(Base, unittest.TestCase):
         with mock.patch.dict(os.environ, ENV):
             html = self.page()
             self.assertIn("Key found (environment).", html)
-            self.assertIn('<details class="classifier"><summary>Category suggestions · on</summary>', html)
             self.assertNotIn("No key found", html)
             self.enable("0")
             html = self.page()
-            self.assertIn("<br>Off.<br>", html)
+            self.assertIn("Auto-categorize is off.", html)
 
     def test_toggle_and_classify_now_through_the_edit_route(self):
         self.put("2026-11-03", "-12.40", "Maple Cafe")
         self.post(action="classifier", enabled="1")
         self.assertTrue(C.enabled(self.db))
-        self.assertIn('name="enabled" value="1" checked', self.page())
         self.post(action="classifier")                      # unchecked checkbox sends nothing
         self.assertFalse(C.enabled(self.db))
         for bad in (dict(action="classifier", enabled="2"), dict(action="classify_now", enabled="1")):

@@ -46,12 +46,13 @@ def notes_html():
     return '<ul class="tx-notes">' + "".join(f"<li>{escape(n)}</li>" for n in NOTES) + "</ul>"
 
 
-def info_box(coverage_items, *, can_sync=False):
+def info_box(coverage_items, *, can_sync=False, categories_html=""):
     """coverage_items: already-escaped <li> strings for the per-account coverage list."""
     body = "".join(f"<h4>{escape(title)}</h4><ul>" + "".join(f"<li>{escape(t)}</li>" for t in items) + "</ul>"
                    for title, items in _GROUPS)
     if can_sync:
         body += f"<h4>Sync</h4><ul><li>{escape(SYNC_NOTE)}</li></ul>"
+    body += categories_html
     body += ("<h4>Accounts and coverage</h4><ul>" + "".join(coverage_items) + "</ul>" if coverage_items
              else "<p>No included accounts in this view.</p>")
     return f'<details class="tx-info"><summary>ℹ️ How these numbers work</summary><div class="tx-info-body">{body}</div></details>'

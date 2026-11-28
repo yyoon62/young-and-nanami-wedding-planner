@@ -63,6 +63,15 @@ class Pick(Fixture, unittest.TestCase):
         self.db.commit()
         self.assertEqual(self.row("Corner Coffee")["category"], "Dining")
 
+    def test_a_user_chosen_category_is_never_sent_or_overwritten_by_the_classifier(self):
+        import tx_classifier as C
+        wanted, _ = C.candidates(self.db, 0)
+        self.assertIn("corner coffee", wanted)
+        self.post(self.row("Corner Coffee")["row_id"], pick="Dining")
+        wanted, _ = C.candidates(self.db, 0)
+        self.assertNotIn("corner coffee", wanted)                   # not re-sent
+        self.assertEqual(self.row("Corner Coffee")["category_source"], "manual")
+
     def test_uncategorized_pick_clears_and_pins_and_cannot_be_applied(self):
         self.post(self.fuel, pick="Transport")
         self.post(self.fuel, pick="")
