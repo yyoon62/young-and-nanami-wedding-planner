@@ -219,7 +219,7 @@ def build_request(model, categories, items):
             "properties": {"id": {"type": "string"}, "category": {"type": "string", "enum": list(categories)},
                            "emoji": {"type": "string"},
                            "confidence": {"type": "number", "minimum": 0, "maximum": 1}}}}}}
-    return {"model": model, "max_tokens": 1500, "temperature": 0, "system": SYSTEM,
+    return {"model": model, "max_tokens": 1500, "system": SYSTEM,
             "tools": [{"name": TOOL, "description": "Record one category and one emoji for each merchant id.",
                        "input_schema": schema}],
             "tool_choice": {"type": "tool", "name": TOOL},

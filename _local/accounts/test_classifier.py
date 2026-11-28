@@ -143,7 +143,8 @@ class Acceptance(Base, unittest.TestCase):
         self.assertEqual(fake.texts(), ["dormant shop", "fresh bakery", "fresh books"])  # NOT cached/ruled/manual/p2p
         headers, body = fake.calls[0]
         self.assertEqual(headers["x-api-key"], KEY)                   # header only; asserted absent elsewhere below
-        self.assertEqual((body["model"], body["temperature"], body["max_tokens"]), ("claude-haiku-5-5", 0, 1500))
+        self.assertEqual((body["model"], body["max_tokens"]), ("claude-haiku-5-5", 1500))
+        self.assertNotIn("temperature", body)  # rejected by claude-haiku-5-5 (HTTP 400)
         self.assertEqual(body["tool_choice"], {"type": "tool", "name": "record_categories"})
         schema = body["tools"][0]["input_schema"]["properties"]["results"]["items"]["properties"]
         self.assertEqual(schema["category"]["enum"], list(BUILTIN))

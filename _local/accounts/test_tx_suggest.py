@@ -205,10 +205,12 @@ class Suggest(Fixture, unittest.TestCase):
             email = CONFIG.members[0]
             db.execute("INSERT INTO hosted_identities VALUES (?,?)", (email, "10001"))
             db.execute("INSERT INTO hosted_sessions VALUES (?,?,?,?)", (digest(sid), email, token, 2))
-        fixture = SimpleNamespace(db=self.path, token=None, auth=auth, server_port=8765, batch=None, logo_dir=None)
+        fixture = SimpleNamespace(db=self.path, token=None, auth=auth, server_port=8765, batch=None, logo_dir=None,
+                                  notices=[])
         cookie = (("Cookie", f"{CONFIG.name('session')}={sid}.{auth.signature(sid)}"),)
-        status, _, body = request(server.Handler, fixture, "/projections", headers=cookie)
+        status, _, body = request(server.Handler, fixture, "/?chart=projection", headers=cookie)   # L29: a tab on Accounts
         self.assertEqual(status, 200)
+        self.assertIn('id="projection-assumptions"', body)
         self.assertNotIn("Suggested from your transactions", body)
         self.assertNotIn("USD 3,000.00", body)
         form = dict(Assumptions().form_values(), view="Household", currency="USD", token=token, apply="suggestion",

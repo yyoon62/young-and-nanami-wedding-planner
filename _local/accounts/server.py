@@ -16,12 +16,15 @@ from urllib.parse import parse_qs, urlsplit
 from servicers import servicer_get
 from bridge import Bridge, Problem
 from bulk import Batch, schema
-from history import history_panel, install as install_history, net_worth
+from history import install as install_history, net_worth
+import net_worth_ui
 from hosted_auth import (Auth, Config, Rejected, CHALLENGE_TTL, SESSION_TTL, db_path, external,
                          load_env_file, offline_lock, private, require_crypto)
 from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo, sanitize_domain
+from account_terms import install_terms, load_terms, parse_terms, save_terms
 from projections import install_projections
-from projections_ui import projection_get, projection_post
+import terms_ui
+from projections_ui import projection_post, projection_redirect
 from transactions import install_transactions, sync_transactions
 from tx_classifier import after_sync as classify_after_sync
 from transactions_ui import (EDIT as TX_EDIT, SYNC as TX_SYNC, TRANSACTIONS as TX_PATH,
@@ -118,9 +121,10 @@ def init_db(path):
         install_history(db)
         install_projections(db)
         install_transactions(db)
+        install_terms(db)
 
 
-NAV = (("/", "Accounts"), ("/transactions", "Transactions"), ("/projections", "Projections"),
+NAV = (("/", "Accounts"), ("/transactions", "Transactions"),
        ("/new", "Add account"), ("/servicers", "Statements"), ("/federal-preview", "Federal preview"))
 
 
@@ -154,6 +158,8 @@ def page(content, current=None, heading="Financial accounts", script=None):
 
 
 def view_url(view):
+    if isinstance(view, net_worth_ui.Scope):
+        return view.resolved_url()          # keeps the open tab and currency (L29)
     return "/" if view == "Household" else f"/?view={view}"
 
 
@@ -197,6 +203,14 @@ def section_totals(rows):
     return " · ".join(money(v, c) for c, v in sorted(totals.items()))
 
 
+def r_terms(row):
+    """Terms attached by render_home (None for rows read elsewhere)."""
+    try:
+        return row["_terms"]
+    except (KeyError, IndexError):
+        return None
+
+
 def inline_edit_drawer(r, today, token, view, opened=False, values=None, error=None):
     rid = r["id"]
     v = values if (opened and values) else dict(r)
@@ -209,7 +223,7 @@ def inline_edit_drawer(r, today, token, view, opened=False, values=None, error=N
             f'<td colspan="5">{err_html}'
             f'<form method="post" action="/edit/{rid}" class="drawer-form">'
             f'<input type="hidden" name="token" value="{token}">'
-            f'<input type="hidden" name="view" value="{view}">'
+            f'{net_worth_ui.hidden(view)}'
             f'<input type="hidden" name="inline" value="1">'
             f'<div class="drawer-grid">'
             f'<label>Account name<input required name="nickname" maxlength="100" value="{escape(str(v.get("nickname", "")))}"></label>'
@@ -222,6 +236,8 @@ def inline_edit_drawer(r, today, token, view, opened=False, values=None, error=N
             f'<label>Balance as of<input required type="date" name="asof" max="{today}" value="{escape(str(v.get("asof", "")))}"></label>'
             f'<label>Update method<input required name="update_method" maxlength="100" value="{escape(str(v.get("update_method", "")))}"></label>'
             f'</div>'
+            + terms_ui.drawer_fields(r, r_terms(r), section_for, values if opened else None,
+                                     side=v.get("side"), currency=v.get("currency")) +
             f'<div class="drawer-actions">'
             f'<div class="drawer-left"><button type="submit">Save changes</button>'
             f'<button type="button" class="secondary drawer-cancel">Cancel</button></div>'
@@ -249,13 +265,13 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
         for p in PEOPLE)
     owner_cell = (f'<form method="post" action="/owner/{rid}" class="inline-form owner-pills">'
                   f'<input type="hidden" name="token" value="{token}">'
-                  f'<input type="hidden" name="view" value="{view}">'
+                  f'{net_worth_ui.hidden(view)}'
                   f'{owner_pills}</form>')
     rename_pop = (f'<details class="inline-pop">'
                   f'<summary class="icon-btn" title="Rename account" aria-label="Rename {name}">✎</summary>'
                   f'<form method="post" action="/rename/{rid}" class="pop-form">'
                   f'<input type="hidden" name="token" value="{token}">'
-                  f'<input type="hidden" name="view" value="{view}">'
+                  f'{net_worth_ui.hidden(view)}'
                   f'<input type="text" name="nickname" value="{name}" maxlength="100" required aria-label="New account name">'
                   f'<button type="submit" class="pop-save">Save</button></form></details>')
     sec_buttons = "".join(
@@ -266,12 +282,12 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
                f'<summary class="sec-chip" title="Move to another section">{escape(r["kind"])} ▾</summary>'
                f'<form method="post" action="/section/{rid}" class="sec-menu">'
                f'<input type="hidden" name="token" value="{token}">'
-               f'<input type="hidden" name="view" value="{view}">'
+               f'{net_worth_ui.hidden(view)}'
                f'{sec_buttons}</form></details>')
     next_side = "asset" if side == "debt" else "debt"
     side_toggle = (f'<form method="post" action="/side/{rid}" class="inline-form">'
                    f'<input type="hidden" name="token" value="{token}">'
-                   f'<input type="hidden" name="view" value="{view}">'
+                   f'{net_worth_ui.hidden(view)}'
                    f'<input type="hidden" name="side" value="{next_side}">'
                    f'<button type="submit" class="side-btn {side}" title="Switch between Asset and Debt">'
                    f'{side.title()}</button></form>')
@@ -279,7 +295,7 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
     toggle_val = "0" if excluded else "1"
     exclude_btn = (f'<form method="post" action="/exclude/{rid}" class="inline-form">'
                    f'<input type="hidden" name="token" value="{token}">'
-                   f'<input type="hidden" name="view" value="{view}">'
+                   f'{net_worth_ui.hidden(view)}'
                    f'<input type="hidden" name="excluded" value="{toggle_val}">'
                    f'<button type="submit" class="link-btn">{toggle_label}</button></form>')
     stale_tag = ' <span class="stale-pill">Stale</span>' if stale else ""
@@ -288,7 +304,8 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
     return (f'<tr class="acct-row{" is-excluded" if excluded else ""}">'
             f'<th scope="row" class="acct-cell"><div class="acct-with-logo">{logo}<div class="acct-info">'
             f'<div class="acct-head"><span class="acct-name">{name}</span>{rename_pop}</div>'
-            f'<div class="acct-sub-row"><span class="acct-sub">{inst}</span>{sec_pop}</div></div></div></th>'
+            f'<div class="acct-sub-row"><span class="acct-sub">{inst}</span>{sec_pop}'
+            f'{terms_ui.flag_html(r, r_terms(r), section_for)}</div></div></div></th>'
             f'<td class="num bal-cell"><span class="amt {side}">{signed_money(amt, c, side)}</span> {side_toggle}</td>'
             f'<td class="owner-cell">{owner_cell}</td>'
             f'<td class="date-cell"><time datetime="{r["asof"]}">{r["asof"]}</time>{stale_tag}</td>'
@@ -298,8 +315,8 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
             f'</tr>{drawer}')
 
 
-def dashboard(rows, today, view, token, timeline, has_sync=False, notices=(), error=None,
-              open_edit=None, edit_values=None, use_logos=False, has_backdated=False):
+def dashboard(rows, today, view, token, net, has_sync=False, notices=(), error=None,
+              open_edit=None, edit_values=None, use_logos=False):
     active = [r for r in rows if not r["excluded"]]
     excluded = [r for r in rows if r["excluded"]]
     totals = {}
@@ -312,14 +329,11 @@ def dashboard(rows, today, view, token, timeline, has_sync=False, notices=(), er
         f'<strong>{money(t["asset"] - t["debt"], c)}</strong>'
         f'<div>Assets: {money(t["asset"], c)} · Debts: {money(t["debt"], c)}</div></section>'
         for c, t in sorted(totals.items()))
-    links = "".join(
-        f'<a href="{url}"' + (' aria-current="page"' if label == view else '') + f'>{label}</a>'
-        for label, url in [("Household", "/"), *((p, f"/?view={p}") for p in PEOPLE)])
     sync_html = ""
     if has_sync:
         sync_html = (f'<form method="post" action="/sync" class="inline-form">'
                      f'<input type="hidden" name="token" value="{token}">'
-                     f'<input type="hidden" name="view" value="{view}">'
+                     f'{net_worth_ui.hidden(view)}'
                      f'<button type="submit" class="button">↻ Sync balances</button></form>')
     add_cls = "button secondary" if has_sync else "button"
     banner = ""
@@ -368,10 +382,10 @@ def dashboard(rows, today, view, token, timeline, has_sync=False, notices=(), er
 
     return page(
         f'{banner}<datalist id="types">{choices}</datalist>'
-        f'<div class="top-bar"><nav class="owner-tabs" aria-label="Inventory views">{links}</nav>'
+        f'<div class="top-bar"><nav class="owner-tabs" aria-label="Inventory views">{net.links}</nav>'
         f'<div class="top-actions">{sync_html}<a class="{add_cls}" href="/new">+ Add account</a></div></div>'
         f'<div class="cards">{cards}</div>'
-        f'{history_panel(timeline, money, has_backdated=has_backdated)}'
+        f'{net.html}'
         f'{table}{excluded_html}'
         f'<details class="help"><summary>How totals work</summary><p>Household counts every active account once. '
         f'Click Young, Nanami, or both on any row to assign ownership (selecting both marks it joint; individual views '
@@ -579,7 +593,15 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_port
         return self.headers.get("Host") in {f"127.0.0.1:{port}", f"localhost:{port}"}
 
-    def render_home(self, view, notices=(), error=None, status=200, open_edit=None, edit_values=None):
+    def render_home(self, *args, **kwargs):
+        status, text, scripts = self.home_page(*args, **kwargs)
+        return self.send(status, text, scripts=scripts)
+
+    def home_page(self, view, notices=(), error=None, status=200, open_edit=None, edit_values=None,
+                  form_state=None):
+        """(status, html, scripts) for the Accounts page."""
+        scope = view if isinstance(view, net_worth_ui.Scope) else net_worth_ui.Scope(view)
+        view = str(scope)
         owner_scope = "(? = 'Household' OR owner IN (?, 'Joint'))"
         with closing(sqlite3.connect(self.server.db)) as db:
             db.row_factory = sqlite3.Row
@@ -587,16 +609,30 @@ class Handler(BaseHTTPRequestHandler):
             rows = db.execute(f"""SELECT * FROM accounts WHERE {owner_scope}
                                  ORDER BY excluded, side, institution COLLATE NOCASE, nickname COLLATE NOCASE, id""",
                               (view, view)).fetchall()
+            terms = load_terms(db)
+            rows = [dict(r, _terms=terms.get(r["id"])) for r in rows]
             points = db.execute(f"""SELECT h.*, a.asof AS current_asof
                                    FROM balance_history AS h JOIN accounts AS a ON a.id = h.account_id
                                    WHERE a.excluded = 0 AND {owner_scope} ORDER BY h.asof, h.account_id""",
                                 (view, view)).fetchall()
-        has_backdated = any(p["asof"] > p["current_asof"] for p in points)
-        return self.send(status, dashboard(rows, date.today(), view, self.token, net_worth(points),
-                                           has_sync=bool(self.server.batch), notices=notices, error=error,
-                                           open_edit=open_edit, edit_values=edit_values,
-                                           use_logos=bool(self.server.logo_dir), has_backdated=has_backdated),
-                         scripts=True)
+            try:
+                net = net_worth_ui.build(
+                    db, scope, PEOPLE, timeline=net_worth(points), money=money, form_state=form_state,
+                    has_backdated=any(p["asof"] > p["current_asof"] for p in points),
+                    projection=dict(token=self.token, section_for=section_for, places=places, today=date.today(),
+                                    suggestions=not self.server.auth))
+            except ValueError as exc:
+                return 400, str(exc), False
+        return status, dashboard(rows, date.today(), scope, self.token, net,
+                                 has_sync=bool(self.server.batch), notices=notices, error=error,
+                                 open_edit=open_edit, edit_values=edit_values,
+                                 use_logos=bool(self.server.logo_dir)), True
+
+    def projection_rerender(self, view, currency, attempted, errors):
+        """A refused assumptions save, shown inside the Projection tab with the attempted values kept."""
+        status, text, _ = self.home_page(net_worth_ui.Scope(view, "projection", currency), status=422,
+                                         form_state=(attempted, errors))
+        return status, text, None
 
     def do_GET(self):
         try:
@@ -625,10 +661,8 @@ class Handler(BaseHTTPRequestHandler):
         if result is not None:
             return self.send(*result)
         path = urlsplit(self.path).path
-        if path == "/projections":
-            status, body, location = projection_get(
-                self.server.db, self.path, page=page, token=self.token, people=PEOPLE,
-                section_for=section_for, places=places, today=date.today(), suggestions=not self.server.auth)
+        if path == "/projections":      # L29: the page moved into Accounts; old links and bookmarks keep working
+            status, body, location = projection_redirect(self.server.db, self.path, page=page, people=PEOPLE)
             return self.send(status, body, location=location)
         if path == "/federal-preview":
             return self.send(200, (ROOT / "preview.html").read_text(), preview=True)
@@ -674,11 +708,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, form({"currency": "USD", "asof": str(date.today()), "owner": "Unspecified",
                                         "update_method": DEFAULT_METHOD}, path, self.token))
         if path == "/":
-            view = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("view", ["Household"])
-            if len(view) != 1 or view[0] not in ("Household", *PEOPLE):
-                return self.send(400, "Unknown inventory view.")
+            try:
+                scope = net_worth_ui.parse(urlsplit(self.path).query, PEOPLE)
+            except ValueError as exc:
+                return self.send(400, str(exc))
             notices, self.server.notices = self.server.notices, []
-            return self.render_home(view[0], notices=notices)
+            return self.render_home(scope, notices=notices)
         with closing(sqlite3.connect(self.server.db)) as db:
             db.row_factory = sqlite3.Row
             match = re.fullmatch(r"/(edit|remove)/([1-9][0-9]{0,17})", path)
@@ -730,8 +765,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reject(exc)
             status, body, location = projection_post(
                 self.server.db, data, page=page, token=self.token, people=PEOPLE,
-                section_for=section_for, places=places, today=date.today(), suggestions=not self.server.auth)
-            return self.send(status, body, location=location)
+                section_for=section_for, places=places, today=date.today(), suggestions=not self.server.auth,
+                where=lambda v, c: net_worth_ui.Scope(v, "projection", c).url(anchor=True),
+                rerender=self.projection_rerender)
+            return self.send(status, body, location=location, scripts=True)
         target = self.path
         if not self.server.auth and target in (TX_EDIT, TX_SYNC):
             lengths = self.headers.get_all("Content-Length", [])
@@ -780,8 +817,7 @@ class Handler(BaseHTTPRequestHandler):
             data = {k: v[0] for k, v in parse_qs(self.rfile.read(int(length)).decode("utf8", "replace")).items()}
             if not secrets.compare_digest(data.get("token", "").encode(), self.token.encode()):
                 return self.send(403, "Reload the form and try again.")
-        back = data.get("view", "Household")
-        back = back if back in ("Household", *PEOPLE) else "Household"
+        back = net_worth_ui.from_form(data, PEOPLE, self.server.db)
         if sync_act:
             try:
                 self.server.notices = self.server.batch.sync()
@@ -844,6 +880,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(303, "", location=view_url(back))
         try:
             values = validate(data, date.today())
+            terms = (parse_terms(data, values["currency"], values["side"], places(values["currency"]),
+                                 section_for, values["kind"]) if edit and data.get("terms") == "1" else None)
         except ValueError as exc:
             if edit and data.get("inline") == "1":
                 return self.render_home(back, error=str(exc), status=422, open_edit=edit[1], edit_values=data)
@@ -858,6 +896,8 @@ class Handler(BaseHTTPRequestHandler):
                 db.execute("""UPDATE accounts SET institution=?,nickname=?,kind=?,side=?,currency=?,
                               balance=?,asof=?,owner=?,update_method=?,side_manual=? WHERE id=?""",
                            (*params, side_manual, edit[1]))
+                if terms is not None:
+                    save_terms(db, edit[1], terms)
             else:
                 db.execute("""INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof,
                               owner,update_method,excluded,side_manual) VALUES (?,?,?,?,?,?,?,?,?,0,1)""", params)
