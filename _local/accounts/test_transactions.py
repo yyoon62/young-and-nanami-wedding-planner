@@ -1,0 +1,373 @@
+"""Fictional on-disk SQLite + injected Bridge wire; no server or network needed."""
+from contextlib import closing
+from datetime import date, datetime, timezone
+from decimal import Decimal
+import json
+from pathlib import Path
+import sqlite3
+import tempfile
+import time
+import unittest
+from urllib.parse import parse_qs, urlencode, urlsplit
+
+from bridge import Bridge, Problem
+from bulk import Batch, fingerprint
+from server import init_db, validate
+from transactions import DAY, OVERLAP, PAGE, install_transactions, monthly_snapshot, sync_transactions
+from transactions_ui import EDIT, SYNC, RouteProblem, post_transactions, render_transactions
+
+
+def epoch(iso):
+    dt = datetime.fromisoformat(iso)
+    return int((dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp())
+
+
+def tx(key, when, amount, description, **extra):
+    return dict(id=key, posted=epoch(when) if when else 0, amount=amount,
+                description=description, **extra)
+
+
+TOKEN = "fictional-page-token"
+NOW = epoch("2026-12-15T12:00:00")
+VIEWS = {"Household", "Young", "Nanami"}
+
+
+class TransactionsTest(unittest.TestCase):
+    def setUp(self):
+        temp = self.enterContext(tempfile.TemporaryDirectory(prefix="fictional-transactions-",
+                                                             dir=Path(tempfile.gettempdir()).resolve()))
+        self.path = Path(temp) / "accounts.sqlite3"
+        init_db(self.path)
+        self.db = self.enterContext(closing(sqlite3.connect(self.path)))
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            install_transactions(self.db)
+            install_transactions(self.db)
+        secret = Path(temp) / "fixture-access"
+        secret.touch(mode=0o600)
+        secret.write_text("https://fixture:fictional-secret-NOT-live@bridge.simplefin.org/simplefin/fixture")
+        self.accounts, self.calls = {}, []
+        self.alter = lambda data: data
+        self.bridge = Bridge(secret, self.wire)
+        self.batch = Batch(self.path, self.bridge, validate)
+
+    def account(self, key, kind="Checking", owner="Young", currency="USD", excluded=False, linked=True):
+        with self.db:
+            account = self.db.execute("""INSERT INTO accounts
+                (institution,nickname,kind,side,currency,balance,asof,owner,excluded)
+                VALUES ('Fictional institution',?,?,?,?, '0', '2026-11-01', ?,?)""",
+                                      (key, kind, "asset", currency, owner, excluded)).lastrowid
+            if linked:
+                source = fingerprint(self.bridge.namespace, "fictional-connection", key)
+                self.db.execute("INSERT INTO source_links (source,local,stamp,sign,snapshot,status)"
+                                " VALUES (?,?,0,0,'','Fictional')", (source, account))
+                self.accounts[key] = dict(conn_id="fictional-connection", id=key, currency=currency,
+                                          name=key, **{"balance": "0", "balance-date": NOW},
+                                          transactions=[])
+        return account
+
+    def wire(self, method, host, path, headers):
+        self.assertEqual((method, host), ("GET", "bridge.simplefin.org"))
+        self.assertIn("Authorization", headers)
+        parts = urlsplit(path)
+        self.assertEqual(parts.path, "/simplefin/fixture/accounts")
+        args = parse_qs(parts.query)
+        self.assertEqual(args.pop("version"), ["2"])
+        lo, hi = (int(args.pop(k)[0]) for k in ("start-date", "end-date"))
+        self.assertTrue(0 < hi - lo <= PAGE)
+        pending = args.pop("pending", None)
+        self.assertIn(pending, (None, ["1"]))
+        self.assertEqual(args, {})
+        self.calls.append((lo, hi, pending is not None))
+        data = dict(connections=[dict(conn_id="fictional-connection")], errlist=[],
+                    accounts=[dict(a, transactions=[
+                        t for t in a["transactions"] if
+                        (pending is not None if t.get("pending") else lo <= t["posted"] < hi)])
+                        for a in self.accounts.values()])
+        reply = self.alter(data)
+        return reply if isinstance(reply, tuple) else (200, json.dumps(reply).encode())
+
+    def add(self, account, *rows):
+        self.accounts[account]["transactions"].extend(rows)
+
+    def sync(self, **kwargs):
+        return sync_transactions(self.batch, **({"now": NOW} | kwargs))
+
+    def snap(self, month="2026-11", view="Household", **opts):
+        return monthly_snapshot(self.db, month, view, **opts)
+
+    def row(self, description, month="2026-11", **opts):
+        return next(r for r in self.snap(month, **opts).rows if r["description"] == description)
+
+    def post(self, row=None, path=EDIT, allowed_views=VIEWS, can_sync=True, **fields):
+        data = dict(token=TOKEN, month="2026-11", view="Household") | fields
+        if row is not None:
+            data["row"] = str(row)
+        return post_transactions(self.db, path, urlencode(data).encode(), token=TOKEN,
+                                 allowed_views=allowed_views, can_sync=can_sync)
+
+    def test_corroborated_payment_exact_currency_and_joint_views(self):
+        self.account("Joint checking", owner="Joint")
+        self.account("Joint card", "Credit card", owner="Joint")
+        self.account("Excluded", excluded=True)
+        self.account("Yen checking", currency="JPY", owner="Nanami")
+        self.add("Joint checking", tx("shared-id", "2026-11-09", "-40.00", "Credit card payment"))
+        self.add("Joint card", tx("shared-id", "2026-11-12", "40", "PAYMENT THANK YOU"),
+                 tx("food", "2026-11-10", "-40.00", "Grocery"))
+        self.add("Excluded", tx("ignored", "2026-11-12", "-100", "Excluded"))
+        self.add("Yen checking", tx("local", "2026-11-09", "-40", "Credit card payment"))
+        self.accounts["Provider-only account"] = self.accounts["Joint checking"] | {"id": "unlinked"}
+        self.assertEqual(self.sync().windows, 5)
+        self.assertTrue(all(left[1] == right[0] for left, right in zip(self.calls, self.calls[1:])))
+        self.assertEqual(self.calls[-1][1], NOW)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM accounts").fetchone()[0], 4)
+        for view in VIEWS:
+            snapshot = self.snap(view=view)
+            usd = snapshot.totals["USD"]
+            self.assertEqual((usd.spending, usd.credits, usd.net), (40, 0, -40))
+            self.assertEqual(sum(r["flow"] == "Matched transfer" for r in snapshot.rows), 2)
+            self.assertNotIn("Excluded", {r["nickname"] for r in snapshot.rows})
+            self.assertEqual("JPY" in snapshot.totals, view != "Young")
+            if view != "Young":
+                self.assertEqual(snapshot.totals["JPY"].spending, 40)
+
+    def test_unrelated_refund_deposit_and_unmatched_card_credit(self):
+        self.account("Bank")
+        self.account("Card", "Credit card")
+        self.add("Bank", tx("d", "2026-11-10", "40", "Deposit"),
+                 tx("p", "2026-11-08", "-40", "Credit card payment"))
+        self.add("Card", tx("r", "2026-11-09", "40", "Grocery refund"),
+                 tx("u", "2026-11-12", "40", "Payment received"))
+        self.sync()
+        t = self.snap().totals["USD"]
+        self.assertEqual((t.spending, t.credits, t.net, t.review), (40, 80, 40, 40))
+        self.assertEqual(self.row("Grocery refund")["flow"], "Cash flow")
+        self.assertEqual(self.row("Payment received")["flow"], "Review card credit")
+        self.post(self.row("Payment received")["row_id"], action="transfer", transfer="no")
+        self.assertEqual(self.snap().totals["USD"].credits, 120)
+
+    def test_utc_boundary_and_six_day_counterexample_to_month_padding(self):
+        self.account("Bank")
+        self.account("Card", "Credit card")
+        self.add("Bank", tx("bank", "2026-11-28", "-20", "Credit card payment"),
+                 tx("before", "2026-12-01T00:59:59+01:00", "-0.0001", "Before month"),
+                 tx("after", "2026-11-30T19:00:00-05:00", "-0.0002", "Start of month"))
+        self.add("Card", tx("first", "2026-12-01", "20", "Payment thank you"))
+        self.sync()
+        self.assertEqual(self.row("Payment thank you", "2026-12")["flow"], "Matched transfer")
+        self.assertEqual(self.row("Before month")["posted_date"], "2026-11-30")
+        self.assertEqual(self.row("Start of month", "2026-12")["posted_date"], "2026-12-01")
+        # A competing card credit lies six days before the December credit.
+        # A three-day read pad returns the bank leg but misses its other edge.
+        self.add("Card", tx("other", "2026-11-25", "20", "Online payment"))
+        self.sync()
+        self.assertEqual(self.row("Payment thank you", "2026-12")["flow"], "Matched transfer",
+                         "old postings are outside the normal five-day refresh")
+        # Use a fresh instrument's backfill to replay the older correction.
+        self.account("New account")
+        self.sync()
+        self.assertEqual(self.row("Payment thank you", "2026-12")["flow"], "Review card credit")
+        self.assertEqual(self.snap().totals["USD"].spending, Decimal("20.0001"))
+        self.assertEqual(self.snap("2026-12").totals["USD"].spending, Decimal("0.0002"))
+
+    def test_exact_money_larger_than_default_decimal_context(self):
+        self.account("Bank")
+        whole, fraction = "9" * 63, "0" * 61 + "1"
+        self.add("Bank", tx("large", "2026-11-03", whole, "Large"),
+                 tx("tiny", "2026-11-02", "0." + fraction, "Tiny"),
+                 tx("offset", "2026-11-01", "-" + whole, "Offset"))
+        self.sync()
+        total = self.snap().totals["USD"]
+        self.assertEqual(total.credits, Decimal(whole + "." + fraction))
+        self.assertEqual(total.net, Decimal("0." + fraction))
+
+    def test_history_partial_missing_restart_and_incremental_overlap(self):
+        self.account("Bank")
+        self.account("Card", "Credit card")
+        self.add("Bank", tx("old", "2025-12-15", "-1", "First included second"),
+                 tx("cut", "2026-03-15", "-2", "Second page boundary"),
+                 tx("end", "2026-12-15T12:00:00", "-3", "Endpoint exclusive"))
+        fail = lambda data: data | {"errlist": [{"code": "act.missingdata", "msg": "<private>"}]}
+        self.alter = lambda data: fail(data) if len(self.calls) == 2 else data
+        with self.assertRaisesRegex(Problem, "^Incomplete transaction listing; window held\\.$"):
+            self.sync()
+        first, second = self.calls
+        self.assertEqual(first[0], epoch("2025-12-15"))
+        self.assertEqual(first[1], second[0])
+        self.assertEqual({r[0] for r in self.db.execute("SELECT end_at FROM transaction_coverage")}, {first[1]})
+        self.assertEqual(self.db.execute("SELECT count(*) FROM account_transactions").fetchone()[0], 1)
+        self.alter = lambda data: data | {"accounts": data["accounts"][:1]}
+        with self.assertRaisesRegex(Problem, "linked account was missing"):
+            self.sync()
+        self.assertEqual({r[0] for r in self.db.execute("SELECT end_at FROM transaction_coverage")}, {first[1]})
+        self.assertEqual(self.db.execute("SELECT count(*) FROM account_transactions").fetchone()[0], 1)
+        self.alter = lambda data: data
+        # New object/connection, same local database.
+        self.batch = Batch(self.path, self.bridge, validate)
+        result = self.sync()
+        self.assertTrue(result.caught_up)
+        self.assertEqual(self.calls[3][0], first[1] - OVERLAP)
+        self.assertEqual(self.row("Second page boundary", "2026-03")["amount"], "-2")
+        self.assertEqual(len(self.snap("2026-12").rows), 0)
+        before_repeat = len(self.calls)
+        self.assertEqual(self.sync(now=NOW + DAY).windows, 1)
+        self.assertEqual(self.calls[before_repeat], (NOW - OVERLAP, NOW + DAY, False))
+        self.assertEqual(self.db.execute("SELECT count(*) FROM account_transactions").fetchone()[0], 3)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM fetch_attempts").fetchone()[0], len(self.calls))
+        self.assertEqual(self.row("First included second", "2025-12")["amount"], "-1")
+
+    def test_link_only_and_shared_quota_including_failed_calls(self):
+        self.account("Unlinked", linked=False)
+        with self.assertRaisesRegex(Problem, "No linked accounts"):
+            self.sync()
+        self.assertEqual(self.calls, [])
+        self.account("Linked")
+        self.accounts["Foreign"] = self.accounts["Linked"] | {"id": "unknown"}
+        with self.db:
+            self.db.executemany("INSERT INTO fetch_attempts VALUES (?)", [(time.time(),)] * 23)
+        self.alter = lambda _: (403, b"not displayed")
+        with self.assertRaisesRegex(Problem, "denied or revoked"):
+            self.sync()
+        with self.assertRaisesRegex(Problem, "24 attempts"):
+            self.batch.sync()
+        with self.assertRaisesRegex(Problem, "24 attempts"):
+            self.sync()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM accounts").fetchone()[0], 2)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM transaction_coverage").fetchone()[0], 0)
+
+    def test_fail_closed_on_bad_response_and_no_provider_text_in_errors(self):
+        self.account("Bank")
+        self.add("Bank", tx("x", "2025-12-16", "-5", "fictional-secret-NOT-live"))
+        with self.assertRaisesRegex(Problem, "^Unexpected sensitive transaction field"):
+            self.sync()
+        self.accounts["Bank"]["transactions"][0]["description"] = "Valid"
+        for alter, message in [
+            (lambda _: (200, b'{"errlist":[],"errlist":[]}'), "unreadable"),
+            (lambda d: d | {"errors": ["<provider message>"]}, "warning or quota"),
+            (lambda d: d | {"accounts": [d["accounts"][0] | {"currency": "JPY"}]}, "currency mismatch"),
+            (lambda d: d | {"accounts": [d["accounts"][0] | {"transactions": None}]}, "transaction list"),
+            (lambda d: d | {"accounts": [d["accounts"][0]] * 2}, "duplicate"),
+            (lambda d: d | {"accounts": [d["accounts"][0] | {
+                "transactions": d["accounts"][0]["transactions"] * 2}]}, "duplicate"),
+            (lambda d: d | {"accounts": [d["accounts"][0] | {"transactions": [
+                tx("future", "2026-12-15", "-1", "wrong window")]}]}, "outside"),
+        ]:
+            with self.subTest(expected=message):
+                self.alter = alter
+                with self.assertRaisesRegex(Problem, message) as caught:
+                    self.sync()
+                self.assertNotIn("<provider message>", str(caught.exception))
+        self.assertEqual(self.db.execute("SELECT count(*) FROM transaction_coverage").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM account_transactions").fetchone()[0], 0)
+
+    def test_pending_hidden_transition_replay_and_expiration(self):
+        self.account("Bank")
+        pending = tx("same", None, "-9.01", "Pending purchase", pending=True)
+        self.add("Bank", pending)
+        self.sync()
+        self.assertFalse(any(p for _, _, p in self.calls))
+        self.assertEqual(len(self.snap("2026-12", show_pending=True).rows), 0)
+        self.sync(include_pending=True)
+        self.assertTrue(self.calls[-1][2])
+        self.assertEqual(len(self.snap("2026-12").rows), 0)
+        p = self.row("Pending purchase", "2026-12", show_pending=True)
+        self.assertIsNone(p["posted_date"])
+        self.assertEqual(self.snap("2026-12", show_pending=True).totals, {})
+        self.post(p["row_id"], action="category", category="Fictional", month="2026-12")
+        posted = tx("same", "2026-12-14", "-8.75", "Posted purchase")
+        self.accounts["Bank"]["transactions"] = [posted]
+        self.sync()
+        self.assertEqual(self.snap("2026-12").totals["USD"].spending, Decimal("8.75"))
+        self.assertEqual(self.row("Posted purchase", "2026-12")["category"], "Fictional")
+        self.accounts["Bank"]["transactions"] = [pending, tx("temp", None, "-1", "Short-lived", pending=True)]
+        self.sync(include_pending=True)
+        self.assertEqual(self.snap("2026-12", show_pending=True).totals["USD"].spending, Decimal("8.75"))
+        self.assertEqual(len(self.snap("2026-12", show_pending=True).rows), 2)
+        self.sync()
+        self.assertEqual(len(self.snap("2026-12", show_pending=True).rows), 1)
+
+    def test_manual_flags_and_account_scoped_rules_on_provider_updates(self):
+        bank = self.account("Bank")
+        self.account("Card", "Credit card")
+        self.add("Bank", tx("keep", "2026-12-11", "-30", "Credit card payment"),
+                 tx("move", "2026-12-12", "-4", "Other transfer"),
+                 tx("rule", "2026-12-12", "-1", "Vendor #1", payee="Farm Stand"),
+                 tx("blank", "2026-12-12", "-2", "Vendor #2", payee="FARM  STAND"))
+        self.add("Card", tx("credit", "2026-12-12", "30", "Payment thank you"),
+                 tx("scoped", "2026-12-12", "-5", "Vendor #3", payee="Farm Stand"))
+        self.sync()
+        for desc, action, value in [("Credit card payment", "transfer", "no"),
+                                    ("Other transfer", "transfer", "yes"),
+                                    ("Vendor #2", "category", ""),
+                                    ("Vendor #1", "rule", "Groceries")]:
+            rid = self.row(desc, "2026-12")["row_id"]
+            self.post(rid, action=action, month="2026-12",
+                      **{"transfer" if action == "transfer" else "category": value})
+        for row in self.accounts["Bank"]["transactions"][:2]:
+            row["amount"] = "-30.0" if row["id"] == "keep" else "-4.1"
+        self.add("Bank", tx("later", "2026-12-14", "-7", "Vendor #4", payee="farm stand"))
+        self.sync()
+        keep = self.row("Credit card payment", "2026-12")
+        move = self.row("Other transfer", "2026-12")
+        self.assertEqual((keep["transfer_manual"], keep["is_transfer"], keep["amount"]), (1, 0, "-30.0"))
+        self.assertEqual((move["transfer_manual"], move["is_transfer"], move["amount"]), (1, 1, "-4.1"))
+        self.assertEqual(self.row("Vendor #1", "2026-12")["category"], "Groceries")
+        self.assertEqual(self.row("Vendor #2", "2026-12")["category"], "")
+        self.assertEqual(self.row("Vendor #3", "2026-12")["category"], "")
+        self.assertEqual(self.row("Vendor #4", "2026-12")["category"], "Groceries")
+        with self.db:
+            self.db.execute("DELETE FROM accounts WHERE id=?", (bank,))
+        for table in ("account_transactions", "transaction_coverage", "transaction_merchant_rules"):
+            self.assertEqual(self.db.execute(f"SELECT count(*) FROM {table} WHERE account_id=?", (bank,))
+                             .fetchone()[0], 0)
+
+    def test_render_filters_zero_coverage_escaping_and_authorized_post(self):
+        self.account('Bank"><svg onload=alert(1)>')
+        self.account("Unlinked", currency="GBP", linked=False)
+        desc = "<script>alert(1)</script>"
+        self.add('Bank"><svg onload=alert(1)>', tx("x", "2026-11-11", "-10.123", desc,
+                                                 payee='"><img src=x onerror=alert(2)>'))
+        html = lambda query: render_transactions(self.db, query, allowed_views=VIEWS,
+                                                 token=TOKEN, can_sync=True, today=date(2026, 11, 20))
+        self.assertIn("No posted data with sufficient coverage", html(""))
+        self.sync()
+        row = self.row(desc)["row_id"]
+        self.post(row, action="category", category='"><b>Groceries</b>')
+        rendered = html("")
+        for raw in ("<script>", "<svg", "<img", "<b>Groceries", "style=", "https://"):
+            self.assertNotIn(raw, rendered)
+        for safe in ("&lt;script&gt;", "&lt;svg", "&lt;img", "&lt;b&gt;Groceries", "-10.123",
+                     "Not linked; transaction data unavailable", TOKEN, 'action="/transactions/edit"'):
+            self.assertIn(safe, rendered)
+        self.assertNotIn("&lt;script&gt;", html("q=no-such-merchant"))
+        self.assertIn("-10.123", html("q=no-such-merchant"))  # list filter, not totals
+        self.assertIn("No posted transactions reported", html("month=2026-10"))
+        self.assertIn("No posted data with sufficient coverage", html("month=2024-10"))
+        for expected, fields in [(403, {"token": "incorrect"}), (404, {"view": "Nanami"}),
+                                 (404, {"month": "2026-12"}), (400, {"view": "Joint"}),
+                                 (400, {"month": "2026-00"}), (422, {"category": "\x00"})]:
+            with self.subTest(fields=fields), self.assertRaises(RouteProblem) as caught:
+                self.post(row, **(dict(action="category", category="bad") | fields))
+            self.assertEqual(caught.exception.status, expected)
+        with self.assertRaises(RouteProblem) as caught:
+            self.post(row, action="category", category="bad", allowed_views={"Young"})
+        self.assertEqual(caught.exception.status, 403)
+        with self.assertRaises(RouteProblem) as caught:
+            render_transactions(self.db, "view=Nanami", token=TOKEN, allowed_views={"Young"})
+        self.assertEqual(caught.exception.status, 403)
+        for body in (b"token=a&token=b", b"q=%FF", b"q=%XY", b"token=\xff", b"unknown=1"):
+            with self.assertRaises(RouteProblem) as caught:
+                post_transactions(self.db, EDIT, body, token=TOKEN, allowed_views=VIEWS)
+            self.assertEqual(caught.exception.status, 400)
+        self.assertEqual(self.row(desc)["category"], '"><b>Groceries</b>')
+        with self.assertRaises(RouteProblem) as caught:
+            self.post(path=SYNC, allowed_views={"Young"}, view="Young")
+        self.assertEqual(caught.exception.status, 403)
+        self.assertTrue(self.post(path=SYNC, include_pending="1").include_pending)
+        location = self.post(row, action="transfer", transfer="yes", q="x&view=Nanami").location
+        self.assertEqual(parse_qs(urlsplit(location).query)["view"], ["Household"])
+
+
+if __name__ == "__main__":
+    unittest.main()

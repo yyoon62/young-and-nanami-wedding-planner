@@ -1,0 +1,235 @@
+"""Server-rendered /transactions fragments and form dispatch, not an HTTP server.
+
+Parent MUST authenticate/authorize all three routes, pass a trusted allowed_views
+set and session token, and retain Host/Origin, CSP, no-store and request-size
+guards. Owner tabs alone are not authorization. For POST require exact path (no
+query), application/x-www-form-urlencoded and strictly bounded raw bytes. Do not
+use the baseline dict of first form values; duplicates must be rejected.
+"""
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from html import escape
+import re
+import secrets
+from urllib.parse import parse_qsl, urlencode
+
+from transactions import CURRENCY, VIEWS, edit_transaction, month_dates, monthly_snapshot
+
+
+TRANSACTIONS = "/transactions"
+EDIT = TRANSACTIONS + "/edit"
+SYNC = TRANSACTIONS + "/sync"
+_FILTERS = ("month", "view", "currency", "q", "pending")
+
+
+class RouteProblem(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+def _params(raw, keys):
+    if len(raw) > 8192 or re.search(r"%(?![0-9a-fA-F]{2})", raw):
+        raise RouteProblem(400, "Invalid transaction form or query.")
+    try:
+        pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=True,
+                          encoding="utf-8", errors="strict", max_num_fields=len(keys))
+    except ValueError:
+        raise RouteProblem(400, "Invalid transaction form or query.") from None
+    data = dict(pairs)
+    if len(data) != len(pairs) or data.keys() - keys:
+        raise RouteProblem(400, "Unexpected or duplicate transaction field.")
+    return data
+
+
+def _filters(data, allowed_views, default_month):
+    view = data.get("view", "Household")
+    if view not in VIEWS:
+        raise RouteProblem(400, "Unknown account view.")
+    if view not in allowed_views:
+        raise RouteProblem(403, "Account view not authorized.")
+    month = data.get("month", default_month)
+    try:
+        month_dates(month)
+    except ValueError as exc:
+        raise RouteProblem(400, str(exc)) from None
+    currency, q, pending = (data.get(k, default) for k, default in
+                            (("currency", ""), ("q", ""), ("pending", "0")))
+    if ((currency and not CURRENCY.fullmatch(currency)) or len(q) > 100
+            or (q and not q.isprintable()) or pending not in ("0", "1")):
+        raise RouteProblem(400, "Invalid transaction filter.")
+    return dict(month=month, view=view, currency=currency, q=q, pending=pending)
+
+
+def _hidden(data, **extra):
+    return "".join(f'<input type="hidden" name="{name}" value="{escape(str(value))}">'
+                   for name, value in (data | extra).items())
+
+
+def _option(value, label, chosen):
+    return f'<option value="{escape(value)}"{" selected" if value == chosen else ""}>{escape(label)}</option>'
+
+
+def _location(filters):
+    return TRANSACTIONS + "?" + urlencode(filters)
+
+
+def _stamp(stamp):
+    return datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def render_transactions(db, query, *, token, allowed_views, can_sync=False, today=None):
+    """Return fragment for parent page()/send(); read DB in a single parent snapshot."""
+    today = today or datetime.now(timezone.utc).date()
+    f = _filters(_params(query, set(_FILTERS)), allowed_views, today.isoformat()[:7])
+    snap = monthly_snapshot(db, f["month"], f["view"], show_pending=f["pending"] == "1",
+                            household_matching="Household" in allowed_views)
+    views = "".join(_option(v, v, f["view"]) for v in VIEWS if v in allowed_views)
+    currencies = sorted({r["currency"] for r in snap.coverage} | ({f["currency"]} - {""}))
+    currencies = _option("", "All currencies", f["currency"]) + "".join(
+        _option(c, c, f["currency"]) for c in currencies)
+    search = (
+        f'<form method="get" action="{TRANSACTIONS}" class="drawer-form"><div class="drawer-grid">'
+        f'<label>Month (UTC)<input type="month" name="month" value="{f["month"]}" required></label>'
+        f'<label>View<select name="view">{views}</select></label>'
+        f'<label>Currency<select name="currency">{currencies}</select></label>'
+        f'<label>Find<input name="q" maxlength="100" value="{escape(f["q"])}"'
+        ' placeholder="Merchant, account, category"></label>'
+        f'<label>Pending<select name="pending">{_option("0", "Hide", f["pending"])}'
+        f'{_option("1", "Show, if fetched", f["pending"])}</select></label>'
+        '<div class="drawer-left"><button>Filter</button></div></div></form>')
+    sync = ""
+    if can_sync and "Household" in allowed_views:
+        sync = (f'<form method="post" action="{SYNC}" class="drawer-form">'
+                + _hidden(f, token=token)
+                + '<div class="drawer-left"><button>Sync transactions</button>'
+                '<label><input type="checkbox" name="include_pending" value="1">'
+                ' Request pending as well</label></div></form>'
+                '<p class="acct-sub">Refreshes all linked accounts. Shares the balance sync quota.</p>')
+    coverage = []
+    for r in snap.coverage:
+        if r["end_at"] is not None:
+            state = ("Window requested" if r["covered"] else "Partial or outside requested window")
+            state += f' · {_stamp(r["start_at"])} through {_stamp(r["end_at"])} (end exclusive)'
+        else:
+            state = "Not yet fetched" if r["linked"] else "Not linked; transaction data unavailable"
+        coverage.append(f'<li>{escape(r["institution"])} · {escape(r["nickname"])}'
+                        f' ({escape(r["currency"])}) — {state}</li>')
+    totals = []
+    for currency, t in sorted(snap.totals.items()):
+        qualifier = ("" if all(r["covered"] for r in snap.coverage if r["currency"] == currency)
+                     else " · partial coverage")
+        totals.append(f'<article class="card"><small>{escape(currency)}{qualifier}</small>'
+                      f'<strong>{t.net:f}</strong><div>Signed net cash flow</div>'
+                      f'<div>Credits {t.credits:f} · Spending {t.spending:f}</div>'
+                      + (f'<div>Card credits under review: {t.review:f}</div>' if t.review else "")
+                      + '</article>')
+    if not totals:
+        summary = "<p>No posted data with sufficient coverage to report a zero.</p>"
+    else:
+        summary = '<div class="cards">' + "".join(totals) + "</div>"
+    if not any(not r["pending"] for r in snap.rows) and totals:
+        summary += "<p>No posted transactions reported for this month in this view.</p>"
+
+    rows = []
+    q = f["q"].casefold().strip()
+    for r in snap.rows:
+        if f["currency"] and f["currency"] != r["currency"]:
+            continue
+        if q and not any(q in r[k].casefold() for k in
+                         ("description", "payee", "category", "nickname", "institution", "flow")):
+            continue
+        category = escape(r["category"])
+        transfer = ("yes" if r["is_transfer"] else "no") if r["transfer_manual"] else "auto"
+        choices = "".join(_option(value, label, transfer) for value, label in
+                          (("auto", "Automatic"), ("yes", "Transfer"), ("no", "Not a transfer")))
+        rule = ('<button class="button secondary" name="action" value="rule">Save merchant rule</button>'
+                if not r["pending"] and r["merchant"] else "")
+        edit = (
+            f'<details class="inline-pop"><summary class="sec-chip">Edit</summary>'
+            f'<form method="post" action="{EDIT}" class="drawer-form">'
+            + _hidden(f, token=token, row=r["row_id"])
+            + f'<label>Category<input name="category" maxlength="48" value="{category}"></label>'
+            '<button name="action" value="category">Save category</button>'
+            + rule + f'<label>Transfer<select name="transfer">{choices}</select></label>'
+            '<button name="action" value="transfer">Save transfer</button></form></details>')
+        when = escape(r["posted_date"] or r["pending_date"])
+        label = "Pending · provider date or observed UTC date" if r["pending"] else "Posted UTC"
+        payee = f'<div class="acct-sub">Payee: {escape(r["payee"])}</div>' if r["payee"] else ""
+        rows.append(
+            f'<tr class="acct-row"><td><time datetime="{when}">{when}</time>'
+            f'<div class="acct-sub">{label}</div></td><th scope="row" class="acct-cell">'
+            f'<span class="acct-name">{escape(r["description"] or "No description")}</span>{payee}'
+            f'<div class="acct-sub">SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}</div></th>'
+            f'<td class="num">{escape(r["currency"])} {escape(r["amount"])}</td>'
+            f'<td>{category or "Uncategorized"} · {escape(r["flow"])} {edit}</td></tr>')
+    table = (
+        '<div class="table-wrap"><table class="acct-table"><thead><tr><th>Date</th><th>Transaction</th>'
+        '<th class="num">Signed amount</th><th>Classification</th></tr></thead><tbody>'
+        + "".join(rows) + "</tbody></table></div>" if rows else "<p>No transactions match this list.</p>")
+    return (
+        '<section class="history" aria-labelledby="cash-flow"><h2 id="cash-flow">Monthly cash flow</h2>'
+        + search + sync + summary
+        + '<p>Credits are signed inflows (including refunds), not verified income. Net is not savings. '
+        'Pending, transfers and explicit unmatched card-payment credits are outside totals; unmatched bank '
+        'debits remain spending. Automatic matching requires corroboration on both available legs.</p>'
+        '<details><summary>Coverage and dates</summary><p>Requested windows do not prove institution '
+        'completeness or retention. Current-month figures are provisional. Excluded accounts do not contribute. '
+        'Individual views include joint accounts. List filters do not change totals. Merchant rules fill only '
+        'uncategorized, non-manual entries for that merchant on the same account and currency.</p>'
+        + ("<ul>" + "".join(coverage) + "</ul>" if coverage else "<p>No included accounts in this view.</p>")
+        + '</details></section><section><h2>Transactions</h2>' + table + '</section>')
+
+
+@dataclass(frozen=True)
+class PostResult:
+    location: str
+    sync: bool = False
+    include_pending: bool = False
+
+
+def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
+    """Accept exact path and raw UTF-8 form bytes after parent HTTP guards.
+
+    Owns edit BEGIN IMMEDIATE/commit; use a fresh connection. Sync only returns
+    authorization + arguments; parent starts sync with no open DB transaction.
+    """
+    if path not in (EDIT, SYNC):
+        raise RouteProblem(404, "Unknown transaction route.")
+    if len(body) > 8192:
+        raise RouteProblem(413, "Transaction form too large.")
+    try:
+        raw = body.decode("utf-8", "strict")
+    except UnicodeError:
+        raise RouteProblem(400, "Invalid transaction form.") from None
+    keys = set(_FILTERS) | {"token"} | ({"row", "category", "transfer", "action"} if path == EDIT
+                                        else {"include_pending"})
+    data = _params(raw, keys)
+    if not token or not secrets.compare_digest(data.get("token", "").encode("utf-8"), token.encode("utf-8")):
+        raise RouteProblem(403, "Reload the transaction form and try again.")
+    if "view" not in data:
+        raise RouteProblem(400, "Choose an account view.")
+    f = _filters(data, allowed_views, None)
+    if path == SYNC:
+        if not can_sync or "Household" not in allowed_views:
+            raise RouteProblem(403, "Transaction sync not authorized or unavailable.")
+        pending = data.get("include_pending", "0")
+        if pending not in ("0", "1"):
+            raise RouteProblem(400, "Invalid pending option.")
+        return PostResult(_location(f), True, pending == "1")
+    row = data.get("row", "")
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", row) or int(row) > 2**63 - 1:
+        raise RouteProblem(400, "Invalid transaction row.")
+    action = data.get("action")
+    if ((action in ("category", "rule") and "category" not in data)
+            or (action == "transfer" and "transfer" not in data)):
+        raise RouteProblem(400, "Incomplete transaction edit.")
+    try:
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            if not edit_transaction(db, int(row), f["view"], f["month"], action=action,
+                                    category=data.get("category", ""), transfer=data.get("transfer", "")):
+                raise RouteProblem(404, "Transaction not found in this view and month.")
+    except ValueError as exc:
+        raise RouteProblem(422, str(exc) or "Enter a printable category of up to 48 characters.") from None
+    return PostResult(_location(f))
