@@ -125,6 +125,78 @@ class BrowserTx(unittest.TestCase):
             page.wait_for_url(re.compile(r"cat=(&|$)"))
             self.assertEqual(page.locator("tr.acct-row").count(), total)
 
+    def override(self, description):
+        with closing(sqlite3.connect(self.path)) as db:
+            return db.execute("SELECT owner_override FROM account_transactions WHERE description=?",
+                              (description,)).fetchone()[0]
+
+    def test_owner_pills_click_reset_anchor_view_change_and_moved_note(self):
+        seed_fictional(self.path, joint_card=True)
+        with block_network(allow_loopback=True), running(self.path) as origin, self.browser() as page:
+            page.goto(origin + "/transactions?month=2026-11&currency=USD")
+            fuel = lambda: page.locator("tr.acct-row", has_text="Harbor Fuel")
+            pills = lambda: fuel().locator("button.pill-btn")
+            self.assertEqual([pills().nth(i).get_attribute("aria-pressed") for i in range(2)], ["true", "true"])   # Joint card
+            self.assertEqual(fuel().locator(".tx-reset").count(), 0)
+            with page.expect_navigation():
+                pills().get_by_text("Young", exact=True).click()          # Joint -> Nanami only
+            self.assertTrue(page.url.endswith("#" + fuel().get_attribute("id")), page.url)
+            self.assertIn("month=2026-11", page.url)
+            self.assertIn("currency=USD", page.url)
+            self.assertEqual([pills().nth(i).get_attribute("aria-pressed") for i in range(2)], ["false", "true"])
+            expect(fuel()).to_contain_text("overridden")
+            expect(fuel().locator(".tx-reset")).to_have_count(1)
+            expect(fuel()).to_be_in_viewport()                              # the same row, not the top of the page
+            self.assertEqual(self.override("Harbor Fuel"), "Nanami")
+            self.assertEqual(fuel().locator(".badge").count(), 0)
+            # Young's view no longer lists it; Nanami's still does; Household is unchanged
+            page.goto(origin + "/transactions?month=2026-11&view=Young")
+            self.assertEqual(fuel().count(), 0)
+            page.goto(origin + "/transactions?month=2026-11&view=Nanami")
+            self.assertEqual(fuel().count(), 1)
+            # Clicking out of the current view leaves a note with a way back
+            page.goto(origin + "/transactions?month=2026-11&view=Young")
+            noodle = page.locator("tr.acct-row", has_text="Noodle House")
+            with page.expect_navigation():
+                noodle.locator("button.pill-btn", has_text="Young").click()  # Joint -> Nanami only: leaves Young's view
+            expect(page.locator("p.notice[role=status]")).to_contain_text("Moved to Nanami's view")
+            self.assertEqual(page.locator("tr.acct-row", has_text="Noodle House").count(), 0)
+            with page.expect_navigation():
+                page.get_by_role("link", name="Show in Household").click()
+            self.assertIn("view=Household", page.url)
+            self.assertTrue(page.url.endswith("#" + page.locator("tr.acct-row", has_text="Noodle House").get_attribute("id")))
+            expect(page.locator("tr.acct-row", has_text="Noodle House")).to_contain_text("overridden")
+            with page.expect_navigation():
+                page.locator("tr.acct-row", has_text="Noodle House").get_by_role("button", name="Reset owner").click()
+            self.assertIsNone(self.override("Noodle House"))
+            row = page.locator("tr.acct-row", has_text="Noodle House")
+            expect(row).not_to_contain_text("overridden")
+            self.assertEqual([row.locator("button.pill-btn").nth(i).get_attribute("aria-pressed") for i in range(2)],
+                             ["true", "true"])
+            # Equal to the account's own owner clears itself: Young -> (Joint) -> back to Young only is NOT a no-op row
+            fuel_reset = fuel()
+            with page.expect_navigation():
+                fuel_reset.get_by_role("button", name="Reset owner").click()
+            self.assertIsNone(self.override("Harbor Fuel"))
+            page.goto(origin + "/transactions?month=2026-11&view=Household")
+            gym_like = page.locator("tr.acct-row", has_text="PAYROLL")           # Young checking: only Young active
+            self.assertEqual([gym_like.locator("button.pill-btn").nth(i).get_attribute("aria-pressed") for i in range(2)],
+                             ["true", "false"])
+            with page.expect_navigation():
+                gym_like.locator("button.pill-btn", has_text="Young").click()      # only active pill: never "Unspecified"
+            self.assertIsNone(self.override("PAYROLL FICTIONAL ROBOTICS"))
+            self.assertEqual(page.locator("tr.acct-row", has_text="PAYROLL").count(), 1)
+
+    def test_phone_owner_pills_fit_without_horizontal_scroll(self):
+        seed_fictional(self.path, joint_card=True)
+        with block_network(allow_loopback=True), running(self.path) as origin, \
+                self.browser({"width": 390, "height": 844}) as page:
+            page.goto(origin + "/transactions?month=2026-11")
+            self.assertEqual(page.evaluate("document.documentElement.scrollWidth"), 390)
+            pill = page.locator("tr.acct-row button.pill-btn").first
+            self.assertGreaterEqual(pill.bounding_box()["height"], 28)
+            self.assertLessEqual(pill.bounding_box()["x"] + pill.bounding_box()["width"], 390)
+
     def test_projections_apply_one_click_then_advanced_toggles(self):
         seed_fictional(self.path)
         with block_network(allow_loopback=True), running(self.path) as origin, self.browser() as page:

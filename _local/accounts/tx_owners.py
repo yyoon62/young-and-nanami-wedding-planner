@@ -46,3 +46,9 @@ def apply_owner(db, row, person):
         new = stored_override(account_owner, toggle_person(effective(row["owner_override"], account_owner), person))
     db.execute("UPDATE account_transactions SET owner_override=? WHERE row_id=?", (new, row["row_id"]))
     return effective(new, account_owner)
+
+
+def effective_owner_of(db, row_id):
+    row = db.execute("""SELECT COALESCE(t.owner_override, a.owner) FROM account_transactions t
+                        JOIN accounts a ON a.id=t.account_id WHERE t.row_id=?""", (row_id,)).fetchone()
+    return row[0] if row else None

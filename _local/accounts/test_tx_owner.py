@@ -10,7 +10,8 @@ import server
 import tx_owners
 from server import init_db
 from transactions import edit_transaction, monthly_snapshot
-from tx_fixture import Fixture, tx
+from transactions_ui import EDIT, RouteProblem, post_transactions, render_transactions
+from tx_fixture import Fixture, TOKEN, VIEWS, tx
 from tx_owners import apply_owner, effective, stored_override, toggle_person
 
 # The literal pre-L26 transactions DDL (no owner_override); everything else is created by init_db.
@@ -239,6 +240,106 @@ class Owners(Fixture, unittest.TestCase):
             self.assertEqual(apply_owner(self.db, row, "Young"), "Nanami")
             row["owner_override"] = "Nanami"
             self.assertEqual(apply_owner(self.db, row, None), "Joint")
+
+
+class OwnerUi(Owners):
+    """Part 1b: pills markup, POST route, redirect and the moved note (reuses the Owners fixture)."""
+    def html(self, query="month=2026-12", views=VIEWS):
+        return render_transactions(self.db, query, token=TOKEN, allowed_views=views)
+
+    def tr(self, html, description):
+        start = html.index(f'<tr class="acct-row"', html.index(description) - 700)
+        return html[start:html.index("</tr>", start)]
+
+    def test_pills_use_the_accounts_markup_and_reflect_the_effective_owner(self):
+        html = self.html()
+        self.assertIn("<th>Owner</th>", html)
+        joint, young, nanami, unspecified = (self.tr(html, d) for d in
+                                             ("Harbor Fuel", "Fictional Gym", "Page Turner", "Mystery Shop"))
+        for tr, active in ((joint, (True, True)), (young, (True, False)), (nanami, (False, True)),
+                           (unspecified, (False, False))):
+            for person, on in zip(("Young", "Nanami"), active):
+                self.assertIn(f'<button type="submit" name="owner" value="{person}" class="pill-btn'
+                              f'{" active" if on else ""}" aria-pressed="{"true" if on else "false"}"', tr)
+            self.assertIn('class="inline-form owner-pills"', tr)
+            self.assertIn(f'action="{EDIT}"', tr)
+            self.assertNotIn("overridden", tr)
+            self.assertNotIn("tx-reset", tr)
+        self.assertEqual(html.count("pill-btn"), 2 * html.count('class="acct-row"'))   # two pills on every row
+
+    def test_overridden_row_shows_the_mark_and_reset_but_not_a_badge_and_reset_clears_it(self):
+        row_id = self.click("Harbor Fuel", "Young")
+        html = self.html()
+        tr = self.tr(html, "Harbor Fuel")
+        self.assertEqual(tr.count("active"), 1)
+        self.assertIn('name="owner" value="Nanami" class="pill-btn active" aria-pressed="true"', tr)
+        self.assertIn('name="owner" value="Young" class="pill-btn" aria-pressed="false"', tr)
+        self.assertIn("tx-ovr\">overridden", tr)
+        self.assertIn('name="action" value="owner_reset"', tr)
+        self.assertNotIn('class="badge"', tr)
+        self.assertEqual(html.count("overridden"), 1)       # only that row
+        result = self.post(row_id, action="owner_reset", month="2026-12")
+        self.assertTrue(result.location.endswith(f"#tx-{row_id}"))
+        self.assertIsNone(self.stored("Harbor Fuel"))
+        self.assertNotIn("overridden", self.html())
+
+    def test_post_redirects_to_the_same_filters_and_row_and_scopes_the_view(self):
+        row = self.row("Harbor Fuel", "2026-12")["row_id"]
+        result = self.post(row, action="owner", owner="Young", month="2026-12", view="Household",
+                           currency="USD", q="fuel", cat="Uncategorized")
+        self.assertEqual(self.stored("Harbor Fuel"), "Nanami")
+        self.assertTrue(result.location.startswith("/transactions?month=2026-12&view=Household&currency=USD&q=fuel"))
+        self.assertTrue(result.location.endswith(f"#tx-{row}"))
+        self.assertNotIn("moved=", result.location)          # still inside Household
+        gym = self.row("Fictional Gym", "2026-12")["row_id"]
+        for view, expected in (("Nanami", 404),):            # Young's gym is not in Nanami's view
+            with self.assertRaises(RouteProblem) as caught:
+                self.post(gym, action="owner", owner="Nanami", month="2026-12", view=view)
+            self.assertEqual(caught.exception.status, expected)
+        with self.assertRaises(RouteProblem) as caught:      # a view the session may not use
+            self.post(gym, action="owner", owner="Nanami", month="2026-12", view="Young", allowed_views={"Nanami"})
+        self.assertEqual(caught.exception.status, 403)
+
+    def test_clicking_out_of_the_current_view_adds_a_moved_note_with_a_household_link(self):
+        row = self.row("Harbor Fuel", "2026-12")["row_id"]
+        result = self.post(row, action="owner", owner="Young", month="2026-12", view="Young")   # Joint -> Nanami only
+        self.assertIn(f"&moved=Nanami-{row}#tx-{row}", result.location)
+        query = result.location.split("?", 1)[1].split("#", 1)[0]
+        html = self.html(query)
+        self.assertIn("Moved to Nanami's view", html)
+        self.assertIn(f'<a href="/transactions?month=2026-12&amp;view=Household&amp;currency=&amp;q=&amp;pending=0&amp;cat=#tx-{row}">'
+                      "Show in Household</a>", html)
+        self.assertNotIn("Harbor Fuel", html[html.index("<tbody>"):])     # the row is no longer in Young's list
+        # no note when the row is still in the view, when the view is Household, or for a malformed value
+        for bad in (f"month=2026-12&view=Young&moved=Young-{row}", f"month=2026-12&view=Household&moved=Nanami-{row}",
+                    "month=2026-12&view=Young&moved=Nanami-0", "month=2026-12&view=Young&moved=%3Cb%3E-1"):
+            self.assertNotIn("Moved to", self.html(bad))
+            self.assertNotIn("Show in Household", self.html(bad))
+        # resetting from Young's view to an Unspecified account's owner says so too
+        mystery = self.row("Mystery Shop", "2026-12")["row_id"]
+        self.click("Mystery Shop", "Young")
+        result = self.post(mystery, action="owner_reset", month="2026-12", view="Young")
+        self.assertIn(f"&moved=Unspecified-{mystery}", result.location)
+        self.assertIn("Now unassigned", self.html(result.location.split("?", 1)[1].split("#", 1)[0]))
+
+    def test_malformed_owner_posts_are_refused(self):
+        row = self.row("Fictional Gym", "2026-12")["row_id"]
+        with self.assertRaises(RouteProblem) as caught:
+            self.post(row, action="owner", month="2026-12")                                   # no owner
+        self.assertEqual(caught.exception.status, 400)
+        for bad in ("Joint", "Unspecified", "Someone"):
+            with self.assertRaises(RouteProblem) as caught:
+                self.post(row, action="owner", owner=bad, month="2026-12")
+            self.assertEqual(caught.exception.status, 422)
+        body = ("token=%s&month=2026-12&view=Household&row=%d&action=owner&owner=Young&owner=Nanami" % (TOKEN, row)).encode()
+        with self.assertRaises(RouteProblem) as caught:
+            post_transactions(self.db, EDIT, body, token=TOKEN, allowed_views=VIEWS)
+        self.assertEqual(caught.exception.status, 400)
+        single = body.replace(b"&owner=Nanami", b"")
+        with self.assertRaises(RouteProblem) as caught:
+            post_transactions(self.db, EDIT, single.replace(TOKEN.encode(), b"wrong"), token=TOKEN, allowed_views=VIEWS)
+        self.assertEqual(caught.exception.status, 403)
+        self.assertIsNone(self.stored("Fictional Gym"))
 
 
 class Migration(unittest.TestCase):

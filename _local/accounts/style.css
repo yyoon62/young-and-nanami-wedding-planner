@@ -411,6 +411,17 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
 .classifier-form label.check { font-size: .86rem; }
 .classifier-form .drawer-left { margin-bottom: .2rem; }
 
+/* ==== L26 begin: transactions readability (owner pills, summary, rows). One block, before the phone block. ==== */
+.tx-table .owner-cell { vertical-align: middle; }
+.tx-table .owner-cell .inline-form + .inline-form { margin-left: .25rem; }
+.tx-reset { font-size: .95rem; vertical-align: middle; }
+.tx-ovr { margin-left: .2rem; font-style: italic; }
+@media (max-width: 40rem) {
+  .tx-table.tx-compact tr.acct-row { grid-template-areas: "tx amt" "date date" "own own" "cat cat"; }
+  .tx-table.tx-compact tr.acct-row > td.owner-cell { grid-area: own; display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; }
+}
+/* ==== L26 end ==== */
+
 /* Phone: each transaction becomes a small card so the amount and the edit drawer are never off-screen */
 @media (max-width: 40rem) {
   .tx-table thead { display: none; }

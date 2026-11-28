@@ -22,6 +22,7 @@ from transactions import (CURRENCY, VIEWS, category_context, edit_transaction, m
                           monthly_snapshot)
 from pathlib import Path
 from tx_categories import default_emoji, list_categories
+from tx_owners import PEOPLE, effective, effective_owner_of
 from tx_classifier import enabled as classifier_enabled, load_key, model_name, run_classifier, set_setting, stats as classifier_stats
 
 
@@ -29,6 +30,7 @@ TRANSACTIONS = "/transactions"
 EDIT = TRANSACTIONS + "/edit"
 SYNC = TRANSACTIONS + "/sync"
 _FILTERS = ("month", "view", "currency", "q", "pending", "cat")
+_MOVED = re.compile(r"(Young|Nanami|Unspecified)-([1-9][0-9]{0,18})")   # one-shot GET note after an owner click, not a filter
 
 
 class RouteProblem(Exception):
@@ -180,6 +182,36 @@ def _drawer(r, f, token, categories, manual, attempt, error):
         '</form></details>')
 
 
+def _owner_cell(r, f, token):
+    """Young / Nanami pills with the Accounts markup; both active = Joint. A click toggles this transaction only."""
+    eff = r["eff_owner"]
+    overridden = r["owner_override"] is not None and r["owner_override"] != r["owner"]
+    pills = "".join(
+        f'<button type="submit" name="owner" value="{p}" class="pill-btn{" active" if eff in (p, "Joint") else ""}"'
+        f' aria-pressed="{"true" if eff in (p, "Joint") else "false"}"'
+        f' title="Owner of this transaction (account owner: {escape(r["owner"])})">{p}</button>' for p in PEOPLE)
+    cell = (f'<form method="post" action="{EDIT}" class="inline-form owner-pills">'
+            + _hidden(f, token=token, row=r["row_id"], action="owner") + pills + '</form>')
+    if overridden:
+        cell += (f' <form method="post" action="{EDIT}" class="inline-form">'
+                 + _hidden(f, token=token, row=r["row_id"], action="owner_reset")
+                 + f'<button type="submit" class="icon-btn tx-reset" title="Overridden for this transaction. '
+                 f'Reset to the account owner ({escape(r["owner"])})" aria-label="Reset owner to the account owner">'
+                 '↺</button></form> <span class="acct-sub tx-ovr">overridden</span>')
+    return f'<td class="owner-cell">{cell}</td>'
+
+
+def _moved_note(moved, f, allowed_views):
+    """One line after an owner click that took the row out of the current view (validated, fixed wording)."""
+    found = _MOVED.fullmatch(moved or "")
+    if not found or f["view"] == "Household" or found[1] == f["view"]:
+        return ""
+    show = (f' · <a href="{escape(_location(dict(f, view="Household")) + "#tx-" + found[2])}">Show in Household</a>'
+            if "Household" in allowed_views else "")
+    where = "Now unassigned (no owner)" if found[1] == "Unspecified" else f"Moved to {found[1]}\'s view"
+    return f'<p class="notice" role="status">{where}{show}</p>'
+
+
 def _bars(cmp, f, totals):
     """Spending by category for the viewed month vs last month and the 3-month mean."""
     c = cmp.currency
@@ -246,7 +278,9 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
                         open_row=None, attempt=None, error=None, logo_dir=None):
     """Return fragment for parent page()/send(); read DB in a single parent snapshot."""
     today = today or datetime.now(timezone.utc).date()
-    f = _filters(_params(query, set(_FILTERS)), allowed_views, today.isoformat()[:7])
+    data = _params(query, set(_FILTERS) | {"moved"})
+    f = _filters(data, allowed_views, today.isoformat()[:7])
+    moved = _moved_note(data.get("moved"), f, allowed_views)
     context = category_context(db)
     snap = monthly_snapshot(db, f["month"], f["view"], show_pending=f["pending"] == "1",
                             household_matching="Household" in allowed_views, context=context)
@@ -344,17 +378,18 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
             f'<span class="acct-name"><span class="tx-emoji" aria-hidden="true">{escape(r["emoji"] or default_emoji(r["category"], r["effective_transfer"]))}</span> {escape(r["description"] or "No description")}</span>{payee}'
             f'<div class="acct-sub">SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}</div>'
             f'</div></div></th>'
+            + _owner_cell(r, f, token) +
             f'<td class="num"><span class="cur">{escape(r["currency"])}</span> {_amount(r)}</td>'
             f'<td>{label_cell + origin + " · " if label_cell else ""}{escape(r["flow"])}{suggestion} {drawer}</td></tr>')
     table = (
-        '<div class="table-wrap"><table class="acct-table tx-table"><thead><tr><th>Date</th><th>Transaction</th>'
-        '<th class="num">Amount</th><th>Category</th></tr></thead><tbody>'
+        '<div class="table-wrap"><table class="acct-table tx-table tx-compact"><thead><tr><th>Date</th><th>Transaction</th>'
+        '<th>Owner</th><th class="num">Amount</th><th>Category</th></tr></thead><tbody>'
         + "".join(rows) + "</tbody></table></div>" if rows else "<p>No transactions match this list.</p>")
     alert = f'<p class="notice" role="alert">{escape(error)}</p>' if error else ""
     return (
         '<script defer src="/dashboard.js"></script>'
         '<section class="history" aria-labelledby="cash-flow"><h2 id="cash-flow">Monthly cash flow</h2>'
-        + alert + search + sync + _classifier_panel(db, f, token) + summary
+        + alert + moved + search + sync + _classifier_panel(db, f, token) + summary
         + '<p>Pending, transfers and explicit unmatched card-payment credits are outside totals; unmatched bank '
         'debits remain spending. Automatic card matching requires corroboration on both available legs. '
         'Checking and savings matches are suggestions only. A manual transfer choice overrides a merchant '
@@ -409,7 +444,7 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     except UnicodeError:
         raise RouteProblem(400, "Invalid transaction form.") from None
     keys = set(_FILTERS) | {"token"} | ({"row", "category", "new_category", "apply", "transfer",
-                                         "merchant_transfer", "action", "enabled"}
+                                         "merchant_transfer", "action", "enabled", "owner"}
                                         if path == EDIT else {"include_pending"})
     data = _params(raw, keys)
     if not token or not secrets.compare_digest(data.get("token", "").encode("utf-8"), token.encode("utf-8")):
@@ -433,6 +468,7 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     if ((action in ("category", "rule") and "category" not in data)
             or (action == "transfer" and "transfer" not in data)
             or (action == "transfer_rule" and "merchant_transfer" not in data)
+            or (action == "owner" and "owner" not in data)
             or data.get("apply", "1") != "1"):
         raise RouteProblem(400, "Incomplete transaction edit.")
     try:
@@ -441,8 +477,14 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
             if not edit_transaction(db, int(row), f["view"], f["month"], action=action,
                                     category=data.get("category", ""), transfer=data.get("transfer", ""),
                                     merchant_transfer=data.get("merchant_transfer", ""),
-                                    new_category=data.get("new_category", ""), apply=data.get("apply") == "1"):
+                                    new_category=data.get("new_category", ""), apply=data.get("apply") == "1",
+                                    owner=data.get("owner", "")):
                 raise RouteProblem(404, "Transaction not found in this view and month.")
+            moved = None
+            if action in ("owner", "owner_reset") and f["view"] != "Household":
+                now = effective_owner_of(db, int(row))
+                if now not in (f["view"], "Joint"):
+                    moved = f"&moved={now}-{row}"      # the row left this view: say so on the next page
     except ValueError as exc:
         message = str(exc) or "Enter a printable category of up to 48 characters."
         try:
@@ -451,4 +493,4 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
         except Exception:
             body = None
         raise RouteProblem(422, message, body=body) from None
-    return PostResult(_location(f) + f"#tx-{row}")
+    return PostResult(_location(f) + (moved or "") + f"#tx-{row}")
