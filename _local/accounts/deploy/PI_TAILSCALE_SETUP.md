@@ -88,7 +88,7 @@ Use this runbook only after review. The Pi serves an HTTP backend on **127.0.0.1
    systemctl --user daemon-reload && systemctl --user restart accounts-dashboard.service
    ```
 
-   With Bridge enabled, any signed-in member can press **Sync balances** (balances only). Transactions are never synced when hosted. Remove the drop-in and restart to disable.
+   With Bridge enabled, any signed-in member can press **Sync balances** (balances only). Transactions are synced only on a host that opted in (section 3b). Remove the drop-in and restart to disable.
 
 ## 2a. Move your existing balances to the Pi (scrubbed export)
 
@@ -127,7 +127,7 @@ sudo ls -l /home/acctdash/.local/share/planner-accounts/      # expect -rw------
 
 **4. Start** with `systemctl --user start accounts-dashboard.service` (section 3). The guard passes, the app's own migration adds its empty tables, and the first sign-in pins each Google identity. Check balances and the history chart against the Mac. If you later enrol Bridge on the Pi (section 2.5), the exported links should make the first sync report existing accounts as updated or unchanged, not added: `source_links` keys depend on the Bridge host and path, not on the token, so this is expected, but it is the same duplicate check as the release checklist and was **not** verified against a real Bridge. The Bridge credential itself is never part of the export.
 
-**The guard.** On every `--hosted` start, before the app opens the database for writing, the server reads the file read-only and lists any table outside the allowlist that holds rows (the built-in category names the app seeds itself, and the Pi's own sign-in and quota tables, are allowed). If any exist it exits with status 1 and prints which table and how many rows, for example `Hosted startup refused: table account_transactions holds 3 rows. Transaction data must not be on the host. On the machine that holds your data run python3 deploy/export_scrubbed.py --out FILE and install that file instead.` The file is left byte-identical and nothing is migrated. `deploy/backup-sqlite.sh` applies the same rule to the snapshot it archives or restores, so the nightly timer cannot archive such a database either. Do **not** respond by deleting the offending rows on the Pi; build a fresh export and install it.
+**The guard.** (Section 3b: a host that opted in with `--transactions` additionally allows `hosted_guard.TRANSACTION_TABLES`; everything else below still applies to it.) On every `--hosted` start, before the app opens the database for writing, the server reads the file read-only and lists any table outside the allowlist that holds rows (the built-in category names the app seeds itself, and the Pi's own sign-in and quota tables, are allowed). If any exist it exits with status 1 and prints which table and how many rows, for example `Hosted startup refused: table account_transactions holds 3 rows. Transaction data must not be on the host. On the machine that holds your data run python3 deploy/export_scrubbed.py --out FILE and install that file instead.` The file is left byte-identical and nothing is migrated. `deploy/backup-sqlite.sh` applies the same rule to the snapshot it archives or restores, so the nightly timer cannot archive such a database either. Do **not** respond by deleting the offending rows on the Pi; build a fresh export and install it.
 
 **Why the export is the only supported transfer path.** The guard counts rows, not bytes. A file in which transactions were deleted has empty tables but can still hold their text in SQLite free pages, so it passes the guard. To close that gap a hosted start compacts the file (SQLite `VACUUM`) when it has free pages and logs `Hosted startup: compacted the database file (N free pages removed).`; that purges SQLite's own pages but cannot reach copies a filesystem or flash storage may keep elsewhere. Backups are unaffected (they compact in memory before encrypting). A file made by the export has no such history, so it is the one path with a guarantee. Copying the DB file, restoring an old archive, or `sqlite3 .dump | sqlite3` are not supported.
 
@@ -180,6 +180,30 @@ systemctl --user list-timers accounts-sync.timer
 - **On the page:** the Accounts page shows `🕒 Synced 3 h ago` beside **Sync balances**, and `⚠️ Last synced N days ago: balances may be out of date` once it is older than 36 hours (derived from `source_links.checked`; no extra table).
 - **Budget:** each run is one SimpleFIN request (plus up to 3 retries on failure); the shared limit is 24 per day.
 - Remove by `systemctl --user disable --now accounts-sync.timer`.
+
+## 3b. Transactions on the Pi (opt-in, L30b)
+
+By the household's decision (2026-11-28) the Pi is the **one main copy** and holds transactions too. This is an explicit opt-in on three switches, so a host that did not choose it keeps refusing transaction data exactly as in section 2a:
+
+| Switch | Where | Effect |
+|---|---|---|
+| `--transactions` on the dashboard | `accounts-dashboard.service.d/bridge.conf` (`ExecStart=` line, next to `--bridge --hosted`) | `/transactions`, its edit/sync POSTs and the nav link exist, behind the same Google session + exact origin + CSRF as every other page; the start-up guard permits `hosted_guard.TRANSACTION_TABLES`; the AI categoriser may run |
+| `--transactions` on the daily sync | `accounts-sync.service.d/transactions.conf` (clear and re-set `ExecStart=`: `... daily_sync.py --hosted --transactions`) | after the balances, runs the same `sync_transactions` as the page (resumes from saved coverage: normally one window, ~2 SimpleFIN requests a day) and categorises new merchants |
+| `ACCOUNTS_BACKUP_TRANSACTIONS=1` | `~/.config/planner-accounts/backup.env` | the backup timer may archive a database that holds transactions (still encrypted to the recovery key) |
+
+**What this changes.** Both signed-in members see every transaction (Young / Nanami are filters, not permissions). Transactions are in the Pi's working database (plaintext at rest, like the balances and the Bridge credential) and, encrypted, in every backup. Anyone who can sign in or break into the Pi sees them, but note the Pi's own Bridge credential could already fetch them from SimpleFIN.
+
+**AI categories (optional).** Give the service user the key at a hidden prompt (never as an argument, in the chat or in a log): `ssh -t pi 'sudo -H -u acctdash python3 /home/acctdash/planner/_local/accounts/deploy/set_anthropic_key.py'`. It writes `~/.local/share/planner-accounts/anthropic.key` (0600). Only cleaned merchant names are sent, once each, and only while the page's **Auto-categorize with AI** box is ticked.
+
+**One-time move from the Mac** (extends 2a; the Pi already has a database, so move it aside first, never overwrite). Stop the dashboard and the sync/backup timers, then on the Mac:
+
+```sh
+python3 deploy/export_scrubbed.py --out ~/private-export/accounts-export.sqlite3 --with-transactions
+```
+
+Compare the printed counts with the Mac (the transaction tables are listed), install it as in 2a (checksums must match), delete the export on both machines, add the three switches above, `daemon-reload`, start. Sign in once more (the pins live in the replaced file). Then the Mac stops being a second writer: keep it only as an old copy, and do not press **Sync** on it, or two databases will drift.
+
+**Rollback to balances-only.** Remove the switches and the transaction tables must be gone too: install a normal 2a export (balances only) instead. A host without the switches refuses a database that still holds transactions, by design.
 
 ## 4. Encrypted, online SQLite backups
 
