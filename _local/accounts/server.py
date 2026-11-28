@@ -158,6 +158,8 @@ def page(content, current=None, heading="Financial accounts", script=None):
 
 
 def view_url(view):
+    if isinstance(view, net_worth_ui.Scope):
+        return view.resolved_url()          # keeps the open tab and currency (L29)
     return "/" if view == "Household" else f"/?view={view}"
 
 
@@ -221,7 +223,7 @@ def inline_edit_drawer(r, today, token, view, opened=False, values=None, error=N
             f'<td colspan="5">{err_html}'
             f'<form method="post" action="/edit/{rid}" class="drawer-form">'
             f'<input type="hidden" name="token" value="{token}">'
-            f'<input type="hidden" name="view" value="{view}">'
+            f'{net_worth_ui.hidden(view)}'
             f'<input type="hidden" name="inline" value="1">'
             f'<div class="drawer-grid">'
             f'<label>Account name<input required name="nickname" maxlength="100" value="{escape(str(v.get("nickname", "")))}"></label>'
@@ -263,13 +265,13 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
         for p in PEOPLE)
     owner_cell = (f'<form method="post" action="/owner/{rid}" class="inline-form owner-pills">'
                   f'<input type="hidden" name="token" value="{token}">'
-                  f'<input type="hidden" name="view" value="{view}">'
+                  f'{net_worth_ui.hidden(view)}'
                   f'{owner_pills}</form>')
     rename_pop = (f'<details class="inline-pop">'
                   f'<summary class="icon-btn" title="Rename account" aria-label="Rename {name}">✎</summary>'
                   f'<form method="post" action="/rename/{rid}" class="pop-form">'
                   f'<input type="hidden" name="token" value="{token}">'
-                  f'<input type="hidden" name="view" value="{view}">'
+                  f'{net_worth_ui.hidden(view)}'
                   f'<input type="text" name="nickname" value="{name}" maxlength="100" required aria-label="New account name">'
                   f'<button type="submit" class="pop-save">Save</button></form></details>')
     sec_buttons = "".join(
@@ -280,12 +282,12 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
                f'<summary class="sec-chip" title="Move to another section">{escape(r["kind"])} ▾</summary>'
                f'<form method="post" action="/section/{rid}" class="sec-menu">'
                f'<input type="hidden" name="token" value="{token}">'
-               f'<input type="hidden" name="view" value="{view}">'
+               f'{net_worth_ui.hidden(view)}'
                f'{sec_buttons}</form></details>')
     next_side = "asset" if side == "debt" else "debt"
     side_toggle = (f'<form method="post" action="/side/{rid}" class="inline-form">'
                    f'<input type="hidden" name="token" value="{token}">'
-                   f'<input type="hidden" name="view" value="{view}">'
+                   f'{net_worth_ui.hidden(view)}'
                    f'<input type="hidden" name="side" value="{next_side}">'
                    f'<button type="submit" class="side-btn {side}" title="Switch between Asset and Debt">'
                    f'{side.title()}</button></form>')
@@ -293,7 +295,7 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
     toggle_val = "0" if excluded else "1"
     exclude_btn = (f'<form method="post" action="/exclude/{rid}" class="inline-form">'
                    f'<input type="hidden" name="token" value="{token}">'
-                   f'<input type="hidden" name="view" value="{view}">'
+                   f'{net_worth_ui.hidden(view)}'
                    f'<input type="hidden" name="excluded" value="{toggle_val}">'
                    f'<button type="submit" class="link-btn">{toggle_label}</button></form>')
     stale_tag = ' <span class="stale-pill">Stale</span>' if stale else ""
@@ -331,7 +333,7 @@ def dashboard(rows, today, view, token, net, has_sync=False, notices=(), error=N
     if has_sync:
         sync_html = (f'<form method="post" action="/sync" class="inline-form">'
                      f'<input type="hidden" name="token" value="{token}">'
-                     f'<input type="hidden" name="view" value="{view}">'
+                     f'{net_worth_ui.hidden(view)}'
                      f'<button type="submit" class="button">↻ Sync balances</button></form>')
     add_cls = "button secondary" if has_sync else "button"
     banner = ""
@@ -591,8 +593,13 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_port
         return self.headers.get("Host") in {f"127.0.0.1:{port}", f"localhost:{port}"}
 
-    def render_home(self, view, notices=(), error=None, status=200, open_edit=None, edit_values=None,
-                    form_state=None):
+    def render_home(self, *args, **kwargs):
+        status, text, scripts = self.home_page(*args, **kwargs)
+        return self.send(status, text, scripts=scripts)
+
+    def home_page(self, view, notices=(), error=None, status=200, open_edit=None, edit_values=None,
+                  form_state=None):
+        """(status, html, scripts) for the Accounts page."""
         scope = view if isinstance(view, net_worth_ui.Scope) else net_worth_ui.Scope(view)
         view = str(scope)
         owner_scope = "(? = 'Household' OR owner IN (?, 'Joint'))"
@@ -615,12 +622,17 @@ class Handler(BaseHTTPRequestHandler):
                     projection=dict(token=self.token, section_for=section_for, places=places, today=date.today(),
                                     suggestions=not self.server.auth))
             except ValueError as exc:
-                return self.send(400, str(exc))
-        return self.send(status, dashboard(rows, date.today(), scope, self.token, net,
-                                           has_sync=bool(self.server.batch), notices=notices, error=error,
-                                           open_edit=open_edit, edit_values=edit_values,
-                                           use_logos=bool(self.server.logo_dir)),
-                         scripts=True)
+                return 400, str(exc), False
+        return status, dashboard(rows, date.today(), scope, self.token, net,
+                                 has_sync=bool(self.server.batch), notices=notices, error=error,
+                                 open_edit=open_edit, edit_values=edit_values,
+                                 use_logos=bool(self.server.logo_dir)), True
+
+    def projection_rerender(self, view, currency, attempted, errors):
+        """A refused assumptions save, shown inside the Projection tab with the attempted values kept."""
+        status, text, _ = self.home_page(net_worth_ui.Scope(view, "projection", currency), status=422,
+                                         form_state=(attempted, errors))
+        return status, text, None
 
     def do_GET(self):
         try:
@@ -755,8 +767,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reject(exc)
             status, body, location = projection_post(
                 self.server.db, data, page=page, token=self.token, people=PEOPLE,
-                section_for=section_for, places=places, today=date.today(), suggestions=not self.server.auth)
-            return self.send(status, body, location=location)
+                section_for=section_for, places=places, today=date.today(), suggestions=not self.server.auth,
+                where=lambda v, c: net_worth_ui.Scope(v, "projection", c).url(anchor=True),
+                rerender=self.projection_rerender)
+            return self.send(status, body, location=location, scripts=True)
         target = self.path
         if not self.server.auth and target in (TX_EDIT, TX_SYNC):
             lengths = self.headers.get_all("Content-Length", [])
@@ -805,8 +819,7 @@ class Handler(BaseHTTPRequestHandler):
             data = {k: v[0] for k, v in parse_qs(self.rfile.read(int(length)).decode("utf8", "replace")).items()}
             if not secrets.compare_digest(data.get("token", "").encode(), self.token.encode()):
                 return self.send(403, "Reload the form and try again.")
-        back = data.get("view", "Household")
-        back = back if back in ("Household", *PEOPLE) else "Household"
+        back = net_worth_ui.from_form(data, PEOPLE, self.server.db)
         if sync_act:
             try:
                 self.server.notices = self.server.batch.sync()

@@ -195,7 +195,7 @@ class EndpointTests(unittest.TestCase):
                 db.execute("BEGIN IMMEDIATE")
                 install_projections(db)
         self.fixture = SimpleNamespace(db=self.path, token="local-fixture-token", auth=None, server_port=8765,
-                                       batch=None, logo_dir=None)
+                                       batch=None, logo_dir=None, notices=[])
 
     @staticmethod
     def add(db, kind, owner, amount, *, side="asset", currency="USD", asof="2026-10-01", excluded=0):
@@ -361,7 +361,8 @@ class EndpointTests(unittest.TestCase):
         for scope in (dict(years="2"), dict(currency="JPY", years="3"), dict(view="Young", years="4")):
             status, headers, _ = self.call(data=self.form(**scope))
             self.assertEqual(status, 303)
-            self.assertIn("Year " + scope["years"], self.call(headers["Location"])[2])
+            self.assertIn("chart=projection#net-worth", headers["Location"])          # L29: back to the Accounts tab
+            self.assertIn("Year " + scope["years"], self.call(headers["Location"].partition("#")[0])[2])
         expected = self.saved()
         self.assertEqual(len(expected), 3)
         self.restart()

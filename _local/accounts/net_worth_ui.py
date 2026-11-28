@@ -3,7 +3,9 @@
 Plain server-rendered links; no JavaScript. `Scope` is a `str` (the owner view, so existing code keeps working) that also
 carries which sub-tab is open and which currency (if any) was chosen explicitly.
 """
+from contextlib import closing
 import re
+import sqlite3
 from html import escape
 from urllib.parse import parse_qs, urlencode
 
@@ -28,6 +30,17 @@ class Scope(str):
         return Scope(str(self) if view is None else view, self.chart if chart is None else chart,
                      self.currency if currency is KEEP else currency)
 
+    db = None       # database path, set for form-derived scopes so a redirect never points at a vanished currency
+
+    def resolved_url(self):
+        """The redirect target after a write: drop the currency if this view no longer has it (no 400 after a POST)."""
+        scope = self
+        if self.currency and self.db:
+            with closing(sqlite3.connect(self.db)) as db:
+                if self.currency not in available_currencies(eligible_accounts(db, str(self))):
+                    scope = self.but(currency=None)
+        return scope.url()
+
     def url(self, anchor=False):
         query = {}
         if self != "Household":
@@ -51,6 +64,27 @@ def parse(query, people):
     if currency is not None and (len(currency) != 1 or not re.fullmatch("[A-Z]{3}", currency[0])):
         raise ValueError("Unknown currency.")
     return Scope(view[0], chart[0], currency[0] if currency else None)
+
+
+def from_form(data, people, db_path=None):
+    """The scope an account-table form was submitted from (hidden fields `view`, `nw_chart`, `nw_currency`)."""
+    view = data.get("view", "Household")
+    chart, currency = data.get("nw_chart", "history"), data.get("nw_currency", "")
+    scope = Scope(view if view in ("Household", *people) else "Household", chart if chart in CHARTS else "history",
+                  currency if re.fullmatch("[A-Z]{3}", currency) else None)
+    scope.db = db_path
+    return scope
+
+
+def hidden(view):
+    """Hidden inputs that carry owner view, open tab and chosen currency through an account-table POST."""
+    out = f'<input type="hidden" name="view" value="{escape(str(view))}">'
+    if isinstance(view, Scope):
+        if view.chart != "history":
+            out += f'<input type="hidden" name="nw_chart" value="{escape(view.chart)}">'
+        if view.currency:
+            out += f'<input type="hidden" name="nw_currency" value="{escape(view.currency)}">'
+    return out
 
 
 def projection_href(scope):

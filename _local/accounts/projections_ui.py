@@ -91,8 +91,13 @@ def projection_get(db_path, target, *, page, token, people, section_for, places,
         debts=g["debts"], observed=g["observed"])), None
 
 
-def projection_post(db_path, data, *, page, token, people, section_for, places, today, suggestions=False):
-    """After the server's POST guards, using its already parsed and CSRF-checked data."""
+def projection_post(db_path, data, *, page, token, people, section_for, places, today, suggestions=False,
+                    where=None, rerender=None):
+    """After the server's POST guards, using its already parsed and CSRF-checked data.
+
+    `where(view, currency)` is the redirect target after a save (default: the standalone page);
+    `rerender(view, currency, attempted, errors)` returns (status, body, location) to show a refused save in place."""
+    where = where or projection_url
     view, currency = data.get("view"), data.get("currency")
     if view not in ("Household", *people):
         return _scope_error(page, 422, "Unknown projection view. No assumptions were saved.")
@@ -104,11 +109,13 @@ def projection_post(db_path, data, *, page, token, people, section_for, places, 
             return _scope_error(page, 422, "Currency is unavailable in this view. No assumptions were saved.", view)
         scale = places(currency)
         if data.get("apply") == "suggestion":
-            return _apply_suggestion(db, data, view, currency, scale, today, suggestions, page)
+            return _apply_suggestion(db, data, view, currency, scale, today, suggestions, page, where)
         assumptions, errors = validate_assumptions(data, scale)
         if not errors:
             save_assumptions(db, view, currency, assumptions)
-            return 303, "", projection_url(view, currency)
+            return 303, "", where(view, currency)
+        if rerender:
+            return rerender(view, currency, data, errors)
         g = gather(db, view, currency, rows, places=places, today=today, suggestions=suggestions,
                    section_for=section_for)
     return 422, _page(page, _selector(view, currency, currencies, people) + _panel(
@@ -116,11 +123,11 @@ def projection_post(db_path, data, *, page, token, people, section_for, places, 
         suggestion=g["suggestion"], debts=g["debts"], observed=g["observed"])), None
 
 
-def _apply_suggestion(db, data, view, currency, scale, today, suggestions, page):
+def _apply_suggestion(db, data, view, currency, scale, today, suggestions, page, where=projection_url):
     """One POST: recompute server-side; save only income and spending, only if they match what was shown."""
     def refuse(message):
         return 422, _page(page, f'<p class="notice" role="alert">{escape(message)} No assumptions were saved.</p>'
-                                f'<p><a href="{escape(projection_url(view, currency))}">Back to projections</a></p>'), None
+                                f'<p><a href="{escape(where(view, currency))}">Back to projections</a></p>'), None
 
     suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
     if suggestion is None or suggestion.income is None:
@@ -134,7 +141,7 @@ def _apply_suggestion(db, data, view, currency, scale, today, suggestions, page)
     if errors:
         return refuse("The suggested amounts do not fit the allowed range.")
     save_assumptions(db, view, currency, updated)
-    return 303, "", projection_url(view, currency)
+    return 303, "", where(view, currency)
 
 
 def _suggestion_card(view, currency, token, suggestion, assumptions, scale):

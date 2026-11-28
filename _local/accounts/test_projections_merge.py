@@ -127,6 +127,115 @@ class Panel(Base):
             self.assertEqual([i for i in set(ids) if ids.count(i) > 1], [], target)
 
 
+FORM = dict(years="10", income="4000", spending="2500", debt_target="", retirement_target="", investment_target="",
+            checking_apy="0", hysa_apy="4", investment_return="7", retirement_return="7", debt_apr="6",
+            inflation="2.5", mode="nominal")
+
+
+class Saving(Base):
+    """L29-3: POST /projections goes back to (or stays in) the Projection tab; account-table forms keep tab + currency."""
+
+    def saved(self):
+        return self.rows("SELECT view, currency, assumptions FROM projection_assumptions ORDER BY 1, 2")
+
+    def test_example_7_save_returns_to_the_same_view_and_currency_tab_and_survives_restart(self):
+        before = dict((row[:2], row[2]) for row in self.saved())
+        status, headers, _ = self.post("/projections", dict(FORM, view="Young", currency="USD", years="7"))
+        self.assertEqual((status, headers["Location"]), (303, "/?view=Young&currency=USD&chart=projection#net-worth"))
+        status, headers, _ = self.post("/projections", dict(FORM, view="Household", currency="USD", years="9"))
+        self.assertEqual(headers["Location"], "/?currency=USD&chart=projection#net-worth")
+        after = dict((row[:2], row[2]) for row in self.saved())
+        self.assertEqual(sorted(after), [("Household", "USD"), ("Young", "USD")])
+        self.assertEqual(json.loads(after[("Household", "USD")])["years"], "9")
+        self.assertEqual(json.loads(after[("Young", "USD")])["years"], "7")
+        self.assertNotIn(("Nanami", "EUR"), after)
+        html = self.get("/?view=Young&currency=USD&chart=projection")[2]
+        self.assertIn('name="years" inputmode="numeric" value="7"', html)
+        self.assertIn("Year 7", html)
+        self.assertEqual(self.get("/?view=Nanami&currency=EUR&chart=projection")[2].count('name="years" inputmode="numeric" value="10"'), 1)
+        self.srv.shutdown()   # a restart reads the same database
+        with running(self.path) as again:
+            self.assertIn('name="years" inputmode="numeric" value="7"',
+                          fetch(again, "/?view=Young&currency=USD&chart=projection")[2])
+        self.assertEqual(sorted(before), [("Household", "USD")])           # only the fixture's own row existed
+
+    def test_example_8_invalid_values_render_inside_the_projection_tab_and_save_nothing(self):
+        self.post("/projections", dict(FORM, view="Nanami", currency="EUR", years="5"))
+        saved = self.saved()
+        status, _, html = self.post("/projections", dict(FORM, view="Nanami", currency="EUR", years="-1", income="12,5"))
+        self.assertEqual(status, 422)
+        self.assertEqual(self.saved(), saved)
+        self.assertIn('id="net-worth"', html)                              # the Accounts page, not a standalone page
+        self.assertIn('class="acct-table"', html)
+        self.assertRegex(html, r'<a href="[^"]*chart=projection[^"]*" aria-current="page">Projection</a>')
+        self.assertIn('name="years" inputmode="numeric" value="-1" aria-invalid="true"', html)   # attempted value kept
+        self.assertIn('value="12,5"', html)
+        self.assertIn('id="error-years"', html)
+        self.assertIn("Not saved", html)
+        self.assertIn('Start: EUR 9,000.00', html)                         # results still use the previous assumptions
+        self.assertIn('Year 5', html)
+        self.assertIn('action="/projections#projection-assumptions"', html)
+
+    def test_scope_errors_and_suggestion_refusals_stay_standalone_and_save_nothing(self):
+        before = self.saved()
+        for data in (dict(FORM, view="Mallory", currency="USD"), dict(FORM, view="Young", currency="EUR"),
+                     dict(FORM, view="Young", currency="USD", apply="suggestion", suggest_income="1", suggest_spending="1")):
+            with self.subTest(data=data):
+                status, _, html = self.post("/projections", data)
+                self.assertEqual(status, 422)
+                self.assertNotIn('id="net-worth"', html)
+        self.assertEqual(self.saved(), before)
+
+    def test_applying_the_shown_suggestion_saves_income_and_spending_and_returns_to_the_tab(self):
+        html = self.get("/?chart=projection")[2]
+        income, spending = (re.search(rf'name="suggest_{k}" value="([^"]+)"', html)[1] for k in ("income", "spending"))
+        status, headers, _ = self.post("/projections", dict(view="Household", currency="USD", apply="suggestion",
+                                                           suggest_income=income, suggest_spending=spending))
+        self.assertEqual((status, headers["Location"]), (303, "/?currency=USD&chart=projection#net-worth"))
+        saved = json.loads(dict((r[:2], r[2]) for r in self.saved())[("Household", "USD")])
+        self.assertEqual((saved["income"], saved["spending"]), (income, spending))
+        self.assertIn("Already saved as your income and spending.", self.get("/?chart=projection")[2])
+
+    def test_account_table_forms_carry_tab_and_currency_through_every_action(self):
+        html = self.get("/?view=Nanami&currency=EUR&chart=projection")[2]
+        table = html[html.index('<table class="acct-table"'):]
+        for action in ("owner", "rename", "section", "side", "exclude", "edit"):
+            form = re.search(rf'<form method="post" action="/{action}/\d+"[^>]*>(.*?)</form>', table, re.S)[1]
+            self.assertIn('name="view" value="Nanami"', form, action)
+            self.assertIn('name="nw_chart" value="projection"', form, action)
+            self.assertIn('name="nw_currency" value="EUR"', form, action)
+        self.assertIn('<input required name="currency" maxlength="3" value="EUR">', table)   # the account's own field
+        plain = self.get("/")[2]
+        self.assertNotIn("nw_chart", plain)
+        self.assertNotIn("nw_currency", plain)
+
+    def test_example_14_each_account_action_returns_to_the_same_tab_view_and_currency(self):
+        eur, card = self.ids["nanami-eur"], self.ids["nanami-card"]
+        ctx = dict(view="Nanami", nw_chart="projection", nw_currency="EUR")
+        here = "/?view=Nanami&currency=EUR&chart=projection"
+        for path, data in ((f"/owner/{eur}", dict(owner="Young")), (f"/rename/{eur}", dict(nickname="Renamed EUR")),
+                           (f"/section/{eur}", dict(section="Savings")), (f"/side/{card}", dict(side="asset")),
+                           (f"/exclude/{card}", dict(excluded="1")),
+                           (f"/edit/{eur}", dict(institution="Maple Trust", nickname="Renamed EUR", kind="Savings",
+                                                 owner="Nanami", side="asset", currency="EUR", balance="3000.00",
+                                                 asof="2026-11-25", update_method="Manual entry", inline="1"))):
+            with self.subTest(path=path):
+                status, headers, _ = self.post(path, dict(data, **ctx))
+                self.assertEqual((status, headers["Location"]), (303, here))
+        status, headers, _ = self.post(f"/owner/{eur}", dict(owner="Nanami", view="Nanami"))   # no context: as before
+        self.assertEqual(headers["Location"], "/?view=Nanami")
+        status, headers, _ = self.post(f"/owner/{eur}", dict(owner="Nanami", view="Nanami", nw_chart="evil", nw_currency="eur"))
+        self.assertEqual(headers["Location"], "/?view=Nanami")
+
+    def test_a_redirect_never_points_at_a_currency_the_view_just_lost(self):
+        ctx = dict(view="Nanami", nw_chart="projection", nw_currency="EUR")
+        for key in ("nanami-eur", "nanami-eur-sav"):
+            status, headers, _ = self.post(f"/exclude/{self.ids[key]}", dict(excluded="1", **ctx))
+        self.assertEqual((status, headers["Location"]), (303, "/?view=Nanami&chart=projection"))
+        self.assertEqual(self.get(headers["Location"])[0], 200)
+        self.assertEqual(self.get("/?view=Nanami&currency=EUR&chart=projection")[0], 400)   # a hand-typed link still 400s
+
+
 class Scoping(Base):
     """L29-1: chart/currency parameters, the sub-tab bar, currency chips, owner links."""
 
