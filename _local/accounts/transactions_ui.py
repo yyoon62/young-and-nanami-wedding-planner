@@ -108,20 +108,31 @@ def _data_dir(db):
 def _classifier_panel(db, f, token):
     on, st = classifier_enabled(db), classifier_stats(db)
     key, source, problem = load_key(_data_dir(db))
-    key_line = (f"Key: found ({source})." if key else (problem or "No key found.") + " Nothing is sent without a key.")
-    status = st["status"] or ("On, waiting for the next sync or Classify now." if on else "Off.")
+    key_line = (f"Key found ({source})." if key else (problem or "No key found.") + " Nothing is sent without a key.")
+    if not on:
+        status = "Off."
+    elif key is None:
+        status = "On, but nothing is sent until a usable key is found."   # never next to a stale "last run" line
+    else:
+        status = st["status"] or "On, waiting for the next sync or Classify now."
     form = (f'<form method="post" action="{EDIT}" class="drawer-form classifier-form">'
             + _hidden(f, token=token)
             + '<label class="check"><input type="checkbox" name="enabled" value="1"'
             + (" checked" if on else "") + '> Suggest categories and an emoji with Claude Haiku. '
             '<strong>Merchant names are sent to Anthropic.</strong></label>'
-            '<div class="drawer-left"><button name="action" value="classifier">Save</button>'
-            + ('<button class="button secondary" name="action" value="classify_now">Classify now</button>' if on else "")
-            + '</div></form>')
-    return (f'<details class="classifier"{" open" if on else ""}><summary>Category suggestions (off by default)</summary>'
+            '<div class="drawer-left"><button name="action" value="classifier">Save</button></div></form>')
+    # Its own form: sharing the checkbox form would post "enabled" with classify_now, which the route rejects.
+    now_form = (f'<form method="post" action="{EDIT}" class="drawer-form classifier-form">'
+                + _hidden(f, token=token)
+                + '<div class="drawer-left"><button class="button secondary" name="action" '
+                'value="classify_now">Classify now</button></div></form>' if on else "")
+    form += now_form
+    totals = f'{st["suggested"]} suggested · {st["review"]} need review · {st["pending"]} waiting'
+    title = "Category suggestions · on" if on else "Category suggestions (off by default)"
+    return (f'<details class="classifier"{" open" if on and key is None else ""}><summary>{title}</summary>'
             + form +
-            f'<p class="acct-sub">{escape(key_line)} Model: {escape(model_name())}. Status: {escape(status)} '
-            f'{st["suggested"]} suggested · {st["review"]} need review · {st["pending"]} waiting.</p>'
+            f'<p class="acct-sub">{escape(key_line)} Model: {escape(model_name())}.<br>'
+            f'{escape(status)}<br>Merchants so far: {totals}.</p>'
             '<p class="acct-sub">Only cleaned merchant text (for example “maple cafe”) leaves this computer, once per '
             'merchant: never amounts, dates, accounts, owners or ids. Descriptions that look like Zelle, Venmo, '
             'payroll, transfers or checks are not sent. A bare person’s name or an employer in a description '
@@ -136,7 +147,7 @@ def _drawer(r, f, token, categories, manual, attempt, error):
     cats = _option("", "Uncategorized", chosen) + "".join(_option(c, c, chosen) for c in names)
     transfer = attempt.get("transfer") or (("yes" if r["is_transfer"] else "no") if r["transfer_manual"] else "auto")
     choices = "".join(_option(value, label, transfer) for value, label in
-                      (("auto", "Use merchant rule or automatic"), ("yes", "Transfer"), ("no", "Not a transfer")))
+                      (("auto", "Automatic"), ("yes", "Transfer"), ("no", "Not a transfer")))
     can_rule = not r["pending"] and bool(r["merchant"])
     rules = ""
     if can_rule:
@@ -202,8 +213,8 @@ def _bars(cmp, f, totals):
     flag = f' <span class="partial-flag">{escape(cmp.partial)}</span>' if cmp.partial else ""
     clear = ""
     if f["cat"] and f["currency"] == c:
-        clear = (f'<p class="filter-chip">Showing {escape(f["cat"])} only · '
-                 f'<a href="{escape(_location(dict(f, cat="")))}">Clear filter</a></p>')
+        clear = (f'<p class="filter-chip">Showing {escape(f["cat"])} only ({escape(c)}) · '
+                 f'<a href="{escape(_location(dict(f, cat="", currency="")))}">Clear filter</a></p>')
     return (f'<section class="bars" aria-label="Spending by category in {escape(c)}">'
             f'<h3>Spending by category{flag}</h3>{clear}<ul class="bar-list">{"".join(rows)}</ul>'
             f'<p class="acct-sub">{basis}Bar = this month; ticks = last month and average. Transfers, pending '
@@ -320,6 +331,9 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         suggestion = ('<div class="acct-sub">Possible internal transfer · still counted. '
                       'If confirmed, mark each leg as Transfer.</div>' if r["suggested_transfer"] else "")
         origin = _SOURCES.get(r["category_source"], "")
+        # A transfer is not spending, so it needs no category; say so instead of "Needs review".
+        label_cell = category or ("" if r["effective_transfer"] else
+                                  "Needs review" if r["category_source"] == "review" else "Uncategorized")
         rows.append(
             f'<tr class="acct-row" id="tx-{r["row_id"]}"><td class="date-cell"><time datetime="{when}">{when}</time>'
             f'<div class="acct-sub">{label}</div></td><th scope="row" class="acct-cell">'
@@ -328,10 +342,9 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
             f'<div class="acct-sub">SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}</div>'
             f'</div></div></th>'
             f'<td class="num"><span class="cur">{escape(r["currency"])}</span> {_amount(r)}</td>'
-            f'<td>{category or ("Needs review" if r["category_source"] == "review" else "Uncategorized")}{origin}'
-            f' · {escape(r["flow"])}{suggestion} {drawer}</td></tr>')
+            f'<td>{label_cell + origin + " · " if label_cell else ""}{escape(r["flow"])}{suggestion} {drawer}</td></tr>')
     table = (
-        '<div class="table-wrap"><table class="acct-table"><thead><tr><th>Date</th><th>Transaction</th>'
+        '<div class="table-wrap"><table class="acct-table tx-table"><thead><tr><th>Date</th><th>Transaction</th>'
         '<th class="num">Amount</th><th>Category</th></tr></thead><tbody>'
         + "".join(rows) + "</tbody></table></div>" if rows else "<p>No transactions match this list.</p>")
     alert = f'<p class="notice" role="alert">{escape(error)}</p>' if error else ""

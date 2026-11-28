@@ -357,8 +357,8 @@ input, select {
 .tx-drawer > summary { cursor: pointer; }
 .tx-form { margin-top: .5rem; min-width: min(21rem, 78vw); }
 .tx-form label { display: block; font-size: .78rem; font-weight: 600; color: var(--text-secondary); margin: 0 0 .45rem; }
-.tx-form label.check { display: flex; gap: .45rem; align-items: flex-start; }
-.tx-form label.check input { width: auto; min-height: 0; margin-top: .15rem; }
+.tx-form label.check, .classifier-form label.check { display: flex; gap: .45rem; align-items: flex-start; }
+.tx-form label.check input, .classifier-form label.check input { width: auto; min-height: 0; margin-top: .15rem; }
 .tx-form select, .tx-form input:not([type=checkbox]) { min-height: 34px; padding: .3rem .5rem; font-size: .88rem; border-radius: 7px; }
 .tx-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .1rem .6rem; align-items: end; }
 .tx-form .button, .tx-form button { padding: .38rem .85rem; font-size: .86rem; border-radius: 8px; }
@@ -404,3 +404,24 @@ td.num .amt-in, td.num .amt-out, td.num .amt-zero, td.num .amt-neutral { font-va
 /* ---- Projections: suggestion card and Advanced section ---- */
 details.advanced { margin: .6rem 0 .9rem; padding: .4rem .7rem; border: 1px solid var(--border); border-radius: 10px; background: #fcf9f5; }
 details.advanced[open] > summary { margin-bottom: .5rem; }
+
+/* Classifier panel: compact, collapsed by default */
+.classifier { margin: .4rem 0 .6rem; }
+.classifier-form { margin: .4rem 0 .2rem; }
+.classifier-form label.check { font-size: .86rem; }
+.classifier-form .drawer-left { margin-bottom: .2rem; }
+
+/* Phone: each transaction becomes a small card so the amount and the edit drawer are never off-screen */
+@media (max-width: 40rem) {
+  .tx-table thead { display: none; }
+  .tx-table, .tx-table tbody { display: block; }
+  .tx-table tr.acct-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .15rem .6rem;
+    grid-template-areas: "tx amt" "date date" "cat cat"; padding: .55rem .7rem; border-bottom: 1px solid #f0e8df; }
+  .tx-table tr.acct-row > th, .tx-table tr.acct-row > td { display: block; padding: 0; border: 0; }
+  .tx-table th.acct-cell { grid-area: tx; }
+  .tx-table td.num { grid-area: amt; }
+  .tx-table tr.acct-row > td.date-cell { grid-area: date; display: flex; gap: .5rem; }
+  .tx-table td.date-cell .acct-sub { display: inline; }
+  .tx-table tr.acct-row > td:last-child { grid-area: cat; }
+  .tx-form { min-width: 0; }
+}

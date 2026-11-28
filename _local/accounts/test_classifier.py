@@ -399,6 +399,26 @@ class Candidates(Base, unittest.TestCase):
         self.assertEqual(len(notices), 1)
         self.assertIn("sent 1 merchant name(s)", notices[0])
 
+    def test_panel_status_never_contradicts_itself(self):
+        self.put("2026-11-03", "-12.40", "Maple Cafe")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            self.enable()
+            html = self.page()
+            self.assertIn('<details class="classifier" open>', html)                 # needs attention: shown open
+            self.assertIn("No key found. Nothing is sent without a key.", html)
+            self.assertIn("On, but nothing is sent until a usable key is found.", html)
+            self.assertNotIn("Key found", html)
+            self.assertNotIn("Last run", html)
+        with mock.patch.dict(os.environ, ENV):
+            html = self.page()
+            self.assertIn("Key found (environment).", html)
+            self.assertIn('<details class="classifier"><summary>Category suggestions · on</summary>', html)
+            self.assertNotIn("No key found", html)
+            self.enable("0")
+            html = self.page()
+            self.assertIn("<br>Off.<br>", html)
+
     def test_toggle_and_classify_now_through_the_edit_route(self):
         self.put("2026-11-03", "-12.40", "Maple Cafe")
         self.post(action="classifier", enabled="1")
@@ -410,6 +430,9 @@ class Candidates(Base, unittest.TestCase):
             with self.assertRaises(RouteProblem):
                 self.post(**bad)
         self.post(action="classifier", enabled="1")
+        page = self.page()
+        now_form = re.search(r'<form[^>]*>(?:(?!</form>).)*value="classify_now".*?</form>', page, re.S).group(0)
+        self.assertNotIn('name="enabled"', now_form)    # a browser would post the checkbox along and the route rejects it
         calls = []
         with block_network(), mock.patch.object(C, "load_key", return_value=(None, "none", "No key found.")):
             self.post(action="classify_now")
