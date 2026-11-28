@@ -108,7 +108,9 @@ class Acceptance(Base, unittest.TestCase):
         result = self.run_it(spy, environ={})
         self.assertEqual((spy.calls, result.sent), ([], 0))
         self.assertIn("No key found", result.status)
-        self.assertIn("Nothing is sent without a key", self.page())
+        with mock.patch.dict(os.environ):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            self.assertIn("Nothing is sent without a key", self.page())
         self.assertIn("Maple Cafe", self.page())                         # the page still works
 
     # ---- 10 ----
