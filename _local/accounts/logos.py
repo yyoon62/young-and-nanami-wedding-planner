@@ -1,9 +1,11 @@
 """Local cached official institution logos (served from 127.0.0.1, never committed to Git)."""
 import hashlib
 from html import escape
+from http.client import HTTPSConnection
 from pathlib import Path
 import re
-from urllib.parse import urlsplit
+import tempfile
+from urllib.parse import urlsplit, urljoin
 from urllib.request import Request, urlopen
 
 
@@ -137,6 +139,27 @@ def _default_fetch(url):
         return resp.read(131073)
 
 
+def hosted_fetch(url):
+    """A Bridge-provided domain may select a favicon, never an outbound network target."""
+    for _ in range(3):
+        u = urlsplit(url)
+        if (u.scheme != "https" or not re.fullmatch(r"www\.google\.com|t[0-3]\.gstatic\.com", u.netloc)
+                or not u.path.startswith(("/s2/favicons", "/faviconV2"))):
+            return None
+        conn = HTTPSConnection(u.netloc, timeout=5)
+        try:
+            conn.request("GET", u.path + ("?" + u.query if u.query else ""))
+            response = conn.getresponse()
+            if response.status == 200:
+                return response.read(131073)
+            if response.status not in (301, 302, 303, 307, 308) or not response.getheader("Location"):
+                return None
+            url = urljoin(url, response.getheader("Location"))
+        finally:
+            conn.close()
+    return None
+
+
 def cached_logo(logo_dir, domain, fetcher=_default_fetch):
     """Return (bytes, content_type) from local cache, fetching once over HTTPS if missing."""
     clean = sanitize_domain(domain)
@@ -163,10 +186,14 @@ def cached_logo(logo_dir, domain, fetcher=_default_fetch):
             continue
         ext, mime = detected
         base.mkdir(mode=0o700, parents=True, exist_ok=True)
-        tmp = base / f".{clean}.{ext}.tmp"
-        tmp.write_bytes(raw)
-        tmp.chmod(0o600)
-        tmp.replace(base / f"{clean}.{ext}")
+        with tempfile.NamedTemporaryFile(dir=base, prefix=f".{clean}.", delete=False) as temp:
+            tmp = Path(temp.name)
+            try:
+                temp.write(raw)
+                temp.close()
+                tmp.replace(base / f"{clean}.{ext}")
+            finally:
+                tmp.unlink(missing_ok=True)
         return bytes(raw), mime
     return None
 

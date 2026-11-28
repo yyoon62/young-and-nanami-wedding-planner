@@ -1,0 +1,11 @@
+[Unit]
+Description=Encrypted online accounts SQLite snapshot
+ConditionPathIsMountPoint=/mnt/accounts-backup
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/planner-accounts/backup.env
+ExecStart=/bin/sh %h/planner/_local/accounts/deploy/backup-sqlite.sh backup
+UMask=0077
+NoNewPrivileges=yes
+TimeoutStartSec=5min

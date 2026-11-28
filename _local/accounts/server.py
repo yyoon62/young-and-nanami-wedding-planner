@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 from pathlib import Path
 import re
@@ -16,6 +17,7 @@ from servicers import servicer_get
 from bridge import Bridge, Problem
 from bulk import Batch, schema
 from history import history_panel, install as install_history, net_worth
+from hosted import Auth, Config, Rejected, CHALLENGE_TTL, SESSION_TTL, db_path, external, offline_lock, private
 from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo, sanitize_domain
 
 
@@ -229,6 +231,7 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
     amt = Decimal(r["balance"])
     c = r["currency"]
     side = r["side"]
+    asof = escape(r["asof"])
     stale = (today - date.fromisoformat(r["asof"])).days > 30
     owner = r["owner"]
     owner_pills = "".join(
@@ -280,7 +283,7 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
             f'<div class="acct-sub-row"><span class="acct-sub">{inst}</span>{sec_pop}</div></div></div></th>'
             f'<td class="num bal-cell"><span class="amt {side}">{signed_money(amt, c, side)}</span> {side_toggle}</td>'
             f'<td class="owner-cell">{owner_cell}</td>'
-            f'<td class="date-cell"><time datetime="{r["asof"]}">{r["asof"]}</time>{stale_tag}</td>'
+            f'<td class="date-cell"><time datetime="{asof}">{asof}</time>{stale_tag}</td>'
             f'<td class="act-cell">{exclude_btn}'
             f'<a href="/edit/{rid}" class="edit-trigger" data-edit="{rid}" aria-controls="edit-row-{rid}"'
             f' aria-expanded="{"true" if opened else "false"}">Edit<span class="sr"> {name}</span></a></td>'
@@ -405,18 +408,26 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def setup(self):
+        if self.server.auth:
+            self.request.settimeout(15)
+        super().setup()
+
     def send_bytes(self, code, body, kind, cache="no-store"):
         self.send_response(code)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", cache)
+        self.send_header("Cache-Control", "no-store" if self.server.auth else cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
 
-    def send(self, code, text, kind="text/html; charset=utf-8", location=None, preview=False, scripts=False):
-        if kind.startswith("text/html"):
+    def send(self, code, text, kind="text/html; charset=utf-8", location=None, preview=False, scripts=False,
+             signin=False, cookies=()):
+        if kind.startswith("text/html") and not signin:
             text = text.replace("<main>", "<main>" + mode_banner(self.server), 1)
+            if self.server.auth and "<main>" in text:
+                text = text.replace("</main>", self.sign_out_form() + "</main>", 1)
         body = text.encode()
         self.send_response(code)
         if location:
@@ -424,18 +435,135 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for cookie in cookies:
+            self.send_header("Set-Cookie", cookie)
         policy = "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
-        if preview:
-            extra = "script-src 'self'; connect-src 'none'; form-action 'none'"
+        if signin:
+            gis = "https://accounts.google.com/gsi/"
+            policy = f"default-src 'none'; style-src {gis}style; frame-ancestors 'none'; base-uri 'none'; "
+            extra = (f"script-src 'self' {gis}client; "
+                     f"connect-src 'self' {gis}; frame-src {gis}; form-action 'none'")
+            self.send_header("Cross-Origin-Opener-Policy", "same-origin-allow-popups")
+        elif preview:
+            extra = "script-src 'self'; connect-src 'none'; form-action " + ("'self'" if self.server.auth else "'none'")
         elif scripts:
             extra = "img-src 'self'; script-src 'self'; connect-src 'none'; form-action 'self'"
         else:
             extra = "form-action 'self'"
         self.send_header("Content-Security-Policy", policy + extra)
+        if self.server.auth:
+            self.send_header("X-Content-Type-Options", "nosniff")
         # A no-referrer form sends Origin: null even on a local POST.
-        self.send_header("Referrer-Policy", "no-referrer" if preview else "same-origin")
+        referrer = "no-referrer" if preview and not self.server.auth else "same-origin"
+        if signin:
+            referrer = "strict-origin-when-cross-origin" if self.server.auth.config.secure else "no-referrer-when-downgrade"
+        self.send_header("Referrer-Policy", referrer)
         self.end_headers()
         self.wfile.write(body)
+
+    def send_error(self, code, message=None, explain=None):
+        if not self.server.auth:
+            return super().send_error(code, message, explain)
+        # Covers methods BaseHTTPRequestHandler rejects before our GET/POST dispatch.
+        if code == 501:
+            try:
+                code = 405 if self.hosted_session() else 401
+            except sqlite3.Error:
+                code = 503
+        # Some parser errors precede header parsing; never reflect raw input.
+        self.close_connection = True
+        self.send_response(code)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def cookie_value(self, kind):
+        name = self.server.auth.config.name(kind) + "="
+        matches = [part.strip()[len(name):]
+                   for header in self.headers.get_all("Cookie", [])
+                   for part in header.split(";") if part.strip().startswith(name)]
+        return matches[0] if len(matches) == 1 else ""
+
+    def hosted_session(self):
+        return self.server.auth.session(self.cookie_value("session"))
+
+    @property
+    def token(self):
+        return self.session_row[1] if self.server.auth else self.server.token
+
+    def sign_out_form(self):
+        if not getattr(self, "session_row", None):
+            return ""
+        return ('<form method="post" action="/auth/logout">'
+                f'<input type="hidden" name="token" value="{self.token}">'
+                '<button type="submit" class="secondary">Sign out</button></form>')
+
+    def sign_in(self):
+        return self.send(200, f"""<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Private dashboard · Sign in</title>
+<script defer src="https://accounts.google.com/gsi/client"></script>
+<script defer src="/auth/sign-in.js"></script>
+<h1>Sign in to the private dashboard</h1>
+<div id="google-button" data-client="{escape(self.server.auth.config.client)}"></div>
+<p id="status" role="status">Loading sign-in…</p>
+<noscript>JavaScript is required for Google sign-in.</noscript></html>""", signin=True)
+
+    def exact_origin(self):
+        return self.headers.get_all("Origin", []) == [self.server.auth.config.origin]
+
+    def read_form(self, maximum):
+        lengths = self.headers.get_all("Content-Length", [])
+        if (len(lengths) != 1 or not re.fullmatch(r"[0-9]{1,5}", lengths[0])
+                or int(lengths[0]) > maximum or self.headers.get_all("Transfer-Encoding")):
+            raise Rejected(413)
+        kinds = self.headers.get_all("Content-Type", [])
+        if len(kinds) != 1 or not re.fullmatch(r"application/x-www-form-urlencoded(?:; *charset=utf-8)?",
+                                               kinds[0], re.IGNORECASE):
+            raise Rejected(415)
+        try:
+            values = parse_qs(self.rfile.read(int(lengths[0])).decode("utf8", "replace"),
+                              keep_blank_values=bool(self.server.auth), max_num_fields=64)
+        except ValueError:
+            raise Rejected(400) from None
+        if self.server.auth and any(len(v) != 1 for v in values.values()):
+            raise Rejected(400)
+        return {k: v[0] for k, v in values.items()}
+
+    def auth_post(self, raw_target):
+        auth = self.server.auth
+        config = auth.config
+        if not self.exact_origin():
+            raise Rejected(403)
+        if raw_target == "/auth/challenge":
+            if (self.headers.get_all("Content-Length", []) not in ([], ["0"]) or
+                    self.headers.get_all("Transfer-Encoding")):
+                raise Rejected(400)
+            browser, nonce = auth.challenge(self.cookie_value("challenge"))
+            return self.send(200, json.dumps({"nonce": nonce}), "application/json",
+                             cookies=(config.cookie("challenge", browser, CHALLENGE_TTL),))
+        if raw_target == "/auth/exchange":
+            data = self.read_form(12000)
+            cookie = auth.exchange(self.cookie_value("challenge"), data.get("credential", ""),
+                                   self.cookie_value("session"))
+            return self.send(204, "", "text/plain",
+                             cookies=(config.cookie("session", cookie, SESSION_TTL), config.cookie("challenge")))
+        data = self.read_form(8192)
+        self.require_csrf(data)
+        auth.revoke(self.session_row[0], self.cookie_value("challenge"))
+        return self.send(303, "", "text/plain", location="/",
+                         cookies=(config.cookie("session"), config.cookie("challenge")))
+
+    def require_csrf(self, data):
+        if not secrets.compare_digest(data.get("token", "").encode(), self.token.encode()):
+            raise Rejected(403)
+
+    def reject(self, exc):
+        self.close_connection = True
+        messages = {400: "Invalid request.", 401: "Sign in to continue.", 403: "Request not allowed.",
+                    413: "Form too large.", 415: "Unsupported form type.", 503: "Dashboard temporarily unavailable."}
+        return self.send(exc.status, messages[exc.status], "text/plain; charset=utf-8")
 
     def local_host(self):
         port = self.server.server_port
@@ -454,18 +582,36 @@ class Handler(BaseHTTPRequestHandler):
                                    WHERE a.excluded = 0 AND {owner_scope} ORDER BY h.asof, h.account_id""",
                                 (view, view)).fetchall()
         has_backdated = any(p["asof"] > p["current_asof"] for p in points)
-        return self.send(status, dashboard(rows, date.today(), view, self.server.token, net_worth(points),
+        return self.send(status, dashboard(rows, date.today(), view, self.token, net_worth(points),
                                            has_sync=bool(self.server.batch), notices=notices, error=error,
                                            open_edit=open_edit, edit_values=edit_values,
                                            use_logos=bool(self.server.logo_dir), has_backdated=has_backdated),
                          scripts=True)
 
     def do_GET(self):
-        if not self.local_host():
+        try:
+            return self.route_get()
+        except sqlite3.Error:
+            if not self.server.auth:
+                raise
+            return self.reject(Rejected(503))
+
+    def route_get(self):
+        if self.server.auth:
+            # Check the raw target, before http.server's leading // normalization.
+            raw_target = self.requestline.split()[1]
+            if raw_target == "/auth/sign-in.js":
+                return self.send(200, (ROOT / "sign-in.js").read_text(), "application/javascript")
+            self.session_row = self.hosted_session()
+            if not self.session_row:
+                return self.sign_in() if raw_target == "/" else self.reject(Rejected())
+            if not raw_target.startswith("/") or raw_target.startswith("//"):
+                return self.reject(Rejected(400))
+        elif not self.local_host():
             return self.send(403, "Local requests only.")
         if urlsplit(self.path).path == "/batch":
             return self.send(303, "", location="/")
-        result = servicer_get(self.path, page=page, form=form, token=self.server.token)
+        result = servicer_get(self.path, page=page, form=form, token=self.token)
         if result is not None:
             return self.send(*result)
         path = urlsplit(self.path).path
@@ -496,7 +642,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_bytes(200, fallback_svg(domain.split(".")[0]).encode(), "image/svg+xml")
         if path == "/new":
             return self.send(200, form({"currency": "USD", "asof": str(date.today()), "owner": "Unspecified",
-                                        "update_method": DEFAULT_METHOD}, path, self.server.token))
+                                        "update_method": DEFAULT_METHOD}, path, self.token))
         if path == "/":
             view = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("view", ["Household"])
             if len(view) != 1 or view[0] not in ("Household", *PEOPLE):
@@ -511,14 +657,39 @@ class Handler(BaseHTTPRequestHandler):
                 if row and match[1] == "remove":
                     return self.send(200, page(f"""<h2>Remove {escape(row['nickname'])}?</h2>
 <p>{REMOVE_WARNING}</p><form method="post" action="{path}" class="edit-form">
-<input type="hidden" name="token" value="{self.server.token}">
+<input type="hidden" name="token" value="{self.token}">
 <div class="bar"><button>Confirm remove</button><a href="/" class="button secondary">Cancel</a></div></form>""", current="/"))
                 if row:
-                    return self.send(200, form(dict(row), path, self.server.token))
+                    return self.send(200, form(dict(row), path, self.token))
         self.send(404, "Account or page not found.")
 
     def do_POST(self):
-        if not self.local_host() or self.headers.get("Origin") not in {None, f"http://{self.headers.get('Host')}"}:
+        try:
+            return self.route_post()
+        except sqlite3.Error:
+            if not self.server.auth:
+                raise
+            return self.reject(Rejected(503))
+
+    def route_post(self):
+        if self.server.auth:
+            raw_target = self.requestline.split()[1]
+            self.session_row = self.hosted_session()
+            try:
+                if raw_target in {"/auth/challenge", "/auth/exchange"}:
+                    return self.auth_post(raw_target)
+                if not self.session_row:
+                    raise Rejected()
+                if not self.exact_origin():
+                    raise Rejected(403)
+                if raw_target == "/auth/logout":
+                    return self.auth_post(raw_target)
+                # Read/validate before dispatch, even for unknown routes.
+                data = self.read_form(8192)
+                self.require_csrf(data)
+            except Rejected as exc:
+                return self.reject(exc)
+        elif not self.local_host() or self.headers.get("Origin") not in {None, f"http://{self.headers.get('Host')}"}:
             return self.send(403, "Local requests only.")
         target = self.path
         edit = re.fullmatch(r"/edit/([1-9][0-9]{0,17})", target)
@@ -531,12 +702,13 @@ class Handler(BaseHTTPRequestHandler):
         sync_act = target == "/sync" and bool(self.server.batch)
         if not any((edit, remove, owner_act, rename_act, section_act, exclude_act, side_act, sync_act, target == "/new")):
             return self.send(404, "Page not found.")
-        length = self.headers.get("Content-Length", "")
-        if not re.fullmatch(r"[0-9]{1,5}", length) or int(length) > 8192:
-            return self.send(413, "Form too large.")
-        data = {k: v[0] for k, v in parse_qs(self.rfile.read(int(length)).decode("utf8", "replace")).items()}
-        if not secrets.compare_digest(data.get("token", "").encode(), self.server.token.encode()):
-            return self.send(403, "Reload the form and try again.")
+        if not self.server.auth:
+            length = self.headers.get("Content-Length", "")
+            if not re.fullmatch(r"[0-9]{1,5}", length) or int(length) > 8192:
+                return self.send(413, "Form too large.")
+            data = {k: v[0] for k, v in parse_qs(self.rfile.read(int(length)).decode("utf8", "replace")).items()}
+            if not secrets.compare_digest(data.get("token", "").encode(), self.token.encode()):
+                return self.send(403, "Reload the form and try again.")
         back = data.get("view", "Household")
         back = back if back in ("Household", *PEOPLE) else "Household"
         if sync_act:
@@ -604,7 +776,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             if edit and data.get("inline") == "1":
                 return self.render_home(back, error=str(exc), status=422, open_edit=edit[1], edit_values=data)
-            return self.send(422, form(data, target, self.server.token, str(exc)))
+            return self.send(422, form(data, target, self.token, str(exc)))
         params = tuple(values[k] for k in FIELDS)
         with closing(sqlite3.connect(self.server.db)) as db, db:
             if edit:
@@ -621,30 +793,72 @@ class Handler(BaseHTTPRequestHandler):
         self.send(303, "", location=view_url(back) if (edit and data.get("inline") == "1") else "/")
 
 
-def serve(path, port, provider=None, logo_dir=None):
-    init_db(path)
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    server.token = secrets.token_urlsafe(32)
+class HostedServer(ThreadingHTTPServer):
+    daemon_threads = False  # Drain request threads before allowing an offline restore.
+
+    def server_close(self):
+        try:
+            super().server_close()
+        finally:
+            self.state_lock.close()
+
+
+def serve(path, port, provider=None, logo_dir=None, *, hosted=None, keys=None, clock=None):
+    with ExitStack() as locks:
+        auth = None
+        if hosted:
+            path = db_path(path)
+            if logo_dir:
+                logo_dir = external(logo_dir)
+                logo_dir.mkdir(mode=0o700, exist_ok=True)
+                private(logo_dir, directory=True)
+            locks.enter_context(offline_lock(path))
+            os.close(os.open(path, os.O_CREAT | os.O_RDONLY | os.O_NOFOLLOW, 0o600))
+        init_db(path)
+        if hosted:
+            auth = Auth(path, hosted, keys=keys, **({"clock": clock} if clock is not None else {}))
+            # Construct unbound so state_lock is available even if binding fails.
+            server = HostedServer(("127.0.0.1", port), Handler, bind_and_activate=False)
+            server.state_lock = locks.pop_all()
+            try:
+                server.server_bind()
+                server.server_activate()
+            except BaseException:
+                server.server_close()
+                raise
+        else:
+            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server.auth = auth
+    server.token = None if hosted else secrets.token_urlsafe(32)
     server.db = path
     server.batch = Batch(path, provider, validate) if provider else None
     server.notices = []
     server.logo_dir = logo_dir
-    from logos import _default_fetch
-    server.logo_fetcher = _default_fetch
+    from logos import _default_fetch, hosted_fetch
+    server.logo_fetcher = hosted_fetch if hosted else _default_fetch
     return server
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--db", type=Path)
+    parser.add_argument("--hosted", action="store_true", help="Require approved household Google sign-in")
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--db", type=Path, default=DEFAULT_DB)
     modes.add_argument("--demo", action="store_true", help="Fictional walkthrough, disposable database only")
     modes.add_argument("--bridge", action="store_true", help="Enable configured SimpleFIN Bridge")
     args = parser.parse_args()
+    if (args.demo and (args.hosted or args.db)) or (args.bridge and args.db and not args.hosted):
+        parser.error("--demo cannot be combined with --hosted or --db; --bridge with --db requires --hosted.")
     os.umask(0o077)
     with ExitStack() as stack:
-        path, provider = args.db, None
+        path, provider, hosted = args.db or DEFAULT_DB, None, None
+        if args.hosted:
+            try:
+                hosted = Config.load(os.environ)
+                path = db_path(path)
+            except (OSError, ValueError) as exc:
+                parser.exit(1, f"Hosted startup refused: {exc}\n")
         if args.demo:
             from demo_batch import Demo, seed
             path = Path(stack.enter_context(tempfile.TemporaryDirectory())) / "fictional.sqlite3"
@@ -655,12 +869,18 @@ if __name__ == "__main__":
             except (Problem, OSError, UnicodeError):
                 parser.exit(1, "Bridge disabled: missing or unsafe credential storage. See BULK.md.\n")
         logo_dir = None if args.demo else path.parent / "logos"
-        server = stack.enter_context(serve(path, args.port, provider, logo_dir=logo_dir))
+        try:
+            server = stack.enter_context(serve(path, args.port, provider, logo_dir=logo_dir, hosted=hosted))
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            if not hosted:
+                raise
+            parser.exit(1, f"Hosted startup refused ({type(exc).__name__}); check private state and listener.\n")
         server.demo = args.demo
         if args.demo:
             with closing(sqlite3.connect(path)) as db, db:
                 seed(db)
-        print(f"Open http://127.0.0.1:{server.server_port}/ · Ctrl-C to stop", flush=True)
+        address = hosted.origin if hosted else f"http://127.0.0.1:{server.server_port}"
+        print(f"Open {address}/ · Ctrl-C to stop", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

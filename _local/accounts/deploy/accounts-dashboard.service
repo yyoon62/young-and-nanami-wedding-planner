@@ -1,0 +1,16 @@
+[Unit]
+Description=Private household accounts dashboard (Tailscale Serve backend)
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/planner-accounts/hosted.env
+WorkingDirectory=%h/planner/_local/accounts
+ExecStart=/usr/bin/python3 %h/planner/_local/accounts/server.py --port 8765 --bridge --hosted
+UMask=0077
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
