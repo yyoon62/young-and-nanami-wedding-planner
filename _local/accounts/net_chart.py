@@ -11,18 +11,6 @@ from html import escape
 PRECISION = 64
 LEFT, RIGHT, TOP, BOTTOM = 6, 594, 10, 118       # viewBox 600 x 128, same frame as the History plots
 SAVED_ZONE = 160                                  # viewBox units for history; style.css keeps the same ratio (160/588)
-SYMBOLS = {"USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥"}
-
-
-def plain(value, currency, scale):
-    """$1,234.56 / €3,000.00 / ¥150,000; other currencies keep their code. Text added by L29 only."""
-    with localcontext() as ctx:
-        ctx.prec = PRECISION
-        rounded = value.quantize(Decimal(1).scaleb(-scale))
-        body = f"{abs(rounded):,.{scale}f}"
-    sign = "-" if rounded < 0 else ""
-    symbol = SYMBOLS.get(currency)
-    return f"{sign}{symbol}{body}" if symbol else f"{sign}{currency} {body}"
 
 
 def short_date(iso):
@@ -84,9 +72,9 @@ def render(points, years, series, currency, scale, money, *, backdated_note=True
                              f'<path class="nw-stepdot" vector-effect="non-scaling-stroke" d="M{join:.2f} {y_of(start):.2f}h0"/>')
                 gap = start - last_value
                 step_note = (f'<p class="history-backdated nw-stepnote">⚠️ Saved history ends at '
-                             f'<strong>{escape(plain(last_value, currency, scale))}</strong> on {last_date}; current balances '
-                             f'start the projection at <strong>{escape(plain(start, currency, scale))}</strong> '
-                             f'({escape(plain(gap, currency, scale)) if gap < 0 else "+" + escape(plain(gap, currency, scale))}). '
+                             f'<strong>{money(last_value)}</strong> on {last_date}; current balances '
+                             f'start the projection at <strong>{money(start)}</strong> '
+                             f'(difference {money(gap)}). '
                              'Drawn as a step, nothing shifted'
                              + ('. After a backdated edit, history can show later saved balances than the account table.'
                                 if backdated_note else '.') + '</p>')
@@ -97,10 +85,10 @@ def render(points, years, series, currency, scale, money, *, backdated_note=True
                      f'<path class="nw-break" vector-effect="non-scaling-stroke" d="M{join - 5} {BOTTOM + 8}l4 -8 M{join + 1} {BOTTOM + 8}l4 -8"/>')
         else:
             split = f'<path class="history-dots nw-start" vector-effect="non-scaling-stroke" d="M{join} {y_of(start):.2f}h0"/>'
-        summary = (f"Saved net worth ends at {escape(plain(values_known[-1], currency, scale))}. "
+        summary = (f"Saved net worth ends at {money(values_known[-1])}. "
                    if draw_past and values_known and known[-1][1] is not None else "")
-    desc = (f"{summary}Projection starts at {escape(plain(start, currency, scale))} and ends at "
-            f"{escape(plain(projected[-1], currency, scale))} after {years} years. Dotted line is zero. "
+    desc = (f"{summary}Projection starts at {money(start)} and ends at "
+            f"{money(projected[-1])} after {years} years. Dotted line is zero. "
             "See the annual breakdown for values.")
     svg = ('<svg class="history-plot nw-plot" viewBox="0 0 600 128" preserveAspectRatio="none" role="img" '
            'aria-labelledby="projection-chart-title" aria-describedby="projection-chart-desc">'

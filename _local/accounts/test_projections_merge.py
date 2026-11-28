@@ -124,9 +124,9 @@ class Chart(Base):
         self.assertIsNotNone(p["nw-step"])
         self.assertIsNotNone(p["nw-stepdot"])
         self.assertIn("nw-stepnote", html)
-        self.assertIn("Saved history ends at <strong>$980.00</strong> on 2026-11-27", html)
-        self.assertIn("start the projection at <strong>$580.00</strong>", html)
-        self.assertIn("(-$400.00)", html)
+        self.assertIn("Saved history ends at <strong>USD 980.00</strong> on 2026-11-27", html)
+        self.assertIn("start the projection at <strong>USD 580.00</strong>", html)
+        self.assertIn("(difference USD -400.00)", html)
         self.assertIn("Drawn as a step, nothing shifted", html)
         self.assertIn("After a backdated edit, history can show later saved balances", html)
         self.assertIn("Start: USD 580.00", html)                              # the projection still starts from the accounts
@@ -154,16 +154,23 @@ class Chart(Base):
             self.assertIn("Saved history is too short to draw", page_html)
             self.assertIn("nw-start", page_html)
 
-    def test_currency_symbols_in_new_text_are_exact_and_separated(self):
-        import net_chart
-        from decimal import Decimal
-        for value, code, scale, want in ((Decimal("1234.5"), "USD", 2, "$1,234.50"), (Decimal("-1500"), "USD", 2, "-$1,500.00"),
-                                         (Decimal("3000"), "EUR", 2, "€3,000.00"), (Decimal("150000"), "JPY", 0, "¥150,000"),
-                                         (Decimal("12"), "CHF", 2, "CHF 12.00")):
-            self.assertEqual(net_chart.plain(value, code, scale), want)
-        for value in (Decimal("0.005"), Decimal("0.015"), Decimal("2.675"), Decimal("-0.004"), Decimal("262935.955")):
-            self.assertEqual(net_chart.plain(value, "USD", 2).replace("$", "").replace("-", ""),
-                             projections_ui._money(value, "USD", 2)[4:].replace("-", ""))   # same rounding as the numbers beside it
+    def test_every_money_string_on_the_projection_tab_uses_the_app_format_never_a_bare_dollar_sign(self):
+        """USD 1,234.56 / EUR 1,234.56 everywhere, in text, tooltips, aria-labels and the chart description."""
+        self.srv.shutdown()
+        other = self.path.with_name("backdated.sqlite3")
+        seed(other, backdated=True)
+        single = self.path.with_name("single.sqlite3")
+        init_db(single)
+        with running(other) as srv, running(single) as lone:
+            pages = {name: fetch(server_, target)[2] for name, server_, target in (
+                ("backdated", srv, "/?chart=projection"), ("backdated EUR", srv, "/?view=Nanami&currency=EUR&chart=projection"),
+                ("backdated Young", srv, "/?view=Young&chart=projection"), ("empty db", lone, "/?chart=projection"))}
+        for name, html in pages.items():
+            with self.subTest(page=name):
+                self.assertEqual(re.findall(r"[-+]?[$€£¥]\s?\d[\d,.]*", html), [])
+                self.assertIn("USD", html)
+        self.assertRegex(pages["backdated"], r"Saved net worth ends at USD 980\.00\. Projection starts at USD 580\.00")
+        self.assertRegex(pages["backdated EUR"], r"Projection starts at EUR 9,000\.00 and ends at EUR [\d,]+\.\d\d")
 
     def test_phone_and_desktop_share_one_markup_no_inline_styles(self):
         html = self.get("/?chart=projection")[2]
