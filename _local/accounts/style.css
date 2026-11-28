@@ -1,14 +1,14 @@
-/* Local accounts · coherent UI. No external assets, no chart, system type.
-   Palette follows the planner House plan reference (quiet paper panels). */
+/* Local accounts · the TODO board's paper, rose and sage palette. */
 [hidden] { display: none !important; }
 :root {
   color-scheme: light;
   font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-  color: #1c2823; background: #f4f5f1;
-  --surface: #fbfcfa; --border: #d3dbd4; --border-strong: #adbab4;
-  --text-secondary: #4d5e58; --text-muted: #5f6f68;
-  --accent: #176350; --accent-strong: #0f4c3d; --focus: #0b6bcb;
-  --stale: #8d3a11; --alert: #8d3a11; --pill: #e7ece7;
+  color: #2b2320; background: #fbf7f2;
+  --surface: #fff; --border: #eadfd3; --border-strong: #c7b6a9;
+  --text-secondary: #574a42; --text-muted: #6f625a;
+  --accent: #8e4351; --accent-strong: #71333e; --focus: #0b6bcb;
+  --stale: #923a23; --alert: #923a23; --pill: #efeae5;
+  --sage: #4f5e45; --sage-bg: #e9eee4; --rose-bg: #f7e6e8;
   --radius: .6rem; --tap: 44px;
 }
 * { box-sizing: border-box; }
@@ -73,13 +73,31 @@ button.secondary, .button.secondary { background: #e7ece7; color: #15342b; borde
 button.secondary:hover, .button.secondary:hover { background: #dbe2dc; }
 .actions { display: flex; flex-wrap: wrap; gap: .6rem; margin: .75rem 0; align-items: center; }
 
-/* ---- Tables: scannable dated balances, no page overflow ---- */
-.table { overflow-x: auto; max-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: .25rem; position: relative; -webkit-overflow-scrolling: touch; }
-table { border-collapse: collapse; width: 100%; min-width: 44rem; table-layout: fixed; }
-.scroll-cue { color: var(--text-muted); font-size: .8rem; margin: .25rem 0 0; }
-td, th { text-align: left; padding: .55rem .5rem; border-bottom: 1px solid #e3e8e2; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
-th { color: var(--text-secondary); font-size: .85rem; }
-td.num, th.num { font-variant-numeric: tabular-nums; }
+/* ---- Account board: one dated balance per tile ---- */
+.owner-tabs { display:flex; flex-wrap:wrap; gap:.35rem; margin:.65rem 0; }
+.owner-tabs a { padding:.3rem .8rem; border-radius:999px; color:var(--text-secondary); text-decoration:none; }
+.owner-tabs a[aria-current] { background:var(--rose-bg); color:var(--accent); font-weight:700; }
+.account-board { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:14px; }
+.lane { border:1px solid var(--border); border-radius:16px; padding:12px; background:#ffffff9e; min-width:0; }
+.lane-head,.tile-top,.account-tile footer { display:flex; justify-content:space-between; align-items:center; gap:.65rem; }
+.lane-head { margin:0 .1rem .7rem; }
+.lane-head h3 { margin:0; font:600 1.2rem Georgia,serif; }
+.lane-head span,.tile-tags span { padding:2px 8px; border-radius:999px; background:var(--pill); color:var(--text-secondary); font-size:.78rem; font-weight:600; }
+.asset .lane-head span { background:var(--sage-bg); color:var(--sage); }
+.debt .lane-head span { background:var(--rose-bg); color:var(--accent); }
+.account-tile,.review-row,.linked-row { box-shadow:0 1px 3px rgb(60 40 30 / 6%); }
+.account-tile { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:.85rem 1rem; overflow-wrap:anywhere; }
+.account-tile + .account-tile { margin-top:.5rem; }
+.tile-top { align-items:flex-start; }
+.tile-top h4 { margin:.12rem 0 0; font-size:1rem; }
+.tile-top a { font-size:.85rem; padding:.3rem; }
+.tile-balance { font:600 clamp(1.35rem,3vw,1.75rem)/1.2 Georgia,serif; font-variant-numeric:tabular-nums; color:var(--sage); margin:.65rem 0 .5rem; }
+.debt .tile-balance { color:var(--accent); }
+.tile-tags { display:flex; flex-wrap:wrap; gap:5px; }
+.tile-tags span:nth-child(2) { background:var(--rose-bg); color:var(--accent); }
+.tile-tags .stale { background:#fbe3e1; color:var(--stale); }
+.account-tile footer { border-top:1px solid var(--border); margin-top:.65rem; padding-top:.4rem; flex-wrap:wrap; color:var(--text-muted); font-size:.8rem; }
+.lane-empty { text-align:center; border:1px dashed var(--border); border-radius:12px; padding:1rem; margin:0; }
 .stale, [role=alert] { color: var(--stale); font-weight: 600; }
 tr:last-child td, tr:last-child th { border-bottom: 0; }
 
@@ -100,6 +118,7 @@ input:not([type=checkbox]):not([type=radio]), select { min-height: var(--tap); }
 :disabled { opacity: .6; }
 
 /* ---- Review list (scannable; not a wall of fieldsets) ---- */
+.review-list,.linked-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr)); gap:.65rem; align-items:start; }
 .review-list { list-style: none; margin: .25rem 0; padding: 0; }
 .review-row {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -178,7 +197,7 @@ pre { overflow-x: auto; }
   .cards { grid-template-columns: 1fr 1fr; gap: .5rem; }
   .card { padding: .6rem; }
   .actions.actionbar { flex-direction: column; align-items: stretch; }
-  table { min-width: 44rem; }
+  .account-board { grid-template-columns:1fr; }
 }
 
 /* Wide + mouse: compact rows still fit >=3 complete collapsed rows; touch keeps 44px. */

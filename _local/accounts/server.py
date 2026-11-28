@@ -119,36 +119,43 @@ def page(content, current=None, heading="Financial accounts"):
 <main>{nav(current)}<header><small>YOUNG &amp; NANAMI · LOCAL PLANNER</small><h1>{escape(heading)}</h1></header>{content}</main></html>"""
 
 
+def account_card(r, amount, stale):
+    name = escape(r["nickname"])
+    date_text = escape(r["asof"])
+    return f"""<article class="account-tile" aria-labelledby="name-{r['id']}">
+<div class="tile-top"><div><small>{escape(r['institution'])}</small><h4 id="name-{r['id']}">{name}</h4></div>
+<a href="/edit/{r['id']}">Edit<span class="sr"> {name}</span></a></div>
+<p class="tile-balance">{amount}</p>
+<div class="tile-tags"><span>{escape(r['kind'])}</span><span>{escape(r['owner'])}</span>
+{'<span class="stale">Stale</span>' if stale else ''}</div>
+<footer><time datetime="{date_text}">As of {date_text}</time><span>{escape(r['update_method'])}</span></footer>
+</article>"""
+
+
 def dashboard(rows, today, view):
-    totals, lines = {}, []
+    totals, lanes = {}, {"asset": [], "debt": []}
     for r in rows:
         c, amt = r["currency"], Decimal(r["balance"])
         group = totals.setdefault(c, {"asset": Decimal(0), "debt": Decimal(0)})
         group[r["side"]] += amt
         stale = (today - date.fromisoformat(r["asof"])).days > 30
-        lines.append(f"""<tr><th scope="row">{escape(r['nickname'])}<small>{escape(r['institution'])}</small></th>
-<td>{escape(r['kind'])}<small>{r['side'].title()}</small></td><td>{money(amt,c)}</td>
-<td>{r['asof']}{'<small class="stale">Stale</small>' if stale else ''}</td>
-<td>{escape(r['owner'])}</td><td>{escape(r['update_method'])}</td>
-<td><a href="/edit/{r['id']}">Edit<span class="sr"> {escape(r['nickname'])}</span></a></td></tr>""")
+        lanes[r["side"]].append(account_card(r, money(amt, c), stale))
     cards = "".join(f"""<section class="card"><small>{c} · NET WORTH</small>
 <strong>{money(t['asset']-t['debt'], c)}</strong>
 <div>Assets: {money(t['asset'], c)} · Debts: {money(t['debt'], c)}</div></section>"""
                     for c, t in sorted(totals.items()))
-    detail = (f"""<div class="table"><table><thead><tr><th>Account</th><th>Type</th>
-<th>Balance</th><th>As of</th><th>Owner</th><th>Update method</th><th></th></tr></thead><tbody>{''.join(lines)}</tbody></table></div>
-<p class="scroll-cue">On narrow screens, scroll the table sideways to read every column; the page itself does not scroll horizontally.</p>
-<p>Balances older than 30 days are marked stale (as-of older than 30 days) and still included; balance dates are the source dates, not last-checked times. Currencies are totaled separately.</p>"""
-              if rows else "<p>No accounts in this view.</p>")
-    links = " · ".join(label if label == view else f'<a href="{url}">{label}</a>'
+    board = "".join(f"""<section class="lane {side}" aria-labelledby="{side}-heading">
+<div class="lane-head"><h3 id="{side}-heading">{title}</h3><span>{len(tiles)}</span></div>
+{''.join(tiles) or f'<p class="lane-empty">No {title.lower()} in this view.</p>'}</section>"""
+                    for side, title, tiles in (("asset", "Assets", lanes["asset"]), ("debt", "Debts", lanes["debt"])))
+    links = "".join(f'<a href="{url}"' + (' aria-current="page"' if label == view else '') + f'>{label}</a>'
                        for label, url in [("Household", "/"), *((p, f"/?view={p}") for p in PEOPLE)])
-    return page(f'<nav aria-label="Inventory views">View: {links}</nav><h2>{view} inventory</h2>'
-                '<p>Household counts every account once, including Unspecified. Each person sees their own '
-                'accounts plus the full joint balances. These views overlap; do not add them together.</p>'
-                '<p>Ownership is a label, not access control. To review or refresh linked accounts, '
-                'use <strong>Batch balances</strong> in the navigation.</p>'
-                f'<div class="cards">{cards}</div><div class="bar"><h2>Accounts</h2>'
-                f'<a class="button" href="/new">Add account</a></div>{detail}'
+    return page(f'<nav class="owner-tabs" aria-label="Inventory views">{links}</nav>'
+                f'<div class="cards">{cards}</div><div class="bar"><h2>{view} accounts</h2>'
+                f'<a class="button" href="/new">+ Add account</a></div><div class="account-board">{board}</div>'
+                '<details class="help"><summary>How totals work</summary><p>Household counts every account once. '
+                'Each person’s view includes their own accounts plus joint accounts. These views overlap; do not add them together. '
+                'Totals are separate by currency. Balances older than 30 days are marked stale and still included.</p></details>'
                 '<p><a href="/servicers">Record a student loan from a statement</a></p>'
                 '<p><a href="/federal-preview">Preview federal My Aid Data</a> · No accounts will change.</p>', current="/")
 

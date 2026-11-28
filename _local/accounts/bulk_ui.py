@@ -65,20 +65,21 @@ def display(server, owners, notices=(), previous=None, select_all=False, error=N
         h += '<ul class="linked-list">'
         for key, l in links_now.items():
             r = rows_now.get(str(l["local"]))
-            detail = (f'{r["institution"]} · {r["nickname"]} · {r["owner"]} · {r["currency"]} '
-                      f'{r["balance"]}' if r else "Removed locally")
             h += '<li class="linked-row"><div class="linked-top">'
             h += (f'<label class="check"><input type="checkbox" name="r{escape(str(l["local"]))}"> '
                   f'<span>Refresh <strong>{escape(r["nickname"]) if r else "removed account"}</strong></span></label>')
-            h += f'<span class="linked-ref">source ref {escape(key[:8])}</span></div>'
+            h += '</div>'
+            if r:
+                h += (f'<small>{escape(r["institution"])}</small><p class="tile-balance">{escape(r["currency"])} '
+                      f'{escape(r["balance"])}</p><div class="tile-tags"><span>{escape(r["side"].title())}</span>'
+                      f'<span>{escape(r["owner"])}</span></div>')
             h += '<div class="linked-meta">'
-            h += f'<span><span class="lbl">Account</span> {escape(detail)}</span>'
             if r:
                 h += f'<span><span class="lbl">Balance as of</span> {escape(r["asof"])}</span>'
             h += (f'<span class="linked-status"><span class="lbl">Last operation</span> '
                   f'{escape(l["status"])}</span>')
             h += f'<span><span class="lbl">Checked (UTC)</span> {escape(l["checked"])}</span>'
-            h += '</div>'
+            h += f'<span class="linked-ref">Source ref {escape(key[:8])}</span></div>'
             if r:
                 h += (f'<a href="/edit/{escape(str(l["local"]))}">Edit {escape(r["nickname"])}'
                       f'<span class="sr"> account #{escape(str(l["local"]))}</span></a>')
