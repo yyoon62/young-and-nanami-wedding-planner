@@ -187,9 +187,10 @@ class Point:
     cumulative_gap: Decimal            # Nominal unfunded spending, NOT new debt.
     pool: Decimal | None = None        # Debts without a rate (blended aggregate); only when a debt plan is used.
     modeled: tuple = ()                # ((account id, balance), ...) of rate-known debts; only with a debt plan.
+    own: tuple = ()                    # ((account id, balance), ...) of own-APY cash/savings accounts (L23).
 
 
-def project(start, assumptions, plan=None):
+def project(start, assumptions, plan=None, assets=()):
     """Accrue first, then apply constant nominal cash flow at each month-end.
 
     Asset growth and inflation use geometric effective rates. Debt uses
@@ -202,6 +203,10 @@ def project(start, assumptions, plan=None):
     planned payments are obligations paid every month (a shortfall draws cash, then savings),
     extra payments come only from positive net savings, and paid-in-full cards are held flat.
     Debts without a plan entry keep the blended path above exactly.
+
+    `assets` are cash/savings accounts WITH their own APY (`asset_inputs.AssetAcct`, rate not None): each grows at
+    its own effective monthly rate; the blended cash/savings pools keep everything else, including new savings.
+    A shortfall draws cash-bucket sources before savings-bucket sources, lowest APY first within a bucket.
     """
     a = assumptions
     with localcontext() as ctx:
@@ -217,9 +222,17 @@ def project(start, assumptions, plan=None):
         cash, hysa, inv, ret, debt, other = (getattr(start, field.name) for field in fields(Balances))
         gap = ZERO
         book = Book(plan, a) if plan is not None else None
+        own = [x for x in assets if x.apy is not None]
+        own_balance = {x.key: x.balance for x in own}
+        own_factor = {x.key: effective_factor(x.apy) for x in own}
+        if own:       # the pools keep what the own-APY accounts do not hold; their sum is still the bucket total
+            cash -= sum((x.balance for x in own if x.bucket == "cash"), ZERO)
+            hysa -= sum((x.balance for x in own if x.bucket == "hysa"), ZERO)
         points = [Point(0, start, start, gap)]
         for month in range(1, a.years * 12 + 1):
             cash, hysa, inv, ret = (amount * factor for amount, factor in zip((cash, hysa, inv, ret), factors))
+            for x in own:
+                own_balance[x.key] *= own_factor[x.key]
             if book is None:
                 debt *= debt_factor
                 remaining = a.surplus
@@ -237,7 +250,7 @@ def project(start, assumptions, plan=None):
                 contribution = min(a.investment_target, remaining)
                 inv += contribution
                 hysa += remaining - contribution
-            else:
+            elif not own:
                 deficit = -remaining
                 from_cash = min(cash, deficit)
                 cash -= from_cash
@@ -245,10 +258,30 @@ def project(start, assumptions, plan=None):
                 from_savings = min(hysa, deficit)
                 hysa -= from_savings
                 gap += deficit - from_savings
+            else:
+                deficit = -remaining
+                for bucket, pool_rate in (("cash", a.checking_apy), ("hysa", a.hysa_apy)):
+                    sources = sorted([(pool_rate, 0, 0)] + [(x.apy, 1, x.key) for x in own if x.bucket == bucket])
+                    for _, is_account, key in sources:
+                        have = own_balance[key] if is_account else (cash if bucket == "cash" else hysa)
+                        take = min(have, deficit)
+                        deficit -= take
+                        if is_account:
+                            own_balance[key] -= take
+                        elif bucket == "cash":
+                            cash -= take
+                        else:
+                            hysa -= take
+                gap += deficit
             amounts = (cash, hysa, inv, ret, debt, other)
+            if own:
+                amounts = (cash + sum((own_balance[x.key] for x in own if x.bucket == "cash"), ZERO),
+                           hysa + sum((own_balance[x.key] for x in own if x.bucket == "hysa"), ZERO),
+                           inv, ret, debt, other)
             balances = Balances(*amounts)
             deflator = inflation_factor ** month
             display = balances if deflator == 1 else Balances(*(value / deflator for value in amounts))
-            points.append(Point(month, balances, display, gap) if book is None else
-                          Point(month, balances, display, gap, book.pool, tuple(book.balance.items())))
+            points.append(Point(month, balances, display, gap) if book is None and not own else
+                          Point(month, balances, display, gap, None if book is None else book.pool,
+                                () if book is None else tuple(book.balance.items()), tuple(own_balance.items())))
     return points

@@ -9,6 +9,7 @@ from dataclasses import replace
 
 from account_terms import VARIABLE_NOTE, load_terms
 from debt_engine import compare_orders, month_add as plan_month_add, run_plan, schedule
+from asset_inputs import asset_rows, make_assets
 from debt_inputs import debt_rows, make_plan
 from observed import observed_payments
 from projections import (
@@ -63,13 +64,13 @@ def projection_get(db_path, target, *, page, token, people, section_for, places,
         currency = currency[0]
         assumptions = load_assumptions(db, view, currency, places(currency))
         suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
-        debts = (debt_rows(db, view, currency), load_terms(db))
+        debts = (debt_rows(db, view, currency), load_terms(db), asset_rows(db, view, currency))
         observed = (observed_payments(db, view, currency, today, [r[0] for r in debts[0]])
                     if suggestions else None)     # transaction-derived: never when hosted
     seed = starting_balances(rows, currency, section_for, today)
     return 200, _page(page, _panel(view, currency, currencies, people, seed, assumptions,
                                   places(currency), token, suggestion=suggestion,
-                                  debts=(*debts, section_for, today), observed=observed)), None
+                                  debts=(debts[0], debts[1], debts[2], section_for, today), observed=observed)), None
 
 
 def projection_post(db_path, data, *, page, token, people, section_for, places, today, suggestions=False):
@@ -92,13 +93,13 @@ def projection_post(db_path, data, *, page, token, people, section_for, places, 
             return 303, "", projection_url(view, currency)
         saved = load_assumptions(db, view, currency, scale)
         suggestion = suggest_monthly(db, view, currency, today) if suggestions else None
-        debts = (debt_rows(db, view, currency), load_terms(db))
+        debts = (debt_rows(db, view, currency), load_terms(db), asset_rows(db, view, currency))
         observed = (observed_payments(db, view, currency, today, [r[0] for r in debts[0]])
                     if suggestions else None)
     seed = starting_balances(rows, currency, section_for, today)
     return 422, _page(page, _panel(view, currency, currencies, people, seed, saved, scale, token,
                                   attempted=data, errors=errors, suggestion=suggestion,
-                                  debts=(*debts, section_for, today), observed=observed)), None
+                                  debts=(debts[0], debts[1], debts[2], section_for, today), observed=observed)), None
 
 
 def _apply_suggestion(db, data, view, currency, scale, today, suggestions, page):
@@ -404,6 +405,44 @@ def _observed_line(obs, plan, money):
     return f'<div class="acct-sub">Observed: {text}{more}</div>'
 
 
+def _asset_section(assets, points, a, currency, money):
+    """Cash and savings accounts: own APY where set, "rate missing" (blended assumption) where not."""
+    if not assets:
+        return ""
+    own = {x.key for x in assets if x.apy is not None}
+    year1 = dict(points[min(12, len(points) - 1)].own)
+    last = dict(points[-1].own)
+    rows = []
+    for x in assets:
+        if x.apy is not None:
+            note = "assumes today’s rate holds" if x.rate_kind == "variable" else "fixed"
+            rate = f'{escape(_pct(x.apy))} APY <div class="acct-sub">{note}</div>'
+            after1, afterN = money(year1[x.key]), money(last[x.key])
+        else:
+            blended = a.hysa_apy if x.bucket == "hysa" else a.checking_apy
+            flag = ('<span class="rate-flag">rate missing</span>' if x.bucket == "hysa" else
+                    '<span class="acct-sub">no rate set</span>')
+            rate = f'{flag}<div class="acct-sub">blended {escape(_pct(blended))} assumed</div>'
+            after1 = afterN = "pooled"
+        stale = ' <span class="stale-pill">Stale</span>' if x.stale else ""
+        rows.append(f'<tr><th scope="row">{escape(x.name)}<div class="acct-sub">{escape(x.institution)}</div></th>'
+                    f'<td class="num" data-label="Balance"><div class="cell">{money(x.balance)}<div class="acct-sub">as of '
+                    f'<time>{escape(x.asof)}</time>{stale}</div></div></td>'
+                    f'<td data-label="Rate"><div class="cell">{rate}</div></td>'
+                    f'<td class="num" data-label="After 1 year">{after1}</td>'
+                    f'<td class="num" data-label="After {a.years} years">{afterN}</td></tr>')
+    pooled = len(assets) - len(own)
+    note = (f'<p class="history-range">Accounts with an APY grow at their own rate. {pooled} without one are pooled at the '
+            'blended assumptions (Advanced); new savings from monthly net savings also earn the blended savings rate. '
+            'A shortfall draws cash first, then savings, lowest APY first.</p>')
+    return ('<section class="history" aria-labelledby="asset-heading"><h2 id="asset-heading">Cash and savings growth</h2>'
+            + note + '<div class="table-wrap stack-table" tabindex="0" role="region" aria-label="Scrollable cash and savings table">'
+            '<table class="acct-table"><thead><tr><th scope="col">Account</th><th scope="col" class="num">Balance</th>'
+            '<th scope="col">Rate</th><th scope="col" class="num">After 1 year</th>'
+            f'<th scope="col" class="num">After {a.years} years</th></tr></thead><tbody>' + "".join(rows)
+            + '</tbody></table></div><p class="history-range">Nominal balances after growth and any withdrawals.</p></section>')
+
+
 def _debt_section(plan, entries, run, a, currency, scale, money, observed=None):
     """Per-debt table, flags and schedules; every number comes from the same `debt_engine` as the chart."""
     if not entries:
@@ -516,10 +555,13 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
     money = lambda value: _money(value, currency, scale)
     plan = entries = run = None
     if debts is not None:
-        rows, terms, section_for, today = debts
+        rows, terms, arows, section_for, today = debts
         plan, entries = make_plan(rows, terms, section_for, scale, today)
         run = run_plan(plan, assumptions)
-    points = project(seed.balances, assumptions, plan)
+        assets = make_assets(arows, terms, section_for, today)
+    else:
+        assets = ()
+    points = project(seed.balances, assumptions, plan, assets)
     extra_metrics = (("unclassified", "Unclassified assets"),) if seed.unclassified_count else ()
     if seed.count:
         date_range = f'<time>{seed.oldest}</time>'
@@ -567,6 +609,7 @@ def _panel(view, currency, currencies, people, seed, assumptions, scale, token, 
         + _annual(points, ANNUAL_METRICS + extra_metrics, money, unit_label)
         + '</section>'
         + debt_section
+        + _asset_section(assets, points, assumptions, currency, money)
         + _form(view, currency, scale, token, attempted if attempted is not None else values, errors or {})
         + '<details><summary>How this projection works</summary>'
           '<p>Start is the sum of included saved balances, even when their dates differ; the scenario does not '
