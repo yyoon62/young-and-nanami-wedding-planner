@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlsplit
 from servicers import servicer_get
 from bridge import Bridge, Problem
 from bulk import Batch, schema
+import sync_status
 from history import install as install_history, net_worth
 import net_worth_ui
 from hosted_guard import Refused, reclaim, require_clean
@@ -316,7 +317,7 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
 
 
 def dashboard(rows, today, view, token, net, has_sync=False, notices=(), error=None,
-              open_edit=None, edit_values=None, use_logos=False):
+              open_edit=None, edit_values=None, use_logos=False, sync_note=""):
     active = [r for r in rows if not r["excluded"]]
     excluded = [r for r in rows if r["excluded"]]
     totals = {}
@@ -334,7 +335,7 @@ def dashboard(rows, today, view, token, net, has_sync=False, notices=(), error=N
         sync_html = (f'<form method="post" action="/sync" class="inline-form">'
                      f'<input type="hidden" name="token" value="{token}">'
                      f'{net_worth_ui.hidden(view)}'
-                     f'<button type="submit" class="button">↻ Sync balances</button></form>')
+                     f'<button type="submit" class="button">↻ Sync balances</button></form>' + sync_note)
     add_cls = "button secondary" if has_sync else "button"
     banner = ""
     if error and not open_edit:
@@ -626,7 +627,8 @@ class Handler(BaseHTTPRequestHandler):
         return status, dashboard(rows, date.today(), scope, self.token, net,
                                  has_sync=bool(self.server.batch), notices=notices, error=error,
                                  open_edit=open_edit, edit_values=edit_values,
-                                 use_logos=bool(self.server.logo_dir)), True
+                                 use_logos=bool(self.server.logo_dir),
+                                 sync_note=sync_status.note(self.server.db) if self.server.batch else ""), True
 
     def projection_rerender(self, view, currency, attempted, errors):
         """A refused assumptions save, shown inside the Projection tab with the attempted values kept."""

@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily SimpleFIN balance sync (the Sync balances button, headless)
+# A failed run is retried a few times (a Wi-Fi blip at the scheduled minute must not cost a day), then left
+# failed so `systemctl --user --failed` and the dashboard's "last synced" note show it.
+StartLimitIntervalSec=3h
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/planner-accounts-venv/bin/python %h/planner/_local/accounts/daily_sync.py --hosted
+Restart=on-failure
+RestartSec=20min
+UMask=0077
+NoNewPrivileges=yes
+TimeoutStartSec=3min

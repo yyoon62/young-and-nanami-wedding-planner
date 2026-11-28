@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily SimpleFIN balance sync
+
+[Timer]
+# Persistent=true: if the Pi was off or rebooting at the scheduled time, the missed run happens at boot.
+OnCalendar=*-*-* 06:30:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
