@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from dataclasses import replace
 
 from account_terms import VARIABLE_NOTE, load_terms
-from debt_engine import month_add as plan_month_add, run_plan, schedule
+from debt_engine import compare_orders, month_add as plan_month_add, run_plan, schedule
 from debt_inputs import debt_rows, make_plan
 from projections import (
     AMOUNTS, MODES, OPTIONAL, PRECISION, RATES, STALE_DAYS, Assumptions, available_currencies,
@@ -343,6 +343,45 @@ def _when(plan, month):
     return month_label(plan_month_add(plan.start_month, month - 1))
 
 
+def _compare(plan, a, money):
+    """Avalanche vs snowball for the extra payment. States both results; claims a winner only on a real difference."""
+    c = compare_orders(plan, a)
+    head = '<h3>Avalanche vs snowball</h3>'
+    if not c.comparable:
+        return f'<div class="compare">{head}<p class="history-range">{escape(c.reason)}</p></div>'
+
+    def payoff_order(run):
+        done = sorted(plan.debts, key=lambda d: (run.outcomes[d.key].payoff_month, d.key))
+        return ", ".join(f"{escape(d.name)} ({escape(_when(plan, run.outcomes[d.key].payoff_month))})" for d in done)
+
+    def row(label, run, note=""):
+        return (f'<tr><th scope="row">{label}</th><td>{escape(_when(plan, run.last_payoff_month))} '
+                f'<span class="acct-sub">(month {run.last_payoff_month})</span></td>'
+                f'<td class="num">{money(run.total_interest)}</td><td>{payoff_order(run)}{note}</td></tr>')
+
+    ava, snow = c.avalanche, c.snowball
+    if c.winner:
+        other = "snowball" if c.winner == "avalanche" else "avalanche"
+        verdict = (f'<p><strong>Lower total interest: {c.winner}, by {money(c.interest_difference)}</strong> '
+                   f'(compared with {other}). Debt-free dates: avalanche {escape(_when(plan, ava.last_payoff_month))}, '
+                   f'snowball {escape(_when(plan, snow.last_payoff_month))}.</p>')
+    elif ava.last_payoff_month == snow.last_payoff_month:
+        verdict = '<p><strong>No difference:</strong> same total interest and the same debt-free date.</p>'
+    else:
+        verdict = (f'<p><strong>Same total interest;</strong> the debt-free dates differ (avalanche '
+                   f'{escape(_when(plan, ava.last_payoff_month))}, snowball {escape(_when(plan, snow.last_payoff_month))}).</p>')
+    return (f'<div class="compare">{head}'
+            f'<p class="history-range">Extra payment {money(ava.extra)} a month on top of planned payments, same in both '
+            'orders. Avalanche: highest current rate first (re-picked each month, so a promo ending changes the target); '
+            'snowball: smallest balance first. A paid-off debt’s planned payment rolls over. Neither order is assumed to '
+            'win: both are computed.</p>'
+            '<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable payoff order comparison">'
+            '<table class="acct-table"><thead><tr><th scope="col">Order</th><th scope="col">Debt-free</th>'
+            '<th scope="col" class="num">Total interest</th><th scope="col">Payoff order</th></tr></thead><tbody>'
+            + row("Avalanche", ava) + row("Snowball", snow)
+            + row("Planned payments only (no extra)", c.planned_only) + '</tbody></table></div>' + verdict + '</div>')
+
+
 def _debt_section(plan, entries, run, a, currency, scale, money):
     """Per-debt table, flags and schedules; every number comes from the same `debt_engine` as the chart."""
     if not entries:
@@ -441,7 +480,7 @@ def _debt_section(plan, entries, run, a, currency, scale, money):
             '<th scope="col" class="num">Total interest</th><th scope="col" class="num">Interest this month</th>'
             '<th scope="col">Notes</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>'
             f'<p>Current monthly interest cost of these debts: <strong>{money(interest_now)}</strong> '
-            '(at today’s rates, before payments).</p>' + extra + "".join(details))
+            '(at today’s rates, before payments).</p>' + extra + _compare(plan, a, money) + "".join(details))
     parts.append('</section>')
     return "".join(parts)
 

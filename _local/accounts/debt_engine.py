@@ -242,3 +242,37 @@ def run_plan(plan, assumptions, order="avalanche", cap=CAP, extra=None, with_poo
     run.last_payoff_month = max(done) if done and None not in done else None
     run.total_interest = sum((o.total_interest for o in run.outcomes.values()), ZERO)
     return run
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """Avalanche vs snowball for the same extra payment; `reason` is set (and runs are None) when withheld."""
+    reason: str = ""
+    avalanche: PlanRun | None = None
+    snowball: PlanRun | None = None
+    planned_only: PlanRun | None = None
+    winner: str = ""                   # "avalanche" | "snowball" | "" (no claim)
+    interest_difference: Decimal = ZERO
+    comparable: bool = False
+
+
+def compare_orders(plan, assumptions):
+    """Same debts, same budget, two orders. Never claims a winner unless total interest differs."""
+    if len(plan.debts) < 2:
+        return Comparison("Needs two or more debts with a rate.")
+    if plan.pool > 0:
+        return Comparison(f"Withheld: {len(plan.pool_names)} debt(s) have no rate, so the comparison would rest on a guess.")
+    extra = extra_payment(plan, assumptions)
+    if extra <= 0:
+        return Comparison("No extra payment: your monthly debt payment target does not exceed the planned payments "
+                          "(or net savings leave nothing extra).")
+    avalanche = run_plan(plan, assumptions, "avalanche", extra=extra, with_pool=False)
+    snowball = run_plan(plan, assumptions, "snowball", extra=extra, with_pool=False)
+    base = run_plan(plan, assumptions, "avalanche", extra=ZERO, with_pool=False)
+    done = all(o.payoff_month is not None for r in (avalanche, snowball) for o in r.outcomes.values())
+    if not done:
+        return Comparison("Not comparable: a debt is not paid off within 40 years under one of the orders.",
+                          avalanche, snowball, base)
+    diff = snowball.total_interest - avalanche.total_interest
+    winner = "avalanche" if diff > 0 else "snowball" if diff < 0 else ""
+    return Comparison("", avalanche, snowball, base, winner, abs(diff), True)
