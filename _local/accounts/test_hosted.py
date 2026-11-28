@@ -651,3 +651,32 @@ class HostedProjections(unittest.TestCase):
         self.assertEqual(self.post(self.a, token, currency="EUR")[0], 422)
         self.assertEqual(self.saved(), before)
 
+
+class DeployUnits(unittest.TestCase):
+    """Static checks on the shipped systemd units (they cannot be run on the build host)."""
+    DEPLOY = Path(__file__).resolve().parent / "deploy"
+
+    def exec_start(self, name):
+        text = (self.DEPLOY / name).read_text()
+        lines = [line for line in text.splitlines() if line.startswith("ExecStart=")]
+        self.assertEqual(len(lines), 1, name)
+        return lines[0]
+
+    def test_dashboard_unit_is_hosted_loopback_and_never_ships_bridge(self):
+        line = self.exec_start("accounts-dashboard.service")
+        for required in ("--port 8765", "--hosted", "--hosted-env %h/.config/planner-accounts/hosted.env",
+                         "%h/.local/share/planner-accounts-venv/bin/python"):
+            self.assertIn(required, line)
+        # Bridge is enabled only by a drop-in at the Bridge-enrolment step (see the runbook): without
+        # bridge.access the process exits and systemd would restart it every 10 seconds.
+        self.assertNotIn("--bridge", line)
+        self.assertNotIn("--db", line)
+        text = (self.DEPLOY / "accounts-dashboard.service").read_text()
+        self.assertIn("UMask=0077", text)
+        self.assertIn("WantedBy=default.target", text)
+
+    def test_backup_unit_uses_stdlib_python_and_a_private_umask(self):
+        line = self.exec_start("accounts-backup.service")
+        self.assertIn("backup-sqlite.sh backup", line)
+        self.assertNotIn("--db", line)
+        self.assertIn("UMask=0077", (self.DEPLOY / "accounts-backup.service").read_text())
