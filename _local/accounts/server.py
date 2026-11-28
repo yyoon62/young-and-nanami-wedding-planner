@@ -16,7 +16,8 @@ from urllib.parse import parse_qs, urlsplit
 from servicers import servicer_get
 from bridge import Bridge, Problem
 from bulk import Batch, schema
-from history import history_panel, install as install_history, net_worth
+from history import install as install_history, net_worth
+import net_worth_ui
 from hosted_auth import (Auth, Config, Rejected, CHALLENGE_TTL, SESSION_TTL, db_path, external,
                          load_env_file, offline_lock, private, require_crypto)
 from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo, sanitize_domain
@@ -312,8 +313,8 @@ def account_row(r, today, token, view, excluded=False, open_edit=None, edit_valu
             f'</tr>{drawer}')
 
 
-def dashboard(rows, today, view, token, timeline, has_sync=False, notices=(), error=None,
-              open_edit=None, edit_values=None, use_logos=False, has_backdated=False):
+def dashboard(rows, today, view, token, net, has_sync=False, notices=(), error=None,
+              open_edit=None, edit_values=None, use_logos=False):
     active = [r for r in rows if not r["excluded"]]
     excluded = [r for r in rows if r["excluded"]]
     totals = {}
@@ -326,9 +327,6 @@ def dashboard(rows, today, view, token, timeline, has_sync=False, notices=(), er
         f'<strong>{money(t["asset"] - t["debt"], c)}</strong>'
         f'<div>Assets: {money(t["asset"], c)} · Debts: {money(t["debt"], c)}</div></section>'
         for c, t in sorted(totals.items()))
-    links = "".join(
-        f'<a href="{url}"' + (' aria-current="page"' if label == view else '') + f'>{label}</a>'
-        for label, url in [("Household", "/"), *((p, f"/?view={p}") for p in PEOPLE)])
     sync_html = ""
     if has_sync:
         sync_html = (f'<form method="post" action="/sync" class="inline-form">'
@@ -382,10 +380,10 @@ def dashboard(rows, today, view, token, timeline, has_sync=False, notices=(), er
 
     return page(
         f'{banner}<datalist id="types">{choices}</datalist>'
-        f'<div class="top-bar"><nav class="owner-tabs" aria-label="Inventory views">{links}</nav>'
+        f'<div class="top-bar"><nav class="owner-tabs" aria-label="Inventory views">{net.links}</nav>'
         f'<div class="top-actions">{sync_html}<a class="{add_cls}" href="/new">+ Add account</a></div></div>'
         f'<div class="cards">{cards}</div>'
-        f'{history_panel(timeline, money, has_backdated=has_backdated)}'
+        f'{net.html}'
         f'{table}{excluded_html}'
         f'<details class="help"><summary>How totals work</summary><p>Household counts every active account once. '
         f'Click Young, Nanami, or both on any row to assign ownership (selecting both marks it joint; individual views '
@@ -594,6 +592,8 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("Host") in {f"127.0.0.1:{port}", f"localhost:{port}"}
 
     def render_home(self, view, notices=(), error=None, status=200, open_edit=None, edit_values=None):
+        scope = view if isinstance(view, net_worth_ui.Scope) else net_worth_ui.Scope(view)
+        view = str(scope)
         owner_scope = "(? = 'Household' OR owner IN (?, 'Joint'))"
         with closing(sqlite3.connect(self.server.db)) as db:
             db.row_factory = sqlite3.Row
@@ -607,11 +607,15 @@ class Handler(BaseHTTPRequestHandler):
                                    FROM balance_history AS h JOIN accounts AS a ON a.id = h.account_id
                                    WHERE a.excluded = 0 AND {owner_scope} ORDER BY h.asof, h.account_id""",
                                 (view, view)).fetchall()
-        has_backdated = any(p["asof"] > p["current_asof"] for p in points)
-        return self.send(status, dashboard(rows, date.today(), view, self.token, net_worth(points),
+            try:
+                net = net_worth_ui.build(db, scope, PEOPLE, timeline=net_worth(points), money=money,
+                                         has_backdated=any(p["asof"] > p["current_asof"] for p in points))
+            except ValueError as exc:
+                return self.send(400, str(exc))
+        return self.send(status, dashboard(rows, date.today(), scope, self.token, net,
                                            has_sync=bool(self.server.batch), notices=notices, error=error,
                                            open_edit=open_edit, edit_values=edit_values,
-                                           use_logos=bool(self.server.logo_dir), has_backdated=has_backdated),
+                                           use_logos=bool(self.server.logo_dir)),
                          scripts=True)
 
     def do_GET(self):
@@ -690,11 +694,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, form({"currency": "USD", "asof": str(date.today()), "owner": "Unspecified",
                                         "update_method": DEFAULT_METHOD}, path, self.token))
         if path == "/":
-            view = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("view", ["Household"])
-            if len(view) != 1 or view[0] not in ("Household", *PEOPLE):
-                return self.send(400, "Unknown inventory view.")
+            try:
+                scope = net_worth_ui.parse(urlsplit(self.path).query, PEOPLE)
+            except ValueError as exc:
+                return self.send(400, str(exc))
             notices, self.server.notices = self.server.notices, []
-            return self.render_home(view[0], notices=notices)
+            return self.render_home(scope, notices=notices)
         with closing(sqlite3.connect(self.server.db)) as db:
             db.row_factory = sqlite3.Row
             match = re.fullmatch(r"/(edit|remove)/([1-9][0-9]{0,17})", path)
