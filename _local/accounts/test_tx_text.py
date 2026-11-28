@@ -187,7 +187,9 @@ class Rows(Fixture, unittest.TestCase):
         self.assertEqual(plain.count('class="sec-chip tx-edit"'), len(rows))
         one = self.html("month=2026-12&view=Household&edit=%d" % rows[0]["row_id"])
         self.assertEqual(one.count("<details class=\"inline-pop tx-drawer\" open>"), 1)
-        self.assertEqual(one.count('class="sec-chip tx-edit"'), len(rows) - 1)
+        self.assertEqual(one.count(">Edit</a>"), len(rows) - 1)
+        self.assertEqual(one.count(">Close</a>"), 1)                                       # the open row offers Close
+        self.assertEqual(one.count('<tr class="tx-drawer-row"><td colspan="6">'), 1)       # the drawer is a row below its row
         self.assertIn(f'href="/transactions?month=2026-12&amp;view=Household#tx-{rows[0]["row_id"]}">Cancel</a>', one)
         self.assertRegex(plain, r'href="/transactions\?month=2026-12&amp;view=Household&amp;edit=\d+#tx-\d+">Edit</a>')
         self.assertEqual(self.html("month=2026-12&edit=abc").count("tx-drawer"), 0)          # a junk id is ignored

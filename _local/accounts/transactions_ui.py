@@ -425,8 +425,13 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
                 if r["flow"].startswith(_SHOWN_FLOWS) else "")
         shown = f'<span class="tx-cat" title="{escape(tip)}">{label_cell}</span>' if label_cell else ""
         badge = _BADGE if r["category_source"] == "suggested" else ""
+        drawer_row = ""
         if open_row == r["row_id"]:
-            edit = _drawer(r, f, token, categories, manual, attempt, error)
+            # The drawer opens in a row of its own below this one (like the Accounts drawer): the one-line row stays intact.
+            edit = (f'<a class="sec-chip tx-edit" title="Close the editor" '
+                    f'href="{escape(_short_location(f))}#tx-{r["row_id"]}">Close</a>')
+            drawer_row = (f'<tr class="tx-drawer-row"><td colspan="6">'
+                          f'{_drawer(r, f, token, categories, manual, attempt, error)}</td></tr>')
         else:
             edit = (f'<a class="sec-chip tx-edit" rel="nofollow" title="Edit this transaction" '
                     f'href="{escape(_edit_href(f, r["row_id"]))}">Edit</a>')
@@ -440,7 +445,7 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
             + _owner_cell(r) +
             f'<td class="cat-cell">{shown}{badge}{flow}{marker}</td>'
             f'<td class="num"><span class="cur">{escape(r["currency"])}</span> {_amount(r)}</td>'
-            f'<td class="act-cell">{edit}</td></tr>')
+            f'<td class="act-cell">{edit}</td></tr>{drawer_row}')
     shared = (f'<form id="tx-act" method="post" action="{EDIT}" hidden>' + _hidden(f, token=token) + '</form>')
     table = (
         shared + '<div class="table-wrap"><table class="acct-table tx-table tx-compact"><thead><tr><th>Date</th>'

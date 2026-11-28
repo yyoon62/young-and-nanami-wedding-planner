@@ -79,11 +79,14 @@ class BrowserTx(unittest.TestCase):
                 maple.get_by_role("link", name="Edit").click()           # the drawer opens in place, same filters and row
             self.assertTrue(page.url.endswith("#" + maple.get_attribute("id")), page.url)
             maple = page.locator("tr.acct-row", has_text="MAPLE CAFE")
+            drawer = page.locator("tr.tx-drawer-row")                             # the drawer is the row right below it
             self.assertEqual(page.locator("details.tx-drawer").count(), 1)       # only this row carries a drawer
-            maple.locator("select[name=category]").select_option("Groceries")
-            maple.locator("input[name=apply]").check()
+            self.assertGreater(drawer.bounding_box()["y"], maple.bounding_box()["y"])
+            self.assertLessEqual(maple.bounding_box()["height"], 40)             # the one-line row stays one line
+            drawer.locator("select[name=category]").select_option("Groceries")
+            drawer.locator("input[name=apply]").check()
             with page.expect_navigation():
-                maple.get_by_role("button", name="Save", exact=True).click()
+                drawer.get_by_role("button", name="Save", exact=True).click()
             expect(page.locator("tr.acct-row", has_text="MAPLE CAFE")).to_contain_text("Groceries")
             self.assertEqual(self.rules(), [("sq *maple cafe 04/12 #1234", "Groceries", "maple cafe")])
             page.goto(origin + "/transactions?month=2026-10")      # a different month: same rule, via the cleaned key
@@ -92,12 +95,12 @@ class BrowserTx(unittest.TestCase):
             maple = page.locator("tr.acct-row", has_text="MAPLE CAFE")
             with page.expect_navigation():
                 maple.get_by_role("link", name="Edit").click()
-            maple = page.locator("tr.acct-row", has_text="MAPLE CAFE")
-            maple.locator("input[name=new_category]").fill("groceries")        # duplicate: rejected, drawer kept open
+            drawer = page.locator("tr.tx-drawer-row")
+            drawer.locator("input[name=new_category]").fill("groceries")        # duplicate: rejected, drawer kept open
             with page.expect_response(lambda r: r.request.method == "POST") as response:
-                maple.get_by_role("button", name="Add category").click()
+                drawer.get_by_role("button", name="Add category").click()
             self.assertEqual(response.value.status, 422)
-            expect(page.locator("tr.acct-row", has_text="MAPLE CAFE").locator("details[open]")).to_have_count(1)
+            expect(page.locator("tr.tx-drawer-row details[open]")).to_have_count(1)
             expect(page.locator("[role=alert]").first).to_contain_text("already exists")
 
     def test_filters_apply_without_a_button_and_category_click_filters_and_clears(self):

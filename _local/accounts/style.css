@@ -479,19 +479,27 @@ details.advanced[open] > summary { margin-bottom: .5rem; }
 .tx-table.tx-compact .tx-drawer { white-space: normal; }
 .tx-table.tx-compact .tx-ovr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .tx-table.tx-compact .tx-reset { color: var(--accent-strong); font-weight: 700; }
+.tx-table.tx-compact tr.tx-drawer-row > td { white-space: normal; padding: .35rem .8rem .7rem; background: #fcf9f5; border-bottom: 1px solid #f0e8df; }
+.tx-drawer-row .tx-drawer { display: block; }
+.tx-table.tx-compact .tx-drawer-row .tx-drawer > summary { display: none; }
+.tx-drawer-row .tx-form { margin: 0; min-width: 0; max-width: 52rem; }
 @media (max-width: 40rem) {
-  /* Phone: a two-line card. Line 1 merchant + amount; line 2 date, pills, category, Edit (wraps if needed). */
+  /* Phone: a two-line card. Line 1 date, emoji + merchant, amount; line 2 owner pills, category, Edit. The account
+     nickname is in the tooltip (and the institution monogram stays); there is no room for it on a phone. */
   .tx-table.tx-compact tr.acct-row { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; padding: .5rem .6rem; }
   .tx-table.tx-compact tr.acct-row > th, .tx-table.tx-compact tr.acct-row > td { display: block; padding: 0; border: 0; white-space: normal; }
-  .tx-table.tx-compact tr.acct-row > th.acct-cell { order: 1; flex: 1 1 0; width: auto; max-width: none; min-width: 0; }
-  .tx-table.tx-compact tr.acct-row > td.num { order: 2; flex: none; }
-  .tx-table.tx-compact tr.acct-row > td.date-cell { order: 3; display: block; }
+  .tx-table.tx-compact tr.acct-row > td.date-cell { order: 1; flex: none; font-size: .78rem; }
+  .tx-table.tx-compact tr.acct-row > th.acct-cell { order: 2; flex: 1 1 calc(100% - 13.5rem); width: auto; max-width: none; min-width: 0; }
+  .tx-table.tx-compact tr.acct-row > td.num { order: 3; flex: none; }
   .tx-table.tx-compact tr.acct-row > td.owner-cell { order: 4; }
   .tx-table.tx-compact tr.acct-row > td.cat-cell { order: 5; flex: 1 1 auto; min-width: 0; }
   .tx-table.tx-compact tr.acct-row > td.act-cell { order: 6; }
-  .tx-table.tx-compact .acct-info { flex-wrap: wrap; }
+  .tx-table.tx-compact .tx-acct { display: none; }
+  .tx-table.tx-compact .acct-info { flex-wrap: nowrap; }
   .tx-table.tx-compact .acct-name { white-space: nowrap; max-width: 100%; }
   .tx-table.tx-compact .tx-ovr { position: static; width: auto; height: auto; clip-path: none; }
+  .tx-table.tx-compact tr.tx-drawer-row { display: block; }
+  .tx-table.tx-compact tr.tx-drawer-row > td { display: block; }
 }
 /* ==== L26 end ==== */
 
