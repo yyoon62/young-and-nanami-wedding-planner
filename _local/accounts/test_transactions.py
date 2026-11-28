@@ -118,7 +118,8 @@ class TransactionsTest(unittest.TestCase):
         self.add("Yen checking", tx("local", "2026-11-09", "-40", "Credit card payment"))
         self.accounts["Provider-only account"] = self.accounts["Joint checking"] | {"id": "unlinked"}
         self.assertEqual(self.sync().windows, 5)
-        self.assertTrue(all(left[1] == right[0] for left, right in zip(self.calls, self.calls[1:])))
+        self.assertTrue(all(left[1] - OVERLAP == right[0] < left[1] < right[1]
+                            for left, right in zip(self.calls, self.calls[1:])))
         self.assertEqual(self.calls[-1][1], NOW)
         self.assertEqual(self.db.execute("SELECT count(*) FROM accounts").fetchone()[0], 4)
         for view in VIEWS:
@@ -193,7 +194,7 @@ class TransactionsTest(unittest.TestCase):
             self.sync()
         first, second = self.calls
         self.assertEqual(first[0], epoch("2025-12-15"))
-        self.assertEqual(first[1], second[0])
+        self.assertEqual(first[1] - OVERLAP, second[0])
         self.assertEqual({r[0] for r in self.db.execute("SELECT end_at FROM transaction_coverage")}, {first[1]})
         self.assertEqual(self.db.execute("SELECT count(*) FROM account_transactions").fetchone()[0], 1)
         self.alter = lambda data: data | {"accounts": data["accounts"][:1]}
@@ -235,6 +236,21 @@ class TransactionsTest(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.db.execute("SELECT count(*) FROM accounts").fetchone()[0], 2)
         self.assertEqual(self.db.execute("SELECT count(*) FROM transaction_coverage").fetchone()[0], 0)
+
+    def test_overlap_catches_correction_near_first_pagination_boundary(self):
+        self.account("Bank")
+        corrected = tx("boundary", "2026-03-14", "-1", "Boundary purchase")
+        self.add("Bank", corrected)
+
+        def respond(data):
+            if len(self.calls) == 1:
+                self.accounts["Bank"]["transactions"] = [corrected | {"amount": "-1.25"}]
+            return data
+
+        self.alter = respond
+        self.assertTrue(self.sync().caught_up)
+        self.assertEqual(self.snap("2026-03").totals["USD"].spending, Decimal("1.25"))
+        self.assertEqual(len(self.snap("2026-03").rows), 1)
 
     def test_fail_closed_on_bad_response_and_no_provider_text_in_errors(self):
         self.account("Bank")
@@ -367,6 +383,120 @@ class TransactionsTest(unittest.TestCase):
         self.assertTrue(self.post(path=SYNC, include_pending="1").include_pending)
         location = self.post(row, action="transfer", transfer="yes", q="x&view=Nanami").location
         self.assertEqual(parse_qs(urlsplit(location).query)["view"], ["Household"])
+
+    def test_category_breakdown_agrees_with_totals_and_ignores_list_filters(self):
+        self.account("Joint bank", owner="Joint")
+        self.account("Joint card", "Credit card", owner="Joint")
+        self.account("Personal", owner="Nanami")
+        self.account("Yen", owner="Young", currency="JPY")
+        self.account("Excluded", excluded=True)
+        self.add("Joint bank", tx("groceries", "2026-12-12", "-40.0001", "Grocery"),
+                 tx("uncategorized", "2026-12-13", "-2.003", "Other"),
+                 tx("payment", "2026-12-10", "-100", "Credit card payment"),
+                 tx("pending", None, "-200", "Pending debit", pending=True))
+        self.add("Joint card", tx("p", "2026-12-11", "100.00", "Payment thank you"))
+        self.add("Personal", tx("private", "2026-12-12", "-9", "Personal debit"))
+        self.add("Yen", tx("fx", "2026-12-12", "-300", "Yen debit"))
+        self.add("Excluded", tx("excluded", "2026-12-12", "-90", "Excluded debit"))
+        self.sync(include_pending=True)
+        self.post(self.row("Grocery", "2026-12")["row_id"], month="2026-12",
+                  action="category", category="Food")
+        for view in VIEWS:
+            totals = self.snap("2026-12", view, show_pending=True).totals
+            expected = {"Food": Decimal("40.0001"), "Uncategorized": Decimal(
+                "2.003" if view == "Young" else "11.003")}
+            self.assertEqual(totals["USD"].category_spending, expected)
+            if view != "Nanami":
+                self.assertEqual(totals["JPY"].category_spending, {"Uncategorized": Decimal("300")})
+            for total in totals.values():
+                self.assertEqual(sum(total.category_spending.values()), total.spending)
+        rendered = render_transactions(self.db, "month=2026-12&currency=JPY&q=no-such-list-row",
+                                       token=TOKEN, allowed_views={"Young"})
+        for shown in ("Spending by category", "Uncategorized", "Food", "42.0031", "300", "Income / credits",
+                      "includes refunds", "Net saved estimate", "not measured savings", "partial coverage",
+                      "No transactions match"):
+            self.assertIn(shown, rendered)
+        self.assertIn('<option value="Young" selected>', rendered)
+        self.assertNotIn('value="Household"', rendered)
+        with self.assertRaises(RouteProblem) as caught:
+            render_transactions(self.db, "view=Household", token=TOKEN, allowed_views={"Young"})
+        self.assertEqual(caught.exception.status, 403)
+
+    def test_merchant_transfer_rule_three_states_precedence_and_replay(self):
+        self.account("Bank")
+        self.account("Card", "Credit card")
+        self.add("Bank", tx("p", "2026-12-12", "-30", "Credit card payment", payee="Local merchant"),
+                 tx("m", "2026-12-12", "-9", "Manual non-transfer", payee="LOCAL  MERCHANT"),
+                 tx("t", "2026-12-12", "-2", "Manual transfer", payee="local merchant"))
+        self.add("Card", tx("credit", "2026-12-12", "30", "Payment thank you"),
+                 tx("unrelated", "2026-12-12", "-4", "Different account", payee="Local merchant"))
+        self.sync()
+
+        def edit(desc, **fields):
+            return self.post(self.row(desc, "2026-12")["row_id"], month="2026-12", **fields)
+
+        self.assertTrue(self.row("Credit card payment", "2026-12")["effective_transfer"])
+        edit("Manual non-transfer", action="transfer", transfer="no")
+        edit("Manual non-transfer", action="category", category="")
+        edit("Manual transfer", action="transfer", transfer="yes")
+        self.assertEqual(self.db.execute("SELECT count(*) FROM transaction_merchant_rules").fetchone()[0], 0)
+        edit("Credit card payment", action="rule", category="Test category")
+        self.assertIsNone(self.row("Credit card payment", "2026-12")["merchant_transfer"])
+        edit("Credit card payment", action="transfer_rule", merchant_transfer="yes")
+        self.assertEqual(self.row("Credit card payment", "2026-12")["flow"], "Transfer (merchant rule)")
+        self.assertFalse(self.row("Different account", "2026-12")["effective_transfer"])
+        self.add("Bank", tx("future", "2026-12-14", "-5", "New eligible", payee="local merchant"))
+        self.accounts["Bank"]["transactions"][1]["amount"] = "-9.1"
+        self.sync()
+        self.assertTrue(self.row("New eligible", "2026-12")["effective_transfer"])
+        self.assertEqual(self.row("New eligible", "2026-12")["category"], "Test category")
+        self.assertEqual(self.row("Manual non-transfer", "2026-12")["category"], "")
+        self.assertEqual(self.row("Manual non-transfer", "2026-12")["flow"], "Cash flow (manual)")
+        self.assertEqual(self.row("Manual non-transfer", "2026-12")["amount"], "-9.1")
+        edit("Credit card payment", action="transfer_rule", merchant_transfer="no")
+        self.assertEqual(self.row("Credit card payment", "2026-12")["flow"], "Cash flow (merchant rule)")
+        self.assertTrue(self.row("Manual transfer", "2026-12")["effective_transfer"])
+        rendered = render_transactions(self.db, "month=2026-12", token=TOKEN, allowed_views=VIEWS)
+        self.assertIn('value="transfer_rule"', rendered)
+        self.assertIn('<option value="no" selected>Not a transfer</option>', rendered)
+        self.assertIn("Cash flow (merchant rule)", rendered)
+        edit("Credit card payment", action="transfer_rule", merchant_transfer="none")
+        self.assertEqual(self.row("Credit card payment", "2026-12")["flow"], "Matched transfer")
+        self.assertEqual(self.row("New eligible", "2026-12")["category"], "Test category")
+
+    def test_internal_suggestions_mutual_unique_and_do_not_leak_other_view(self):
+        self.account("Joint bank", owner="Joint")
+        self.account("Private savings", "Savings", owner="Nanami")
+        self.account("Young savings", "Savings")
+        self.account("Yen", "Savings", currency="JPY")
+        self.add("Joint bank", tx("x", "2026-11-12", "-40.00", "Online transfer to savings"),
+                 tx("independent", "2026-11-12", "40", "Payroll deposit"),
+                 tx("same-account", "2026-11-12", "40", "Transfer from checking"),
+                 tx("ambiguous", "2026-11-12", "-17", "Bank transfer out"))
+        self.add("Private savings", tx("x", "2026-11-15", "40", "Transfer from checking"),
+                 tx("refund", "2026-11-12", "40", "Store refund"),
+                 tx("amb1", "2026-11-13", "17", "Transfer in"))
+        self.add("Young savings", tx("amb2", "2026-11-13", "17", "Transfer in"))
+        self.add("Yen", tx("fx", "2026-11-13", "40", "Transfer in"))
+        self.sync()
+        household = self.snap()
+        self.assertEqual({r["nickname"] for r in household.rows if r["suggested_transfer"]},
+                         {"Joint bank", "Private savings"})
+        self.assertEqual(sum(r["suggested_transfer"] for r in household.rows), 2)
+        self.assertFalse(any(r["effective_transfer"] for r in household.rows))
+        self.assertEqual((household.totals["USD"].spending, household.totals["USD"].credits), (57, 194))
+        self.assertFalse(self.row("Online transfer to savings", view="Young")["suggested_transfer"])
+        self.assertTrue(self.row("Online transfer to savings", view="Nanami")["suggested_transfer"])
+        for view, allowed, should_show in [("Young", {"Young"}, False), ("Household", VIEWS, True)]:
+            query = urlencode(dict(month="2026-11", view=view, q="Online transfer to savings"))
+            rendered = render_transactions(self.db, query, token=TOKEN,
+                                           allowed_views=allowed)
+            self.assertEqual("Possible internal transfer" in rendered, should_show)
+            self.assertEqual("Private savings" in rendered, should_show)
+        for r in household.rows:
+            if r["suggested_transfer"]:
+                self.post(r["row_id"], action="transfer", transfer="yes")
+        self.assertEqual((self.snap().totals["USD"].spending, self.snap().totals["USD"].credits), (17, 154))
 
 
 if __name__ == "__main__":

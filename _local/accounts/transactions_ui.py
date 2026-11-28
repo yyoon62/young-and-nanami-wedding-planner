@@ -2,7 +2,8 @@
 
 Parent MUST authenticate/authorize all three routes, pass a trusted allowed_views
 set and session token, and retain Host/Origin, CSP, no-store and request-size
-guards. Owner tabs alone are not authorization. For POST require exact path (no
+guards. Owner tabs are not account ACLs; do not enable this in hosted mode
+without real per-account authorization. For POST require exact path (no
 query), application/x-www-form-urlencoded and strictly bounded raw bytes. Do not
 use the baseline dict of first form values; duplicates must be rejected.
 """
@@ -43,7 +44,7 @@ def _params(raw, keys):
 
 
 def _filters(data, allowed_views, default_month):
-    view = data.get("view", "Household")
+    view = data.get("view", next((v for v in VIEWS if v in allowed_views), "Household"))
     if view not in VIEWS:
         raise RouteProblem(400, "Unknown account view.")
     if view not in allowed_views:
@@ -119,15 +120,21 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
     for currency, t in sorted(snap.totals.items()):
         qualifier = ("" if all(r["covered"] for r in snap.coverage if r["currency"] == currency)
                      else " · partial coverage")
+        buckets = "".join(f'<tr><th scope="row">{escape(name)}</th><td>{amount:f}</td></tr>'
+                          for name, amount in sorted(t.category_spending.items(), key=lambda item: item[0].casefold()))
+        breakdown = ('<table class="history-table"><caption>Spending by category</caption>'
+                     f'<tbody>{buckets}</tbody></table>' if buckets else '<div>No posted spending reported.</div>')
         totals.append(f'<article class="card"><small>{escape(currency)}{qualifier}</small>'
-                      f'<strong>{t.net:f}</strong><div>Signed net cash flow</div>'
-                      f'<div>Credits {t.credits:f} · Spending {t.spending:f}</div>'
+                      f'<strong>{t.net:f}</strong><div>Net saved estimate · signed cash flow</div>'
+                      f'<div>Income / credits {t.credits:f} · Spending {t.spending:f}</div>'
                       + (f'<div>Card credits under review: {t.review:f}</div>' if t.review else "")
-                      + '</article>')
+                      + breakdown + '</article>')
     if not totals:
         summary = "<p>No posted data with sufficient coverage to report a zero.</p>"
     else:
-        summary = '<div class="cards">' + "".join(totals) + "</div>"
+        summary = ('<div class="cards">' + "".join(totals) + "</div>"
+                   '<p>Income / credits includes refunds; it is not verified income. '
+                   'The net saved estimate is signed cash flow, not measured savings.</p>')
     if not any(not r["pending"] for r in snap.rows) and totals:
         summary += "<p>No posted transactions reported for this month in this view.</p>"
 
@@ -142,27 +149,40 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
         category = escape(r["category"])
         transfer = ("yes" if r["is_transfer"] else "no") if r["transfer_manual"] else "auto"
         choices = "".join(_option(value, label, transfer) for value, label in
-                          (("auto", "Automatic"), ("yes", "Transfer"), ("no", "Not a transfer")))
-        rule = ('<button class="button secondary" name="action" value="rule">Save merchant rule</button>'
-                if not r["pending"] and r["merchant"] else "")
+                          (("auto", "Use merchant rule or automatic"), ("yes", "Transfer"), ("no", "Not a transfer")))
+        rules = ""
+        if not r["pending"] and r["merchant"]:
+            rule_choice = {None: "none", 1: "yes", 0: "no"}[r["merchant_transfer"]]
+            rule_choices = "".join(_option(value, label, rule_choice) for value, label in
+                                   (("none", "No rule"), ("yes", "Transfer"), ("no", "Not a transfer")))
+            rules = ('<fieldset><legend>Merchant rules · this account and currency</legend>'
+                     '<button class="button secondary" name="action" value="rule">'
+                     'Use the category above for this merchant</button>'
+                     '<label>Merchant transfer rule<select name="merchant_transfer">'
+                     + rule_choices + '</select></label>'
+                     '<button class="button secondary" name="action" value="transfer_rule">'
+                     'Save merchant transfer rule</button></fieldset>')
         edit = (
             f'<details class="inline-pop"><summary class="sec-chip">Edit</summary>'
             f'<form method="post" action="{EDIT}" class="drawer-form">'
             + _hidden(f, token=token, row=r["row_id"])
             + f'<label>Category<input name="category" maxlength="48" value="{category}"></label>'
             '<button name="action" value="category">Save category</button>'
-            + rule + f'<label>Transfer<select name="transfer">{choices}</select></label>'
-            '<button name="action" value="transfer">Save transfer</button></form></details>')
+            f'<label>Transfer<select name="transfer">{choices}</select></label>'
+            '<button name="action" value="transfer">Save transfer</button>'
+            + rules + '</form></details>')
         when = escape(r["posted_date"] or r["pending_date"])
         label = "Pending · provider date or observed UTC date" if r["pending"] else "Posted UTC"
         payee = f'<div class="acct-sub">Payee: {escape(r["payee"])}</div>' if r["payee"] else ""
+        suggestion = ('<div class="acct-sub">Possible internal transfer · still counted. '
+                      'If confirmed, mark each leg as Transfer.</div>' if r["suggested_transfer"] else "")
         rows.append(
             f'<tr class="acct-row"><td><time datetime="{when}">{when}</time>'
             f'<div class="acct-sub">{label}</div></td><th scope="row" class="acct-cell">'
             f'<span class="acct-name">{escape(r["description"] or "No description")}</span>{payee}'
             f'<div class="acct-sub">SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}</div></th>'
             f'<td class="num">{escape(r["currency"])} {escape(r["amount"])}</td>'
-            f'<td>{category or "Uncategorized"} · {escape(r["flow"])} {edit}</td></tr>')
+            f'<td>{category or "Uncategorized"} · {escape(r["flow"])}{suggestion} {edit}</td></tr>')
     table = (
         '<div class="table-wrap"><table class="acct-table"><thead><tr><th>Date</th><th>Transaction</th>'
         '<th class="num">Signed amount</th><th>Classification</th></tr></thead><tbody>'
@@ -170,13 +190,15 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
     return (
         '<section class="history" aria-labelledby="cash-flow"><h2 id="cash-flow">Monthly cash flow</h2>'
         + search + sync + summary
-        + '<p>Credits are signed inflows (including refunds), not verified income. Net is not savings. '
-        'Pending, transfers and explicit unmatched card-payment credits are outside totals; unmatched bank '
-        'debits remain spending. Automatic matching requires corroboration on both available legs.</p>'
+        + '<p>Pending, transfers and explicit unmatched card-payment credits are outside totals; unmatched bank '
+        'debits remain spending. Automatic card matching requires corroboration on both available legs. '
+        'Checking and savings matches are suggestions only. A manual transfer choice overrides a merchant '
+        'rule, which overrides automatic classification.</p>'
         '<details><summary>Coverage and dates</summary><p>Requested windows do not prove institution '
         'completeness or retention. Current-month figures are provisional. Excluded accounts do not contribute. '
-        'Individual views include joint accounts. List filters do not change totals. Merchant rules fill only '
-        'uncategorized, non-manual entries for that merchant on the same account and currency.</p>'
+        'Individual views include joint accounts. List filters do not change totals. Merchant rules use an exact '
+        'normalized payee (or description) on the same account and currency. Category rules fill only '
+        'uncategorized, non-manual entries.</p>'
         + ("<ul>" + "".join(coverage) + "</ul>" if coverage else "<p>No included accounts in this view.</p>")
         + '</details></section><section><h2>Transactions</h2>' + table + '</section>')
 
@@ -202,8 +224,8 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
         raw = body.decode("utf-8", "strict")
     except UnicodeError:
         raise RouteProblem(400, "Invalid transaction form.") from None
-    keys = set(_FILTERS) | {"token"} | ({"row", "category", "transfer", "action"} if path == EDIT
-                                        else {"include_pending"})
+    keys = set(_FILTERS) | {"token"} | ({"row", "category", "transfer", "merchant_transfer", "action"}
+                                        if path == EDIT else {"include_pending"})
     data = _params(raw, keys)
     if not token or not secrets.compare_digest(data.get("token", "").encode("utf-8"), token.encode("utf-8")):
         raise RouteProblem(403, "Reload the transaction form and try again.")
@@ -222,13 +244,15 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
         raise RouteProblem(400, "Invalid transaction row.")
     action = data.get("action")
     if ((action in ("category", "rule") and "category" not in data)
-            or (action == "transfer" and "transfer" not in data)):
+            or (action == "transfer" and "transfer" not in data)
+            or (action == "transfer_rule" and "merchant_transfer" not in data)):
         raise RouteProblem(400, "Incomplete transaction edit.")
     try:
         with db:
             db.execute("BEGIN IMMEDIATE")
             if not edit_transaction(db, int(row), f["view"], f["month"], action=action,
-                                    category=data.get("category", ""), transfer=data.get("transfer", "")):
+                                    category=data.get("category", ""), transfer=data.get("transfer", ""),
+                                    merchant_transfer=data.get("merchant_transfer", "")):
                 raise RouteProblem(404, "Transaction not found in this view and month.")
     except ValueError as exc:
         raise RouteProblem(422, str(exc) or "Enter a printable category of up to 48 characters.") from None

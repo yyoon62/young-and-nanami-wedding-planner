@@ -52,7 +52,11 @@ def install_transactions(db):
     db.execute("""CREATE TABLE IF NOT EXISTS transaction_merchant_rules (
         account_id INTEGER NOT NULL, source TEXT NOT NULL, currency TEXT NOT NULL,
         merchant TEXT NOT NULL, category TEXT NOT NULL,
+        is_transfer INTEGER CHECK(is_transfer IN (0,1)),
         PRIMARY KEY(account_id, source, currency, merchant))""")
+    if "is_transfer" not in {r[1] for r in db.execute("PRAGMA table_info(transaction_merchant_rules)")}:
+        db.execute("""ALTER TABLE transaction_merchant_rules
+                      ADD COLUMN is_transfer INTEGER CHECK(is_transfer IN (0,1))""")
     db.execute("""CREATE TRIGGER IF NOT EXISTS account_transactions_delete
         AFTER DELETE ON accounts BEGIN
             DELETE FROM account_transactions WHERE account_id=OLD.id;
@@ -291,7 +295,7 @@ def sync_transactions(batch, *, include_pending=False, now=None):
                            links, start, stop, final and include_pending)
             _apply(db, rows, links, coverage, start, stop, final)
             coverage = _coverage(db)
-            start, done = stop, done + 1
+            start, done = (stop if final else stop - OVERLAP), done + 1
         return SyncResult(done, start == end)
 
 
@@ -303,6 +307,9 @@ _BANK_PAYMENT = re.compile(
 _CARD_PAYMENT = re.compile(
     r"(?:payment (?:thank you|received)|(?:auto ?pay|online|automatic|credit card|card) payment"
     r"(?: (?:thank you|received))?)")
+_BANK_KINDS = ("checking", "savings", "saving")
+_INTERNAL_MOVE = re.compile(r"(?:(?:online|internal|account|bank) )?transfer"
+                            r"(?: (?:in|out)| (?:to|from) .+)?")
 
 
 def _signal(row, pattern):
@@ -315,15 +322,19 @@ def _card_credit(row):
             and _signal(row, _CARD_PAYMENT))
 
 
+def _transfer_override(row):
+    return row["is_transfer"] if row["transfer_manual"] else row["merchant_transfer"]
+
+
 def _match_transfers(rows):
     bank, card = defaultdict(list), []
     for r in rows:
-        if r["pending"] or (r["transfer_manual"] and not r["is_transfer"]):
+        if r["pending"] or _transfer_override(r) == 0:
             continue
         amount = Decimal(r["amount"])
         if _card_credit(r):
             card.append(r)
-        elif (r["kind"].lower() in ("checking", "savings", "saving") and amount < 0
+        elif (r["kind"].lower() in _BANK_KINDS and amount < 0
               and _signal(r, _BANK_PAYMENT)):
             bank[(r["currency"], amount.copy_abs(), r["posted_date"])].append(r["row_id"])
     sole_partner, bank_degree = {}, defaultdict(int)
@@ -343,9 +354,42 @@ def _match_transfers(rows):
     return {r for cid, key in sole_partner.items() if bank_degree[key] == 1 for r in (cid, bank[key][0])}
 
 
+def _internal_suggestions(rows):
+    # Require transfer wording on BOTH legs, then look for mutual uniqueness
+    # across distinct accounts. Even this is a hint, not an automatic exclusion.
+    buckets = defaultdict(lambda: defaultdict(list))
+    candidates = []
+    for r in rows:
+        if (r["pending"] or _transfer_override(r) is not None or r["kind"].lower() not in _BANK_KINDS
+                or not _signal(r, _INTERNAL_MOVE)):
+            continue
+        amount = Decimal(r["amount"])
+        if amount:
+            day = date.fromisoformat(r["posted_date"])
+            buckets[(r["currency"], amount, day)][r["account_id"]].append(r["row_id"])
+            candidates.append((r["row_id"], r["account_id"], r["currency"], amount, day))
+    sole_partner = {}
+    for row, account, currency, amount, day in candidates:
+        degree, sole = 0, None
+        for offset in range(-3, 4):
+            key = (currency, amount.copy_negate(), day + timedelta(days=offset))
+            for other_account, others in buckets.get(key, {}).items():
+                if other_account == account:
+                    continue
+                degree += len(others)
+                sole = others[0]
+                if degree > 1:
+                    break
+            if degree > 1:
+                break
+        if degree == 1:
+            sole_partner[row] = sole
+    return {row for row, peer in sole_partner.items() if sole_partner.get(peer) == row}
+
+
 _VISIBLE = """FROM account_transactions t JOIN accounts a ON a.id=t.account_id
-    JOIN source_links l ON l.local=a.id AND l.source=t.source
-    WHERE a.excluded=0 AND t.currency=a.currency AND (?='Household' OR a.owner IN (?,'Joint'))"""
+    JOIN source_links l ON l.local=a.id AND l.source=t.source"""
+_SCOPE = """WHERE a.excluded=0 AND t.currency=a.currency AND (?='Household' OR a.owner IN (?,'Joint'))"""
 
 
 @dataclass
@@ -354,6 +398,7 @@ class Totals:
     spending: Decimal = Decimal(0)
     net: Decimal = Decimal(0)
     review: Decimal = Decimal(0)
+    category_spending: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -376,13 +421,19 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
     scope = "Household" if household_matching else view
     # A competing edge of the other leg may be six days from the displayed row.
     # Three days of query padding can falsely turn an ambiguous edge into a pair.
-    rows = _dicts(db.execute(f"""SELECT t.*, a.kind, a.owner, a.nickname, a.institution
-        {_VISIBLE} AND ((t.posted_date>=? AND t.posted_date<?)
+    rows = _dicts(db.execute(f"""SELECT t.*, a.kind, a.owner, a.nickname, a.institution,
+        r.is_transfer AS merchant_transfer {_VISIBLE}
+        LEFT JOIN transaction_merchant_rules r ON r.account_id=t.account_id AND r.source=t.source
+            AND r.currency=t.currency AND r.merchant=t.merchant
+        {_SCOPE} AND ((t.posted_date>=? AND t.posted_date<?)
         OR (? AND t.pending_active=1 AND t.pending_date>=? AND t.pending_date<?))
         ORDER BY coalesce(t.posted_date,t.pending_date) DESC, t.row_id DESC""",
         (scope, scope, str(start - timedelta(days=6)), str(end + timedelta(days=6)),
          show_pending, str(start), str(end))))
     matched = _match_transfers(rows)
+    # Suggestions never depend on the presence of a counterpart outside the
+    # selected view, even if the viewer is authorized to switch to Household.
+    suggested = _internal_suggestions(r for r in rows if view == "Household" or r["owner"] in (view, "Joint"))
     result = Snapshot()
     result.coverage = _dicts(db.execute("""SELECT a.nickname, a.currency, a.institution,
         l.source IS NOT NULL AS linked, c.start_at, c.end_at
@@ -408,40 +459,55 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
                 continue
             if not str(start) <= (r["posted_date"] or r["pending_date"]) < str(end):
                 continue
-            r["flow"] = ("Pending" if r["pending"] else
-                         ("Transfer" if r["is_transfer"] else "Cash flow") if r["transfer_manual"] else
-                         "Matched transfer" if r["row_id"] in matched else
-                         "Review card credit" if _card_credit(r) else "Cash flow")
+            override = _transfer_override(r)
+            if r["pending"]:
+                r["flow"] = "Pending"
+            elif r["transfer_manual"]:
+                r["flow"] = "Transfer (manual)" if override else "Cash flow (manual)"
+            elif override is not None:
+                r["flow"] = "Transfer (merchant rule)" if override else "Cash flow (merchant rule)"
+            elif r["row_id"] in matched:
+                r["flow"] = "Matched transfer"
+            else:
+                r["flow"] = "Review card credit" if _card_credit(r) else "Cash flow"
+            r["effective_transfer"] = not r["pending"] and (
+                bool(override) if override is not None else r["row_id"] in matched)
+            r["suggested_transfer"] = r["row_id"] in suggested and not r["effective_transfer"]
             result.rows.append(r)
             if r["pending"]:
                 continue
             totals = result.totals.setdefault(r["currency"], Totals())
             if r["flow"] == "Review card credit":
                 totals.review += Decimal(r["amount"])
-            elif r["flow"] == "Cash flow":
+            elif not r["effective_transfer"]:
                 amount = Decimal(r["amount"])
                 if amount > 0:
                     totals.credits += amount
-                else:
-                    totals.spending += amount.copy_abs()
+                elif amount < 0:
+                    spending = amount.copy_abs()
+                    totals.spending += spending
+                    category = r["category"] or "Uncategorized"
+                    totals.category_spending[category] = totals.category_spending.get(category, Decimal(0)) + spending
                 totals.net += amount
     return result
 
 
-def edit_transaction(db, row_id, view, month, *, action, category="", transfer=""):
+def edit_transaction(db, row_id, view, month, *, action, category="", transfer="", merchant_transfer=""):
     """Apply a validated scoped edit inside the caller's BEGIN IMMEDIATE."""
     if view not in VIEWS:
         raise ValueError("Unknown account view.")
     start, end = month_dates(month)
-    if action not in ("category", "rule", "transfer"):
+    if action not in ("category", "rule", "transfer", "transfer_rule"):
         raise ValueError("Unknown transaction action.")
-    if action != "transfer":
+    if action in ("category", "rule"):
         category = _optional_text(category.strip(), 48)
         if action == "rule" and not category:
             raise ValueError("Enter a category for the merchant rule.")
-    elif transfer not in ("auto", "yes", "no"):
+    elif action == "transfer" and transfer not in ("auto", "yes", "no"):
         raise ValueError("Choose a transfer setting.")
-    found = _dicts(db.execute(f"""SELECT t.* {_VISIBLE} AND t.row_id=?
+    elif action == "transfer_rule" and merchant_transfer not in ("none", "yes", "no"):
+        raise ValueError("Choose a merchant transfer rule setting.")
+    found = _dicts(db.execute(f"""SELECT t.* {_VISIBLE} {_SCOPE} AND t.row_id=?
         AND coalesce(t.posted_date,t.pending_date)>=? AND coalesce(t.posted_date,t.pending_date)<?
         AND (t.pending=0 OR t.pending_active=1)""", (view, view, row_id, str(start), str(end))))
     if not found:
@@ -457,7 +523,20 @@ def edit_transaction(db, row_id, view, month, *, action, category="", transfer="
         if row["pending"] or not row["merchant"]:
             raise ValueError("A merchant rule needs a posted transaction with a merchant.")
         key = (row["account_id"], row["source"], row["currency"], row["merchant"])
-        db.execute("""INSERT INTO transaction_merchant_rules VALUES (?,?,?,?,?)
+        if action == "transfer_rule":
+            if merchant_transfer == "none":
+                db.execute("""UPDATE transaction_merchant_rules SET is_transfer=NULL
+                    WHERE account_id=? AND source=? AND currency=? AND merchant=?""", key)
+                db.execute("""DELETE FROM transaction_merchant_rules WHERE account_id=? AND source=?
+                    AND currency=? AND merchant=? AND category='' AND is_transfer IS NULL""", key)
+            else:
+                db.execute("""INSERT INTO transaction_merchant_rules
+                    (account_id, source, currency, merchant, category, is_transfer) VALUES (?,?,?,?,'',?)
+                    ON CONFLICT(account_id, source, currency, merchant) DO UPDATE
+                    SET is_transfer=excluded.is_transfer""", (*key, merchant_transfer == "yes"))
+            return True
+        db.execute("""INSERT INTO transaction_merchant_rules (account_id, source, currency, merchant, category)
+            VALUES (?,?,?,?,?)
             ON CONFLICT(account_id, source, currency, merchant) DO UPDATE SET category=excluded.category""",
                    (*key, category))
         db.execute("""UPDATE account_transactions SET category=? WHERE account_id=? AND source=?
