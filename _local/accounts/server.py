@@ -17,6 +17,7 @@ from servicers import servicer_get
 from bridge import Bridge, Problem
 from bulk import Batch, schema
 from history import history_panel, install as install_history, net_worth
+from hosted_guard import Refused, require_clean
 from hosted_auth import (Auth, Config, Rejected, CHALLENGE_TTL, SESSION_TTL, db_path, external,
                          load_env_file, offline_lock, private, require_crypto)
 from logos import KNOWN_DOMAIN_SET, cached_logo, fallback_svg, institution_logo, sanitize_domain
@@ -900,12 +901,13 @@ def serve(path, port, provider=None, logo_dir=None, *, hosted=None, keys=None, c
         if hosted:
             require_crypto()
             path = db_path(path)
+            locks.enter_context(offline_lock(path))
+            os.close(os.open(path, os.O_CREAT | os.O_RDONLY | os.O_NOFOLLOW, 0o600))
+            require_clean(path)  # read-only, before init_db or any other write: no transaction data on the host
             if logo_dir:
                 logo_dir = external(logo_dir)
                 logo_dir.mkdir(mode=0o700, exist_ok=True)
                 private(logo_dir, directory=True)
-            locks.enter_context(offline_lock(path))
-            os.close(os.open(path, os.O_CREAT | os.O_RDONLY | os.O_NOFOLLOW, 0o600))
         init_db(path)
         if hosted:
             auth = Auth(path, hosted, keys=keys, **({"clock": clock} if clock is not None else {}))
@@ -968,6 +970,8 @@ if __name__ == "__main__":
         logo_dir = None if args.demo else path.parent / "logos"
         try:
             server = stack.enter_context(serve(path, args.port, provider, logo_dir=logo_dir, hosted=hosted))
+        except Refused as exc:
+            parser.exit(1, f"Hosted startup refused: {exc}\n")
         except (OSError, ValueError, sqlite3.Error) as exc:
             if not hosted:
                 raise
