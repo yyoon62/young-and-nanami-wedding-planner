@@ -471,3 +471,21 @@ tr.rate-change td { background: #fdf0d5; color: #7a4b00; font-size: .8rem; font-
   /* The account table scrolls sideways on a phone; keep the open drawer as wide as the screen, pinned to the left. */
   .edit-drawer .drawer-form { position: sticky; left: 0; width: calc(100vw - 2.9rem); box-sizing: border-box; }
 }
+
+/* Debt schedules: five columns (the month's date sits under its number) so Balance after is always on screen. */
+.sched caption { caption-side: top; text-align: left; padding: .2rem 0 .4rem; font-size: .78rem; color: var(--text-muted); }
+@media (max-width: 40rem) {
+  .sched .cur { display: none; }
+  .sched th, .sched td { padding: .4rem .3rem; font-size: .78rem; }
+  .sched thead th { font-size: .68rem; }
+  .sched .acct-sub { font-size: .68rem; }
+}
+
+/* With extra / Planned only pairs in the debt table: label above the value on a wide screen, inline on a phone. */
+.debt-table .pair { white-space: nowrap; margin-bottom: .35rem; }
+.debt-table .pair .acct-sub { display: block; }
+.debt-table td.pay { max-width: 14rem; }
+@media (max-width: 40rem) {
+  .debt-table .pair { white-space: normal; margin-bottom: .1rem; }
+  .debt-table .pair .acct-sub { display: inline; }
+}

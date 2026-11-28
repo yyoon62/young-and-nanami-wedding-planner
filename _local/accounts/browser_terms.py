@@ -104,6 +104,20 @@ class BrowserTerms(unittest.TestCase):
                 expect(section).to_contain_text("Stale")
                 section.get_by_text("Schedule: Cedar Rewards Card").click()
                 expect(section).to_contain_text("rate changes to 24.99%")
+                schedule = section.locator("details", has_text="Schedule: Cedar Rewards Card").locator("table.sched")
+                expect(schedule).to_be_visible()
+                for column in ("Month", "Rate", "Interest", "Payment", "Balance after"):
+                    expect(schedule.locator("thead th", has_text=column)).to_be_visible()
+                # Every column of the key rows is on screen at this width: no sideways scrolling to read the balance.
+                for cell in schedule.locator("tbody tr:not(.rate-change)").first.locator("th, td").all():
+                    box = cell.bounding_box()
+                    self.assertIsNotNone(box)
+                    self.assertLessEqual(box["x"] + box["width"], width + 0.5, f"{width}px: a schedule cell is cut off")
+                last = schedule.locator("tbody tr:not(.rate-change)").last.locator("td").last
+                self.assertLessEqual(last.bounding_box()["x"] + last.bounding_box()["width"], width + 0.5)
+                self.assertEqual(schedule.evaluate("t => t.parentElement.scrollWidth - t.parentElement.clientWidth"), 0)
+                overflow = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+                self.assertLessEqual(overflow, 1, f"schedule makes the page overflow the {width}px viewport")
                 chrome.close()
         self.finish()
 

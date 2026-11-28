@@ -59,9 +59,9 @@ class DebtPage(unittest.TestCase):
         self.assume()
         s = self.section(self.get())
         self.assertRegex(s, r"Sep 2027 <span class=\"acct-sub\">\(month 11\)</span>")
-        self.assertIn('<td class="num">USD 58.98</td>', s)                      # total interest
+        self.assertIn('data-label="Total interest"><div class="cell">USD 58.98</div></td>', s)
         self.assertIn("Current monthly interest cost of these debts: <strong>USD 10.00</strong>", s)
-        self.assertIn('<td class="num">USD 58.98</td><td class="num">USD 0.00</td>', s)   # final payment = remainder
+        self.assertIn('<td class="num"><span class="cur">USD </span>58.98</td><td class="num"><span class="cur">USD </span>0.00</td>', s)   # final payment = remainder
         self.assertIn("12% APR · fixed", s)
         self.assertIn("(planned)", s)
         self.assertIn("as of <time>2026-11-20</time>", s)
@@ -72,7 +72,7 @@ class DebtPage(unittest.TestCase):
         self.assume()
         s = self.section(self.get())
         self.assertIn("0% promo through Apr 2027, then 12%", s)
-        self.assertIn('<td class="num">USD 10.30</td>', s)
+        self.assertIn('data-label="Total interest"><div class="cell">USD 10.30</div></td>', s)
         self.assertIn("Month 7: rate changes to 12% (promo ended Apr 2027)", s)
         self.assertIn("Sep 2027", s)
 

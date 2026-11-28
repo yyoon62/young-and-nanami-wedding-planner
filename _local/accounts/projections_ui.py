@@ -510,8 +510,8 @@ def _debt_section(plan, entries, run, a, currency, scale, money, observed=None):
                     p_payoff, p_total = "Not paid off within 40 years", "—"
                 else:
                     p_payoff, p_total = "<strong>No payoff date</strong>", "—"
-                two = lambda with_, planned_: (f'<div><span class="acct-sub">With extra:</span> {with_}</div>'
-                                               f'<div><span class="acct-sub">Planned only:</span> {planned_}</div>')
+                two = lambda with_, planned_: (f'<div class="pair"><span class="acct-sub">With extra:</span> {with_}</div>'
+                                               f'<div class="pair"><span class="acct-sub">Planned only:</span> {planned_}</div>')
                 payoff, total = two(payoff, p_payoff), two(total, p_total)
             notes = []
             if sched.status == "does_not_cover":
@@ -527,15 +527,16 @@ def _debt_section(plan, entries, run, a, currency, scale, money, observed=None):
                 f'<tr><th scope="row">{escape(e.name)}<div class="acct-sub">{escape(e.institution)}</div>{note_html}</th>'
                 f'<td class="num" data-label="Balance"><div class="cell">{money(d.balance)}<div class="acct-sub">as of <time>{escape(e.asof)}</time>{stale}</div></div></td>'
                 f'<td data-label="Rate"><div class="cell">{rate}</div></td><td class="pay" data-label="Payment"><div class="cell">{pay}</div></td>'
-                f'<td data-label="Payoff"><div class="cell">{payoff}</div></td><td class="num" data-label="Total interest">{total}</td>'
+                f'<td data-label="Payoff"><div class="cell">{payoff}</div></td><td class="num" data-label="Total interest"><div class="cell">{total}</div></td>'
                 f'<td class="num" data-label="Interest this month">{money(sched.first_interest)}</td></tr>')
             if sched.rows:
                 shown = sched.rows[:120]
+                cell = lambda v: f'<span class="cur">{escape(currency)} </span>{money(v).split(" ", 1)[1]}'
                 body = "".join(
-                    f'<tr><th scope="row">{r.month}</th><td>{escape(month_label(r.calendar))}</td>'
-                    f'<td class="num">{escape(_pct(r.rate))}</td><td class="num">{money(r.interest)}</td>'
-                    f'<td class="num">{money(r.payment)}</td><td class="num">{money(r.balance)}</td></tr>'
-                    + (f'<tr class="rate-change"><td colspan="6">Month {r.month + 1}: rate changes to {escape(_pct(d.rate))} '
+                    f'<tr><th scope="row">{r.month}<div class="acct-sub">{escape(month_label(r.calendar))}</div></th>'
+                    f'<td class="num">{escape(_pct(r.rate))}</td><td class="num">{cell(r.interest)}</td>'
+                    f'<td class="num">{cell(r.payment)}</td><td class="num">{cell(r.balance)}</td></tr>'
+                    + (f'<tr class="rate-change"><td colspan="5">Month {r.month + 1}: rate changes to {escape(_pct(d.rate))} '
                        f'(promo ended {escape(month_label(d.promo_end))})</td></tr>'
                        if sched.promo_ended_month == r.month + 1 else "")
                     for r in shown)
@@ -544,7 +545,8 @@ def _debt_section(plan, entries, run, a, currency, scale, money, observed=None):
                 details.append(
                     f'<details><summary>Schedule: {escape(e.name)} (planned payment only)</summary>'
                     '<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable debt schedule">'
-                    '<table class="acct-table"><thead><tr><th scope="col">Month</th><th scope="col">Calendar</th>'
+                    f'<table class="acct-table sched"><caption>Amounts in {escape(currency)}; month 1 is the current month.</caption>'
+                    '<thead><tr><th scope="col">Month</th>'
                     '<th scope="col" class="num">Rate</th><th scope="col" class="num">Interest</th>'
                     '<th scope="col" class="num">Payment</th><th scope="col" class="num">Balance after</th></tr></thead>'
                     f'<tbody>{body}</tbody></table></div>{more}</details>')
