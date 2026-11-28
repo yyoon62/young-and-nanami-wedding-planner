@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Pi health digest to Discord (numbers and statuses only)
+
+[Service]
+Type=oneshot
+# ACCOUNTS_BACKUP_DIR comes from the backup settings (so the digest can report the newest backup's age).
+EnvironmentFile=-%h/.config/planner-accounts/backup.env
+ExecStart=%h/.local/share/planner-accounts-venv/bin/python %h/planner/_local/accounts/pi_health.py digest
+UMask=0077
+NoNewPrivileges=yes
+TimeoutStartSec=2min

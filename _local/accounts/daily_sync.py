@@ -21,13 +21,20 @@ from bridge import Bridge, Problem
 from bulk import Batch
 from hosted_auth import db_path, external
 from hosted_guard import Refused, require_clean
+import notify
 from server import DEFAULT_DB, validate
 from sync_status import last_ok
 
 
-def run(path, provider, *, hosted=False, out=print, err=print, clock=time.time):
-    """Sync once. Returns 0 on success (summary to `out`), 1 on any failure (one line to `err`)."""
+def run(path, provider, *, hosted=False, out=print, err=print, clock=time.time, config=None):
+    """Sync once. Returns 0 on success (summary to `out`), 1 on any failure (one line to `err`).
+
+    `config` (a notify.Config) turns on Discord posts; library callers and tests leave it None."""
     started = clock()
+    def failed(message, reason):
+        err(message)
+        notify.report_sync(config, "scheduled", False, reason=reason, db_path=path)
+        return 1
     try:
         if hosted:
             path = db_path(external(path))
@@ -35,25 +42,23 @@ def run(path, provider, *, hosted=False, out=print, err=print, clock=time.time):
         else:
             path = Path(path)
         if not path.is_file():
-            err(f"daily sync failed: no database at {path}.")
-            return 1
+            return failed(f"daily sync failed: no database at {path}.", "database problem")
         with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
             if not db.execute("SELECT 1 FROM sqlite_master WHERE name='source_links'").fetchone():
-                err("daily sync failed: this database has no sync tables yet; start the dashboard once.")
-                return 1
+                return failed("daily sync failed: this database has no sync tables yet; start the dashboard once.",
+                              "database problem")
         notices = Batch(path, provider, validate).sync()
     except (Problem, Refused) as exc:
-        err(f"daily sync failed: {exc}")
-        return 1
+        return failed(f"daily sync failed: {exc}", notify.reason_for(exc))
     except Exception as exc:             # deliberately only the type: messages may carry URLs
-        err(f"daily sync failed ({type(exc).__name__}); see the dashboard and the SimpleFIN connection.")
-        return 1
+        return failed(f"daily sync failed ({type(exc).__name__}); see the dashboard and the SimpleFIN connection.",
+                      notify.reason_for(exc))
     last = last_ok(path)
     # `checked` has minute precision, so allow the minute the run started in.
     if last is None or last < started - 60:
-        err("daily sync failed: no account was refreshed. " + " ".join(notices))
-        return 1
+        return failed("daily sync failed: no account was refreshed. " + " ".join(notices), notify.NOTHING_REFRESHED)
     out(" ".join(notices))
+    notify.report_sync(config, "scheduled", True, notices=notices, db_path=path)
     return 0
 
 
@@ -63,12 +68,14 @@ def main(argv=None):
     parser.add_argument("--hosted", action="store_true",
                         help="apply the hosted rules: private paths, refuse a database holding transactions")
     args = parser.parse_args(argv)
+    config = notify.load()
     try:
         provider = Bridge()
     except (Problem, OSError, UnicodeError):
         print("daily sync failed: missing or unsafe SimpleFIN credential storage. See BULK.md.", file=sys.stderr)
+        notify.report_sync(config, "scheduled", False, reason="SimpleFIN credential missing or unsafe", db_path=args.db)
         return 1
-    return run(args.db, provider, hosted=args.hosted, err=lambda line: print(line, file=sys.stderr))
+    return run(args.db, provider, hosted=args.hosted, err=lambda line: print(line, file=sys.stderr), config=config)
 
 
 if __name__ == "__main__":

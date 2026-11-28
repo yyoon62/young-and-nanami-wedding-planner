@@ -12,6 +12,7 @@ from unittest.mock import patch
 from urllib.request import urlopen
 
 import daily_sync
+import notify
 import sync_status
 from bridge import Problem
 from demo_batch import seed
@@ -33,6 +34,10 @@ class Base(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as db, db:
             seed(db)
         self.lines, self.errors = [], []
+        # Never read the real notify.env (on the Pi it holds live Discord webhooks): tests must not post anywhere.
+        patcher = patch.object(notify, "CONFIG", self.dir / "no-such-notify.env")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_sync(self, provider=None, **kw):
         return daily_sync.run(self.path, provider or self.provider, out=self.lines.append, err=self.errors.append, **kw)
