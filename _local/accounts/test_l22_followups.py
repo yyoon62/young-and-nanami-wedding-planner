@@ -137,7 +137,7 @@ class EmojiAndPage(Fixture, unittest.TestCase):
             self.db.execute("UPDATE accounts SET balance='100.00', asof='2026-11-01'")
         body = projection_get(self.path, "/projections", page=page, token="t", people=server.PEOPLE,
                               section_for=server.section_for, places=server.places, today=TODAY, suggestions=True)[1]
-        self.assertLess(body.index('class="history-plot"'), body.index('id="projection-suggestion"'))
+        self.assertLess(body.index('class="net-chart"'), body.index('id="projection-suggestion"'))
         self.assertLess(body.index('id="projection-heading"'), body.index('id="projection-suggestion"'))
         self.assertLess(body.index('id="projection-suggestion"'), body.index('class="cards projection-cards"'))
         hosted = projection_get(self.path, "/projections", page=page, token="t", people=server.PEOPLE,

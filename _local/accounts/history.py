@@ -149,3 +149,9 @@ def history_panel(timeline, money, *, has_backdated=False, currency=None):
     if not panels:
         return intro + '<p>No dated balances in this currency yet.</p></section>'
     return intro + '<div class="history-series-group">' + "".join(panels) + "</div></section>"
+
+
+def series_for(timeline, currency):
+    """[(asof, total or None)] for one currency from its first dated total to the last saved date (as History draws it)."""
+    first = next((i for i, (_, totals) in enumerate(timeline) if currency in totals), None)
+    return [] if first is None else [(asof, totals.get(currency)) for asof, totals in timeline[first:]]

@@ -10,6 +10,8 @@ from dataclasses import replace
 from account_terms import VARIABLE_NOTE, load_terms
 from debt_engine import compare_orders, month_add as plan_month_add, run_plan, schedule
 from asset_inputs import asset_rows, make_assets
+from history import series_for
+import net_chart
 from debt_inputs import debt_rows, make_plan
 from observed import observed_payments
 from projections import (
@@ -312,35 +314,6 @@ def _money(value, currency, scale):
         ctx.prec = PRECISION
         rounded = value.quantize(Decimal(1).scaleb(-scale))
         return f"{escape(currency)} {(rounded if rounded else abs(rounded)):,.{scale}f}"
-
-
-def _chart(points, money, years):
-    values = [point.display.net_worth for point in points]
-    low, high = min(values), max(values)
-    with localcontext() as ctx:
-        ctx.prec = PRECISION
-        bottom, top = min(low, 0), max(high, 0)
-
-        def y(value):
-            return Decimal(64) if top == bottom else 10 + 108 * (top - value) / (top - bottom)
-
-        coords = " ".join(
-            f'{6 + Decimal(588) * i / (len(points) - 1):.2f},{y(value):.2f}'
-            for i, value in enumerate(values)
-        )
-        zero_y = y(0)
-    return (
-        f'<p class="history-range">Projected monthly range: {money(low)} to {money(high)}. '
-        'Dashed line: zero.</p>'
-        '<svg class="history-plot" viewBox="0 0 600 128" preserveAspectRatio="none" role="img" '
-        'aria-labelledby="projection-chart-title" aria-describedby="projection-chart-desc">'
-        '<title id="projection-chart-title">Projected monthly net worth</title>'
-        f'<desc id="projection-chart-desc">Starts at {money(values[0])}, ends at {money(values[-1])}. '
-        'Dashed line is zero. See annual breakdown for values.</desc>'
-        f'<path class="history-grid projection-zero" vector-effect="non-scaling-stroke" d="M6 {zero_y:.2f}H594"/>'
-        f'<polyline class="history-trace" vector-effect="non-scaling-stroke" points="{coords}"/>'
-        f'</svg><div class="history-dates"><span>Start</span><span>Year {years}</span></div>'
-    )
 
 
 def _cards(start, end, years, metrics, money):
@@ -654,10 +627,10 @@ def _panel(view, currency, seed, assumptions, scale, token, *, attempted=None, e
         if not getattr(assumptions, name):
             values[name] = ""
     surplus = assumptions.surplus
-    budget = (f'<p class="nw-line nw-budget">💰 Monthly take-home income: <strong>{money(assumptions.income)}</strong> · '
-              f'💸 Monthly spending: <strong>{money(assumptions.spending)}</strong> · '
-              f'{"🟢" if surplus >= 0 else "🔴"} Monthly net savings: <strong>{money(surplus)}</strong> · '
-              f'{escape(unit_label)}</p>')
+    budget = (f'<p class="nw-line nw-budget"><span class="nw-item">💰 Monthly take-home income: <strong>{money(assumptions.income)}</strong></span> · '
+              f'<span class="nw-item">💸 Monthly spending: <strong>{money(assumptions.spending)}</strong></span> · '
+              f'<span class="nw-item">{"🟢" if surplus >= 0 else "🔴"} Monthly net savings: <strong>{money(surplus)}</strong></span> · '
+              f'<span class="nw-item">{escape(unit_label)}</span></p>')
     debt_note = _debt_note(seed.balances.debt if plan is None else plan.pool, assumptions.debt_target, surplus, money)
     service = ""
     if debt_note.startswith("<p>"):          # the plain debt-service sentence is fine print; warnings stay visible
@@ -678,7 +651,9 @@ def _panel(view, currency, seed, assumptions, scale, token, *, attempted=None, e
         '<section class="history nw-proj" aria-labelledby="projection-heading"><h2 id="projection-heading" class="sr">'
         'Net worth projection</h2>'
         + failed + asof + budget + info
-        + '<div class="net-chart">' + _chart(points, money, assumptions.years) + '</div>'
+        + '<div class="net-chart">' + net_chart.render(
+            points, assumptions.years, None if history is None else series_for(history[0], currency), currency, scale, money,
+            backdated_note=history is not None and history[1]) + '</div>'
         + debt_note + "".join(warnings)
         + '</section>'
         + _suggestion_card(view, currency, token, suggestion, assumptions, scale)

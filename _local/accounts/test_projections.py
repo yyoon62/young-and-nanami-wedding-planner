@@ -265,7 +265,7 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(status, 200)
         for label in ("Start: USD -174.82", "Start: USD 325.88",
                       "<time>2026-10-01</time> to <time>2026-11-26</time> (mixed dates)",
-                      "not treated as spendable cash", "Dashed line: zero.",
+                      "not treated as spendable cash", "Dotted line: zero.",
                       'role="img"', "Show annual breakdown", "does not refresh"):
             self.assertIn(label, body)
         self.assertNotIn("USD 777.77", self.panel(body))

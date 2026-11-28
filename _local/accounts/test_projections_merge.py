@@ -14,6 +14,7 @@ import l29_golden
 import projections_ui
 import server
 from l29_fixture import fetch, running, seed
+from server import init_db
 
 GOLDEN = json.loads((Path(__file__).with_name("l29_golden.json")).read_text())
 
@@ -64,6 +65,110 @@ class Golden(Base):
         for region in ("cards", "annual", "budget", "notes", "suggest", "debt", "asset", "form"):
             self.assertTrue(household[region], region)
         self.assertIn(["Net worth", "Start: USD 980.00", "Year 10: USD 262,935.95"], household["cards"])
+
+
+class Chart(Base):
+    """L29-5: saved zone | break | projected curve, one y-scale, joined at the latest saved date."""
+
+    def paths(self, html):
+        svg = re.search(r'<svg class="history-plot nw-plot".*?</svg>', html, re.S)[0]
+        grab = lambda cls: re.search(rf'<(?:path|polyline) class="[^"]*\b{cls}\b[^"]*"[^>]*?(?:d|points)="([^"]*)"', svg)
+        return svg, {name: (m[1] if (m := grab(name)) else None)
+                     for name in ("nw-saved", "nw-projected", "nw-split", "nw-break", "nw-step", "nw-zero", "nw-stepdot")}
+
+    def saved_history(self, view, currency):
+        with closing(sqlite3.connect(self.path)) as db:
+            db.row_factory = sqlite3.Row
+            owner = "(? = 'Household' OR a.owner IN (?, 'Joint'))"
+            points = db.execute(f"""SELECT h.* FROM balance_history h JOIN accounts a ON a.id=h.account_id
+                WHERE a.excluded=0 AND {owner} ORDER BY h.asof, h.account_id""", (view, view)).fetchall()
+        return history.series_for(history.net_worth(points), currency)
+
+    def test_example_6_the_past_and_the_projection_meet_at_the_latest_saved_date(self):
+        html = self.get("/?chart=projection")[2]
+        svg, p = self.paths(html)
+        series = [(d, v) for d, v in self.saved_history("Household", "USD") if v is not None]
+        self.assertGreaterEqual(len(series), 3)
+        dots = re.findall(r"M([\d.]+) ([\d.]+)h0", re.search(r'class="history-dots nw-saved"[^>]*d="([^"]*)"', svg)[1])
+        self.assertEqual(len(dots), len(series))                              # one dot per saved date, none invented
+        xs = [float(x) for x, _ in dots]
+        self.assertEqual(xs, sorted(xs))
+        join = float(re.search(r"M([\d.]+) 4V", p["nw-split"] and "M" + p["nw-split"].lstrip("M"))[1])
+        self.assertEqual(xs[-1], join)                                        # the last saved date sits on the break mark
+        first = [float(n) for n in p["nw-projected"].split()[0].split(",")]
+        self.assertEqual(first[0], join)                                      # month 0 starts there
+        self.assertEqual(first[1], float(dots[-1][1]))                        # values agree: one point, no step
+        self.assertIsNone(p["nw-step"])
+        self.assertNotIn("nw-stepnote", html)
+        self.assertIsNotNone(p["nw-break"])
+        self.assertIn('class="nw-zone nw-zone-saved">Saved<', html)
+        self.assertIn('class="nw-zone nw-zone-proj">Projected<', html)
+        self.assertIn("Left of the break mark the time scale is compressed", html)
+        self.assertLess(xs[-1] - xs[0], 160.001)                              # the saved zone is a fixed, compressed width
+
+    def test_example_6_projection_is_visually_distinct_from_the_saved_line_in_css(self):
+        css = Path(__file__).with_name("style.css").read_text()
+        projected = re.search(r"\.nw-projected \{([^}]*)\}", css)[1]
+        saved = re.search(r"\.nw-saved \{([^}]*)\}", css)[1]
+        self.assertIn("stroke-dasharray", projected)
+        self.assertNotIn("stroke-dasharray", saved)
+
+    def test_a_backdated_edit_shows_a_labelled_step_and_never_shifts_either_line(self):
+        self.srv.shutdown()
+        other = self.path.with_name("backdated.sqlite3")
+        seed(other, backdated=True)
+        with running(other) as srv:
+            html = fetch(srv, "/?chart=projection")[2]
+            history_html = fetch(srv, "/")[2]
+        svg, p = self.paths(html)
+        self.assertIsNotNone(p["nw-step"])
+        self.assertIsNotNone(p["nw-stepdot"])
+        self.assertIn("nw-stepnote", html)
+        self.assertIn("Saved history ends at <strong>$980.00</strong> on 2026-11-27", html)
+        self.assertIn("start the projection at <strong>$580.00</strong>", html)
+        self.assertIn("(-$400.00)", html)
+        self.assertIn("Drawn as a step, nothing shifted", html)
+        self.assertIn("After a backdated edit, history can show later saved balances", html)
+        self.assertIn("Start: USD 580.00", html)                              # the projection still starts from the accounts
+        self.assertIn("USD 980.00", history_html)                             # History keeps today's behaviour
+        dots = re.findall(r"M([\d.]+) ([\d.]+)h0", re.search(r'class="history-dots nw-saved"[^>]*d="([^"]*)"', svg)[1])
+        start_y = float(p["nw-projected"].split()[0].split(",")[1])
+        self.assertNotEqual(float(dots[-1][1]), start_y)                      # two different values, both drawn as they are
+
+    def test_example_6_with_fewer_than_two_saved_dates_the_chart_still_renders(self):
+        self.srv.shutdown()
+        other = self.path.with_name("single.sqlite3")
+        init_db(other)
+        with closing(sqlite3.connect(other)) as db, db:
+            db.execute("""INSERT INTO accounts (institution,nickname,kind,side,currency,balance,asof,owner,update_method)
+                VALUES ('Fict','One','Checking','asset','USD','100.00','2026-11-20','Young','F')""")
+        with running(other) as srv:
+            status, _, html = fetch(srv, "/?chart=projection")
+            empty = self.path.with_name("empty.sqlite3")
+            init_db(empty)
+            status2, _, html2 = fetch(srv, "/?chart=projection")
+        for code, page_html in ((status, html), (status2, html2)):
+            self.assertEqual(code, 200)
+            self.assertIn('class="history-trace nw-projected"', page_html)
+            self.assertNotIn("nw-saved", page_html.partition("</svg>")[0].replace("history-trace nw-projected", ""))
+            self.assertIn("Saved history is too short to draw", page_html)
+            self.assertIn("nw-start", page_html)
+
+    def test_currency_symbols_in_new_text_are_exact_and_separated(self):
+        import net_chart
+        from decimal import Decimal
+        for value, code, scale, want in ((Decimal("1234.5"), "USD", 2, "$1,234.50"), (Decimal("-1500"), "USD", 2, "-$1,500.00"),
+                                         (Decimal("3000"), "EUR", 2, "€3,000.00"), (Decimal("150000"), "JPY", 0, "¥150,000"),
+                                         (Decimal("12"), "CHF", 2, "CHF 12.00")):
+            self.assertEqual(net_chart.plain(value, code, scale), want)
+        for value in (Decimal("0.005"), Decimal("0.015"), Decimal("2.675"), Decimal("-0.004"), Decimal("262935.955")):
+            self.assertEqual(net_chart.plain(value, "USD", 2).replace("$", "").replace("-", ""),
+                             projections_ui._money(value, "USD", 2)[4:].replace("-", ""))   # same rounding as the numbers beside it
+
+    def test_phone_and_desktop_share_one_markup_no_inline_styles(self):
+        html = self.get("/?chart=projection")[2]
+        self.assertNotIn(" style=", html)
+        self.assertEqual(html.count('class="net-chart"'), 1)
 
 
 class Routes(Base):
