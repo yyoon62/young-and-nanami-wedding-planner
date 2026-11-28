@@ -195,7 +195,7 @@ class EndpointTests(unittest.TestCase):
                 db.execute("BEGIN IMMEDIATE")
                 install_projections(db)
         self.fixture = SimpleNamespace(db=self.path, token="local-fixture-token", auth=None, server_port=8765,
-                                       batch=None, logo_dir=None)
+                                       batch=None, logo_dir=None, notices=[])
 
     @staticmethod
     def add(db, kind, owner, amount, *, side="asset", currency="USD", asof="2026-10-01", excluded=0):
@@ -221,7 +221,17 @@ class EndpointTests(unittest.TestCase):
             add("Checking", "Unspecified", "999999", currency="JPY")
 
     def call(self, path="/projections", data=None, **kwargs):
+        """L29: the page lives on Accounts; a GET of the old selector is sent to its new address (same view/currency)."""
+        if data is None and path.startswith("/projections"):
+            query = path.partition("?")[2]
+            path = "/?" + (query + "&" if query else "") + "chart=projection"
         return request(self.handler, self.fixture, path, data, **kwargs)
+
+    @staticmethod
+    def panel(body):
+        """Only the net worth block: the Accounts table below it also lists excluded accounts and other currencies."""
+        start = body.index('id="net-worth"')
+        return body[start:body.index("<th>Account</th>", start)] if "<th>Account</th>" in body[start:] else body[start:]
 
     def form(self, **params):
         return dict(Assumptions().form_values(), **{
@@ -255,16 +265,16 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(status, 200)
         for label in ("Start: USD -174.82", "Start: USD 325.88",
                       "<time>2026-10-01</time> to <time>2026-11-26</time> (mixed dates)",
-                      "not treated as spendable cash", "Dashed line: zero.",
+                      "not treated as spendable cash", "Dotted line: zero.",
                       'role="img"', "Show annual breakdown", "does not refresh"):
             self.assertIn(label, body)
-        self.assertNotIn("USD 777.77", body)
-        self.assertNotIn("999,999", body)
+        self.assertNotIn("USD 777.77", self.panel(body))
+        self.assertNotIn("999,999", self.panel(body))
         body = self.call("/projections?currency=JPY")[2]
         self.assertIn("Start: JPY 999,999", body)
-        self.assertNotIn("USD -174.82", body)
+        self.assertNotIn("USD -174.82", self.panel(body))
         body = self.call("/projections?view=Nanami")[2]
-        self.assertNotIn('<option value="JPY"', body)
+        self.assertNotIn("JPY", body)           # no JPY chip or panel where this view has no JPY account
         self.assertIn("Start: USD -19.73", body)
         for query in ("currency=EUR", "view=Joint", "view=Young&view=Nanami", "currency=USD&currency=JPY"):
             self.assertEqual(self.call("/projections?" + query)[0], 400)
@@ -346,8 +356,7 @@ class EndpointTests(unittest.TestCase):
         self.assertIn("Start: USD 0.00", body)
         self.assertIn('value="10"', body)
         self.assertIn("Illustrative projection only", body)
-        if self.wired:
-            self.assertIn('<a href="/projections" aria-current="page">Projections</a>', body)
+        self.assertNotIn("Projections</a>", body)             # L29: no Projections tab; the page is a tab on Accounts
         self.assertEqual(self.saved(), [])
         self.assert_policy(headers, body)
         self.assertEqual(self.call(data=self.form(years="1", spending="1.23"))[0], 303)
@@ -361,7 +370,8 @@ class EndpointTests(unittest.TestCase):
         for scope in (dict(years="2"), dict(currency="JPY", years="3"), dict(view="Young", years="4")):
             status, headers, _ = self.call(data=self.form(**scope))
             self.assertEqual(status, 303)
-            self.assertIn("Year " + scope["years"], self.call(headers["Location"])[2])
+            self.assertIn("chart=projection#net-worth", headers["Location"])          # L29: back to the Accounts tab
+            self.assertIn("Year " + scope["years"], self.call(headers["Location"].partition("#")[0])[2])
         expected = self.saved()
         self.assertEqual(len(expected), 3)
         self.restart()
@@ -380,9 +390,10 @@ class EndpointTests(unittest.TestCase):
 
     def assert_policy(self, headers, body):
         self.assertEqual(headers["Content-Security-Policy"],
-                         "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+                         "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
+                         "img-src 'self'; script-src 'self'; connect-src 'none'; form-action 'self'")   # the Accounts page's
         self.assertEqual(headers["Cache-Control"], "no-store")
-        self.assertNotIn("<script", body)
+        self.assertNotRegex(body, r"<script(?![^>]* src=)")        # no inline script
         self.assertNotIn(" style=", body)
 
     def test_local_dispatch_checks_host_origin_and_csrf_before_save(self):

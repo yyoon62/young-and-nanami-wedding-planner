@@ -95,7 +95,7 @@ def sparkline(series, label):
             f'</svg><div class="history-dates"><time>{series[0][0]}</time><time>{series[-1][0]}</time></div>')
 
 
-def history_panel(timeline, money, *, has_backdated=False):
+def history_panel(timeline, money, *, has_backdated=False, currency=None):
     intro = (
         '<section class="history" aria-labelledby="history-heading"><h2 id="history-heading">Net worth history</h2>'
         '<p>Past totals use today’s owners and exclusions. Each account starts at its first saved date; '
@@ -108,6 +108,7 @@ def history_panel(timeline, money, *, has_backdated=False):
         intro += ('<p class="history-backdated">After a backdated edit, history can show later saved balances '
                   'than the account table.</p>')
 
+    only = currency
     first_seen = {}
     for i, (_, totals) in enumerate(timeline):
         for currency in totals:
@@ -115,6 +116,8 @@ def history_panel(timeline, money, *, has_backdated=False):
 
     panels = []
     for currency, first in sorted(first_seen.items()):
+        if only and currency != only:
+            continue        # a chosen currency chip shows just that series
         label = escape(currency)
         series = [(asof, totals.get(currency)) for asof, totals in timeline[first:]]
         values = [amount for _, amount in series if amount is not None]
@@ -143,4 +146,12 @@ def history_panel(timeline, money, *, has_backdated=False):
             f'<thead><tr><th scope="col">As of</th><th scope="col">Net worth</th></tr></thead>'
             f'<tbody>{rows}</tbody></table></details></section>'
         )
+    if not panels:
+        return intro + '<p>No dated balances in this currency yet.</p></section>'
     return intro + '<div class="history-series-group">' + "".join(panels) + "</div></section>"
+
+
+def series_for(timeline, currency):
+    """[(asof, total or None)] for one currency from its first dated total to the last saved date (as History draws it)."""
+    first = next((i for i, (_, totals) in enumerate(timeline) if currency in totals), None)
+    return [] if first is None else [(asof, totals.get(currency)) for asof, totals in timeline[first:]]
