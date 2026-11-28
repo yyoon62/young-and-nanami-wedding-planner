@@ -34,8 +34,9 @@ _GROUPS = (
         "Merchant rules match the cleaned merchant name (dates, store and reference numbers removed) on the same "
         "account and currency; a category you set on one row by hand always wins over a rule.")),
     ("Bars and dates", (
-        "📊 Bars: the bar is this month; ticks are last month and the average of up to 3 full months before it. "
-        "Transfers, pending and card credits under review are excluded. Click a category to filter the list.",
+        "📊 The bar splits this month's spending by category; transfers, pending and unmatched card payments are "
+        "excluded. Hover a chip for the comparison with last month (where fully fetched) and the average of up to 3 "
+        "full months before it (needs at least two fully fetched months). Click a chip to filter the list.",
         "📅 Dates are the bank's posted date (UTC): an evening transaction in a western timezone, or a "
         "local-midnight stamp east of UTC, can show a day off, and month filters use the same date.")),
 )

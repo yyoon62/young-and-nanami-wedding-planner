@@ -42,8 +42,8 @@ OLD_SUBSTANCE = (
     "Excluded accounts do not contribute", "Individual views include joint accounts", "List filters do not change totals",
     "Merchant rules match the cleaned merchant name (dates, store and reference numbers removed) on the same account and currency",
     "a category you set on one row by hand always wins over a rule", "posted date (UTC)", "local-midnight stamp east of UTC",
-    "month filters use the same date", "ticks are last month", "card credits under review are excluded",
-    "Click a category to filter the list", "balance sync quota")
+    "month filters use the same date", "Hover a chip for the comparison with last month", "unmatched card payments are excluded",
+    "Click a chip to filter the list", "balance sync quota")
 NEW_SUBSTANCE = ("the matching bank debit still counts as spending until it is matched or marked Transfer too",
                  "partial = an account has no or late data for this month", "so far, through D Mon",
                  "on a pending row it is lost if the bank changes the transaction id", "↺ resets it")
@@ -99,21 +99,23 @@ class Text(Fixture, unittest.TestCase):
         self.assertEqual(html.count("ℹ️ How these numbers work"), 1)
         self.assertNotIn("Refreshes all linked accounts</p>", html)
 
-    def test_bars_are_one_collapsed_line_with_the_top_three_and_open_with_a_category_filter(self):
+    def test_one_stacked_bar_per_currency_and_a_legend_of_filter_chips(self):
         html = self.html()
-        bars = re.search(r'<details class="bars-det"(?P<open> open)?>(?P<body>.*?)</details>', html, re.S)
-        self.assertIsNone(bars.group("open"))
-        summary = re.search(r"<summary[^>]*>(.*?)</summary>", bars.group("body"), re.S).group(1)
-        self.assertIn("📊 Spending by category", summary)
-        spans = re.findall(r"<span>([^<]*) <strong>([^<]*)</strong></span>", summary)
-        self.assertEqual(spans, [("Housing", "$1,500.00"), ("Groceries", "$500.00"), ("Dining", "$300.00")])   # not "Uncategorized $50"
-        self.assertEqual(len(re.findall(r'<a class="bar-row', bars.group("body"))), 4)     # all four are inside, one click away
-        self.assertIn("last month", bars.group("body"))
+        self.assertEqual(html.count('<svg class="stack"'), html.count('class="card tx-card"'))
+        usd = html[html.index('aria-label="Spending by category in USD"'):]
+        usd = usd[:usd.index("</section>")]
+        chips = re.findall(r'<a class="tx-leg ([^" ]+)[^>]*>.*?<span class="amt">([^<]*)</span> · ([^<]*)</a>', usd, re.S)
+        self.assertEqual([(c[1], c[2]) for c in chips],       # 1500 / 500 / 300 / 50 of 2,350, exact then rounded
+                         [("$1,500", "64%"), ("$500", "21%"), ("$300", "13%"), ("$50", "2%")])
+        names = re.findall(r'<i class="dot" aria-hidden="true"></i>(\S+) ([^<$]*?) <span class="amt">', usd)
+        self.assertEqual([n[1] for n in names], ["Housing", "Groceries", "Dining", "Uncategorized"])
+        self.assertEqual(len(re.findall(r'<rect class="seg', usd)), 4)
+        self.assertEqual(len({c[0] for c in chips}), 4)                                  # a colour class per category
+        self.assertNotIn("<details class=\"bars-det\"", html)
+        self.assertNotIn("includes", usd)
         opened = self.html("month=2026-12&cat=Dining&currency=USD")
-        self.assertIn('<details class="bars-det" open>', opened)
-        self.assertIn("Showing Dining only (USD)", opened)
-        self.assertIn('<details class="bars-det" open>', self.html("month=2026-12&cat=Dining"))      # no currency: all open
-        self.assertNotIn('<details class="bars-det" open>', self.html("month=2026-12&cat=Dining&currency=EUR"))
+        self.assertIn("✕ Clear", opened)
+        self.assertNotIn("Showing Dining only", opened)
 
     def test_empty_states_keep_their_wording(self):
         self.assertIn("No posted transactions reported", self.html("month=2026-10"))

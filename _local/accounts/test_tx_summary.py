@@ -159,7 +159,7 @@ class Summary(Fixture, unittest.TestCase):
         cards = html[html.index('<div class="cards">'):html.index("<section><h2>Transactions")]
         amounts = re.findall(r"<strong>([^<]*)</strong>", cards)
         amounts += re.findall(r'<span class="amt-(?:in|out|zero|neutral)">([^<]*)</span>', html)
-        amounts += re.findall(r'<span class="bar-cmp">last month ([^ ]+) ', html)
+        amounts += re.findall(r'<span class="amt">([^<]*)</span>', html)
         amounts += re.findall(r"aria-label=\"[^\"]*: ([^\"]+)\"", re.sub(r'aria-label="Spending[^"]*"', "", html))
         amounts = [a for a in amounts if re.search(r"\d", a)]
         self.assertGreater(len(amounts), 8)

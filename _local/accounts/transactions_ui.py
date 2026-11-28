@@ -16,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode
 
 from html import escape as _esc  # noqa: F401
 from decimal import Decimal
+from tx_bars import CURRENT, legend_chip, ordered, stacked_bar, tooltip
 from tx_info import info_box, notes_html
 from tx_money import fmt, sign_of
 from tx_periods import month_add, month_label, spending_comparison
@@ -257,7 +258,7 @@ def _summary_card(currency, t, cmp, incomplete, f):
         n = t.review_count
         active = f["review"] == "1" and f["currency"] == currency
         confirm = (f'<div class="tx-confirm"><a href="{escape(_location(dict(f, review="1", currency=currency)))}"'
-                   f'{" aria-current=\"true\"" if active else ""} title="Unmatched card payment credits; '
+                   f'{CURRENT if active else ""} title="Unmatched card payment credits; '
                    f'click to list them">⚠️ {n} card payment{"" if n == 1 else "s"} to confirm · '
                    f'{fmt(t.review, currency)}</a></div>')
     return (f'<article class="card tx-card"><div class="tx-card-head"><small>{escape(currency)}</small>{chips}</div>'
@@ -306,50 +307,24 @@ def _moved_note(moved, f, allowed_views):
 
 
 def _bars(cmp, f, totals):
-    """Spending by category for the viewed month vs last month and the 3-month mean."""
+    """Spending by category: ONE stacked bar, then a legend of filter chips (active one highlighted, ✕ clears it).
+    The comparison with last month / the 3-month mean is in each chip's tooltip."""
     c = cmp.currency
     if not cmp.current:
         return '<div class="acct-sub">📊 No posted spending reported.</div>'
-    zero = Decimal(0)
-    peak = max([*cmp.current.values(), *(cmp.prev or {}).values(), *(cmp.avg or {}).values()] or [Decimal(1)])
-    rows = []
-    for name, amount in sorted(cmp.current.items(), key=lambda kv: (-kv[1], kv[0].casefold())):
-        prev = None if cmp.prev is None else cmp.prev.get(name, zero)
-        avg = None if cmp.avg is None else cmp.avg.get(name, zero)
-        scale = lambda value: float(min(Decimal(100), value * 100 / peak)) if peak else 0.0
-        marks = "".join(f'<line class="{cls}" x1="{scale(v):.2f}" x2="{scale(v):.2f}" y1="0" y2="10"/>'
-                        for cls, v in (("tick-prev", prev), ("tick-avg", avg)) if v is not None)
+    total = sum(cmp.current.values(), Decimal(0))
+    prev_label = f"last month ({month_label(cmp.prev_month)})" if cmp.prev is not None else ""
+    avg_label = (f"{len(cmp.avg_months)}-month average" if cmp.avg is not None else "")
+    chips = []
+    for name, amount in ordered(cmp.current):
         active = f["cat"] == name and f["currency"] == c
-        href = _location(dict(f, cat=name, currency=c))
-        current = ' aria-current="true"' if active else ""  # no backslash in f-string expressions (Python 3.11 on the Pi)
-        rows.append(
-            f'<li><a class="bar-row{" is-active" if active else ""}" href="{escape(href)}"'
-            f'{current} title="Show only {escape(name)} ({escape(c)})">'
-            f'<span class="bar-name">{escape(name)}</span>'
-            f'<svg class="bar-svg" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="'
-            f'{escape(name)}: {fmt(amount, c)}"><rect class="bar-fill" width="{scale(amount):.2f}" height="10"/>'
-            f'{marks}</svg>'
-            f'<span class="bar-nums"><strong>{fmt(amount, c)}</strong>'
-            f' <span class="bar-cmp">last month {fmt(prev, c) if prev is not None else "—"}'
-            f' · {len(cmp.avg_months) or ""}{"-mo avg" if cmp.avg is not None else "3-mo avg"} '
-            f'{fmt(avg, c) if avg is not None else "—"}'
-            + '</span></span></a></li>')
-    basis = (f'Compared with {escape(month_label(cmp.prev_month))} and the average of '
-             f'{len(cmp.avg_months)} full month(s) before {escape(month_label(cmp.month))}. ' if cmp.avg is not None
-             else f'Compared with {escape(month_label(cmp.prev_month))} where fully fetched; averages need at least '
-                  'two fully fetched months before this one. ')
-    clear = ""
+        chips.append(legend_chip(name, amount, total, c, _location(dict(f, cat=name, currency=c)), active,
+                                 tooltip(name, amount, total, c, cmp.prev, cmp.avg, prev_label, avg_label)))
     if f["cat"] and f["currency"] == c:
-        clear = (f'<p class="filter-chip">Showing {escape(f["cat"])} only ({escape(c)}) · '
-                 f'<a href="{escape(_location(dict(f, cat="", currency="")))}">Clear filter</a></p>')
-    top = "".join(f'<span>{escape(name)} <strong>{fmt(amount, c)}</strong></span> '
-                  for name, amount in sorted(cmp.current.items(), key=lambda kv: (-kv[1], kv[0].casefold()))[:3])
-    opened = bool(f["cat"]) and f["currency"] in ("", c)
-    return (f'<section class="bars" aria-label="Spending by category in {escape(c)}"><details class="bars-det"'
-            f'{" open" if opened else ""}><summary title="Bar = this month; ticks = last month and the average. '
-            f'Click a category to filter the list."><span class="bars-title">📊 Spending by category</span> '
-            f'<span class="bars-top">{top}</span></summary>{clear}'
-            f'<ul class="bar-list">{"".join(rows)}</ul><p class="acct-sub">{basis.strip()}</p></details></section>')
+        chips.append(f'<a class="tx-leg clear" href="{escape(_location(dict(f, cat="", currency="")))}" '
+                     f'title="Show every category again">✕ Clear</a>')
+    return (f'<section class="bars" aria-label="Spending by category in {escape(c)}">{stacked_bar(cmp.current, c)}'
+            f'<div class="legend">{"".join(chips)}</div></section>')
 
 
 def _amount(r):

@@ -72,24 +72,26 @@ class Months(Fixture, unittest.TestCase):
         html = self.html()
         self.assertRegex(html, r'<span class="partial-flag"[^>]*>so far, through 28 Nov</span>')
         self.assertEqual(html.count("so far, through 28 Nov"), 2)     # chip on each currency card (USD, EUR)
-        dining = re.search(r'<li><a class="bar-row"[^>]*title="Show only Dining \(USD\)".*?</a></li>', html, re.S).group(0)
-        for text in ("$300.00", "last month $200.00", "3-mo avg $250.00"):
+        dining = re.search(r'<a class="tx-leg [^"]*"[^>]*title="Dining: [^"]*">.*?</a>', html, re.S).group(0)
+        for text in ("Dining: $300.00", "38% of spending", "last month (Oct 2026): $200.00 (▲ $100.00)",
+                     "3-month average: $250.00 (▲ $50.00)", '<span class="amt">$300</span> · 38%'):
             self.assertIn(text, dining)
         self.assertIn("Spending <strong>$800.00</strong>", html)
         self.assertIn("Spending <strong>€50.00</strong>", html)
         # Click-to-filter: a plain, reversible GET link; the list shows only that category and currency.
-        link = re.search(r'href="([^"]+)"[^>]*title="Show only Dining \(USD\)"', html).group(1).replace("&amp;", "&")
+        link = re.search(r'<a class="tx-leg [^"]*" href="([^"]+)" title="Dining:', html).group(1).replace("&amp;", "&")
         self.assertEqual(parse_qs(urlsplit(link).query)["cat"], ["Dining"])
         filtered = self.html(urlsplit(link).query)
-        self.assertIn("Showing Dining only", filtered)
+        self.assertRegex(filtered, r'<a class="tx-leg c1 is-active" href="[^"]+" aria-current="true" title="Dining:')
         self.assertEqual(filtered.count('class="acct-row"'), 1)
         self.assertNotIn("Green Market</span>", filtered)
-        self.assertIn("Clear filter", filtered)
-        clear = re.search(r'<a href="([^"]+)">Clear filter</a>', filtered).group(1).replace("&amp;", "&")
+        self.assertIn("✕ Clear", filtered)
+        clear = re.search(r'<a class="tx-leg clear" href="([^"]+)"', filtered).group(1).replace("&amp;", "&")
         self.assertNotIn("cat=Dining", clear)
         self.assertGreater(self.html(urlsplit(clear).query).count('class="acct-row"'), 3)
         # Uncategorized is its own reversible filter value.
-        self.assertIn("Showing Uncategorized only", self.html("month=2026-11&cat=Uncategorized&currency=EUR"))
+        self.assertRegex(self.html("month=2026-11&cat=Uncategorized&currency=EUR"),
+                         r'<a class="tx-leg cu is-active" href="[^"]+" aria-current="true"')
 
     def test_partial_coverage_is_not_averaged_as_if_complete(self):
         """The 90-day first sync starts on 2026-08-30: August has 2 of 31 days and must not enter the mean."""
@@ -98,17 +100,18 @@ class Months(Fixture, unittest.TestCase):
         usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
         self.assertEqual(usd.avg_months, ("2026-10", "2026-09"))
         self.assertEqual(usd.avg["Dining"], Decimal("225.00"))
-        self.assertIn("2-mo avg $225.00", self.html())
+        self.assertIn("2-month average: $225.00", self.html())
         cover(self.db, "2026-09-16", "2026-11-28")  # only October is complete: no average, previous still shown
         usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
         self.assertIsNone(usd.avg)
         self.assertEqual(usd.prev["Dining"], Decimal("200"))
         html = self.html()
-        self.assertIn("last month $200.00 · 3-mo avg —", html)
+        self.assertIn("last month (Oct 2026): $200.00 (▲ $100.00)", html)
+        self.assertNotIn("-month average", html)
         cover(self.db, "2026-10-20", "2026-11-28")  # not even October: no comparison at all
         usd = spending_comparison(self.db, "2026-11", "Household", household_matching=True, today=TODAY)["USD"]
         self.assertIsNone(usd.prev)
-        self.assertIn("last month — · 3-mo avg —", self.html())
+        self.assertNotIn("last month (Oct", self.html())
 
     def test_zero_spend_month_counts_and_unlinked_is_reported(self):
         self.put("USD", "2026-09-10", "-300", "Maple Cafe")
