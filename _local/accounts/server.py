@@ -24,7 +24,7 @@ from projections import install_projections
 from projections_ui import projection_get, projection_post
 from transactions import install_transactions, sync_transactions
 from transactions_ui import (EDIT as TX_EDIT, SYNC as TX_SYNC, TRANSACTIONS as TX_PATH,
-                             RouteProblem, post_transactions, render_transactions)
+                             RouteProblem, post_transactions, problem_body, render_transactions)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -749,8 +749,7 @@ class Handler(BaseHTTPRequestHandler):
                                                allowed_views={"Household", *PEOPLE},
                                                can_sync=bool(self.server.batch))
             except RouteProblem as exc:
-                return self.send(exc.status, page(f'<p class="notice" role="alert">{escape(str(exc))}</p>',
-                                                  current=TX_PATH, heading="Transactions"))
+                return self.send(exc.status, page(problem_body(exc), current=TX_PATH, heading="Transactions"))
             if result.sync:
                 try:
                     sync_res = sync_transactions(self.server.batch, include_pending=result.include_pending)

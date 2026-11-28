@@ -18,6 +18,8 @@ from urllib.parse import urlencode
 
 from bridge import Bridge, Problem, unique_fields
 from bulk import fingerprint, text
+from tx_categories import (clean_merchant, add_category, canonical, install_categories, list_categories,
+                           load_cache, load_rules, resolve)
 
 
 DAY = 86400
@@ -58,6 +60,14 @@ def install_transactions(db):
     if "is_transfer" not in {r[1] for r in db.execute("PRAGMA table_info(transaction_merchant_rules)")}:
         db.execute("""ALTER TABLE transaction_merchant_rules
                       ADD COLUMN is_transfer INTEGER CHECK(is_transfer IN (0,1))""")
+    if "clean_key" not in {r[1] for r in db.execute("PRAGMA table_info(transaction_merchant_rules)")}:
+        db.execute("ALTER TABLE transaction_merchant_rules ADD COLUMN clean_key TEXT")
+    for account, source, currency, merchant in db.execute(
+            "SELECT account_id, source, currency, merchant FROM transaction_merchant_rules "
+            "WHERE clean_key IS NULL").fetchall():
+        db.execute("""UPDATE transaction_merchant_rules SET clean_key=? WHERE account_id=? AND source=?
+                      AND currency=? AND merchant=?""", (clean_merchant(merchant), account, source, currency, merchant))
+    install_categories(db)
     db.execute("""CREATE TRIGGER IF NOT EXISTS account_transactions_delete
         AFTER DELETE ON accounts BEGIN
             DELETE FROM account_transactions WHERE account_id=OLD.id;
@@ -447,7 +457,12 @@ def _dicts(cursor):
     return [dict(zip(columns, row)) for row in cursor]
 
 
-def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=False):
+def category_context(db):
+    """Rules, classifier cache and canonical names for read-time categories (one read)."""
+    return load_rules(db), load_cache(db), {n.casefold(): n for n in list_categories(db)}
+
+
+def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=False, context=None):
     """Caller owns a read snapshot and authorizes view/household_matching."""
     if view not in VIEWS:
         raise ValueError("Unknown account view.")
@@ -464,6 +479,11 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
         ORDER BY coalesce(t.posted_date,t.pending_date) DESC, t.row_id DESC""",
         (scope, scope, str(start - timedelta(days=6)), str(end + timedelta(days=6)),
          show_pending, str(start), str(end))))
+    rules, cache, canon = context or category_context(db)
+    for r in rows:
+        r["category_stored"] = r["category"]
+        r["category"], r["category_source"] = resolve(r, rules, cache, canon)
+        r["clean_key"] = clean_merchant(r["merchant"])
     matched = _match_transfers(rows)
     # Suggestions never depend on the presence of a counterpart outside the
     # selected view, even if the viewer is authorized to switch to Household.
@@ -526,54 +546,122 @@ def monthly_snapshot(db, month, view, *, show_pending=False, household_matching=
     return result
 
 
-def edit_transaction(db, row_id, view, month, *, action, category="", transfer="", merchant_transfer=""):
-    """Apply a validated scoped edit inside the caller's BEGIN IMMEDIATE."""
+def _set_transfer(db, row_id, transfer):
+    db.execute("UPDATE account_transactions SET is_transfer=?, transfer_manual=? WHERE row_id=?",
+               (transfer == "yes", transfer != "auto", row_id))
+
+
+def _set_merchant_transfer(db, key, clean, merchant_transfer):
+    if merchant_transfer == "none":
+        db.execute("""UPDATE transaction_merchant_rules SET is_transfer=NULL
+            WHERE account_id=? AND source=? AND currency=? AND merchant=?""", key)
+        db.execute("""DELETE FROM transaction_merchant_rules WHERE account_id=? AND source=?
+            AND currency=? AND merchant=? AND category='' AND is_transfer IS NULL""", key)
+    else:
+        db.execute("""INSERT INTO transaction_merchant_rules
+            (account_id, source, currency, merchant, category, is_transfer, clean_key) VALUES (?,?,?,?,'',?,?)
+            ON CONFLICT(account_id, source, currency, merchant) DO UPDATE
+            SET is_transfer=excluded.is_transfer""", (*key, merchant_transfer == "yes", clean))
+
+
+def _set_category_rule(db, key, clean, category):
+    db.execute("""INSERT INTO transaction_merchant_rules
+        (account_id, source, currency, merchant, category, clean_key) VALUES (?,?,?,?,?,?)
+        ON CONFLICT(account_id, source, currency, merchant) DO UPDATE
+        SET category=excluded.category, clean_key=excluded.clean_key""", (*key, category, clean))
+    if clean:
+        # Older rules for the same cleaned merchant must not outvote the one just saved.
+        db.execute("""UPDATE transaction_merchant_rules SET category=? WHERE account_id=? AND source=?
+            AND currency=? AND clean_key=? AND category<>''""", (category, key[0], key[1], key[2], clean))
+
+
+def manual_rows_for_merchant(db, row):
+    """Other rows of the same account/currency/cleaned merchant that carry a manual category."""
+    clean = clean_merchant(row["merchant"])
+    return sum(1 for rid, merchant in db.execute(
+        """SELECT row_id, merchant FROM account_transactions WHERE account_id=? AND source=? AND currency=?
+           AND category_manual=1""", (row["account_id"], row["source"], row["currency"]))
+        if rid != row["row_id"] and (merchant == row["merchant"] or (clean and clean_merchant(merchant) == clean)))
+
+
+def manual_index(db):
+    """{(account, source, currency, key): rows with a manual category}, key = cleaned merchant or exact."""
+    index = defaultdict(int)
+    for account, source, currency, merchant in db.execute(
+            "SELECT account_id, source, currency, merchant FROM account_transactions WHERE category_manual=1"):
+        index[(account, source, currency, clean_merchant(merchant) or merchant)] += 1
+    return index
+
+
+ACTIONS = ("category", "rule", "transfer", "transfer_rule", "save", "add_category")
+
+
+def edit_transaction(db, row_id, view, month, *, action, category="", transfer="", merchant_transfer="",
+                     new_category="", apply=False):
+    """Apply a validated scoped edit inside the caller's BEGIN IMMEDIATE.
+
+    `save` is the drawer's one-shot edit (category, optional new category, apply-to-merchant,
+    transfer flags). Rules are scoped to this account and currency and matched on the cleaned
+    merchant key, so a store number or date in the description does not defeat them.
+    """
     if view not in VIEWS:
         raise ValueError("Unknown account view.")
     start, end = month_dates(month)
-    if action not in ("category", "rule", "transfer", "transfer_rule"):
+    if action not in ACTIONS:
         raise ValueError("Unknown transaction action.")
-    if action in ("category", "rule"):
-        category = _optional_text(category.strip(), 48)
-        if action == "rule" and not category:
-            raise ValueError("Enter a category for the merchant rule.")
-    elif action == "transfer" and transfer not in ("auto", "yes", "no"):
+    if transfer not in ("", "auto", "yes", "no") or merchant_transfer not in ("", "none", "yes", "no"):
+        raise ValueError("Choose a valid transfer setting.")
+    if action == "transfer" and not transfer:
         raise ValueError("Choose a transfer setting.")
-    elif action == "transfer_rule" and merchant_transfer not in ("none", "yes", "no"):
+    if action == "transfer_rule" and not merchant_transfer:
         raise ValueError("Choose a merchant transfer rule setting.")
+    category = category.strip() if isinstance(category, str) else ""
+    if action in ("category", "rule", "save"):
+        if category:
+            _optional_text(category, 48)
+            category = canonical(db, category)
+            if category is None:
+                raise ValueError("Choose a category from the list, or add it first.")
+        if (action == "rule" or (action == "save" and apply)) and not (category or new_category.strip()):
+            raise ValueError("Choose a category to apply to this merchant.")
     found = _dicts(db.execute(f"""SELECT t.* {_VISIBLE} {_SCOPE} AND t.row_id=?
         AND coalesce(t.posted_date,t.pending_date)>=? AND coalesce(t.posted_date,t.pending_date)<?
         AND (t.pending=0 OR t.pending_active=1)""", (view, view, row_id, str(start), str(end))))
     if not found:
         return False
     row = found[0]
+    key = (row["account_id"], row["source"], row["currency"], row["merchant"])
+    clean = clean_merchant(row["merchant"])
+    if action == "add_category":
+        add_category(db, new_category)
+        return True
     if action == "transfer":
-        db.execute("UPDATE account_transactions SET is_transfer=?, transfer_manual=? WHERE row_id=?",
-                   (transfer == "yes", transfer != "auto", row_id))
-    elif action == "category":
-        db.execute("UPDATE account_transactions SET category=?, category_manual=1 WHERE row_id=?",
-                   (category, row_id))
-    else:
+        _set_transfer(db, row_id, transfer)
+        return True
+    if action == "transfer_rule":
         if row["pending"] or not row["merchant"]:
             raise ValueError("A merchant rule needs a posted transaction with a merchant.")
-        key = (row["account_id"], row["source"], row["currency"], row["merchant"])
-        if action == "transfer_rule":
-            if merchant_transfer == "none":
-                db.execute("""UPDATE transaction_merchant_rules SET is_transfer=NULL
-                    WHERE account_id=? AND source=? AND currency=? AND merchant=?""", key)
-                db.execute("""DELETE FROM transaction_merchant_rules WHERE account_id=? AND source=?
-                    AND currency=? AND merchant=? AND category='' AND is_transfer IS NULL""", key)
-            else:
-                db.execute("""INSERT INTO transaction_merchant_rules
-                    (account_id, source, currency, merchant, category, is_transfer) VALUES (?,?,?,?,'',?)
-                    ON CONFLICT(account_id, source, currency, merchant) DO UPDATE
-                    SET is_transfer=excluded.is_transfer""", (*key, merchant_transfer == "yes"))
-            return True
-        db.execute("""INSERT INTO transaction_merchant_rules (account_id, source, currency, merchant, category)
-            VALUES (?,?,?,?,?)
-            ON CONFLICT(account_id, source, currency, merchant) DO UPDATE SET category=excluded.category""",
-                   (*key, category))
-        db.execute("""UPDATE account_transactions SET category=? WHERE account_id=? AND source=?
-            AND currency=? AND merchant=? AND category='' AND category_manual=0
-            AND (pending=0 OR pending_active=1)""", (category, *key))
+        _set_merchant_transfer(db, key, clean, merchant_transfer)
+        return True
+    apply = apply or action == "rule"
+    if action in ("category", "rule", "save"):
+        if new_category.strip():
+            category = add_category(db, new_category)
+        if apply:
+            if row["pending"] or not row["merchant"]:
+                raise ValueError("A merchant rule needs a posted transaction with a merchant.")
+            _set_category_rule(db, key, clean, category)
+            # The row follows the live rule; no stale stamp or manual flag may shadow it.
+            db.execute("UPDATE account_transactions SET category='', category_manual=0 WHERE row_id=?", (row_id,))
+        else:
+            rules, cache, canon = category_context(db)
+            current, source = resolve(row, rules, cache, canon)
+            if action == "category" or category != current or source in ("suggested", "review"):
+                db.execute("UPDATE account_transactions SET category=?, category_manual=1 WHERE row_id=?",
+                           (category, row_id))
+    if action == "save":
+        if transfer:
+            _set_transfer(db, row_id, transfer)
+        if merchant_transfer and not (row["pending"] or not row["merchant"]):
+            _set_merchant_transfer(db, key, clean, merchant_transfer)
     return True

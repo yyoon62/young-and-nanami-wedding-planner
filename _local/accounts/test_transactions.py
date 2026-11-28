@@ -17,95 +17,11 @@ from transactions import DAY, OVERLAP, PAGE, install_transactions, monthly_snaps
 from transactions_ui import EDIT, SYNC, RouteProblem, post_transactions, render_transactions
 
 
-def epoch(iso):
-    dt = datetime.fromisoformat(iso)
-    return int((dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp())
+from tx_fixture import Fixture, NOW, TOKEN, VIEWS, epoch, tx
+from tx_categories import add_category
 
 
-def tx(key, when, amount, description, **extra):
-    return dict(id=key, posted=epoch(when) if when else 0, amount=amount,
-                description=description, **extra)
-
-
-TOKEN = "fictional-page-token"
-NOW = epoch("2026-12-15T12:00:00")
-VIEWS = {"Household", "Young", "Nanami"}
-
-
-class TransactionsTest(unittest.TestCase):
-    def setUp(self):
-        temp = self.enterContext(tempfile.TemporaryDirectory(prefix="fictional-transactions-",
-                                                             dir=Path(tempfile.gettempdir()).resolve()))
-        self.path = Path(temp) / "accounts.sqlite3"
-        init_db(self.path)
-        self.db = self.enterContext(closing(sqlite3.connect(self.path)))
-        with self.db:
-            self.db.execute("BEGIN IMMEDIATE")
-            install_transactions(self.db)
-            install_transactions(self.db)
-        secret = Path(temp) / "fixture-access"
-        secret.touch(mode=0o600)
-        secret.write_text("https://fixture:fictional-secret-NOT-live@bridge.simplefin.org/simplefin/fixture")
-        self.accounts, self.calls = {}, []
-        self.alter = lambda data: data
-        self.bridge = Bridge(secret, self.wire)
-        self.batch = Batch(self.path, self.bridge, validate)
-
-    def account(self, key, kind="Checking", owner="Young", currency="USD", excluded=False, linked=True):
-        with self.db:
-            account = self.db.execute("""INSERT INTO accounts
-                (institution,nickname,kind,side,currency,balance,asof,owner,excluded)
-                VALUES ('Fictional institution',?,?,?,?, '0', '2026-11-01', ?,?)""",
-                                      (key, kind, "asset", currency, owner, excluded)).lastrowid
-            if linked:
-                source = fingerprint(self.bridge.namespace, "fictional-connection", key)
-                self.db.execute("INSERT INTO source_links (source,local,stamp,sign,snapshot,status)"
-                                " VALUES (?,?,0,0,'','Fictional')", (source, account))
-                self.accounts[key] = dict(conn_id="fictional-connection", id=key, currency=currency,
-                                          name=key, **{"balance": "0", "balance-date": NOW},
-                                          transactions=[])
-        return account
-
-    def wire(self, method, host, path, headers):
-        self.assertEqual((method, host), ("GET", "bridge.simplefin.org"))
-        self.assertIn("Authorization", headers)
-        parts = urlsplit(path)
-        self.assertEqual(parts.path, "/simplefin/fixture/accounts")
-        args = parse_qs(parts.query)
-        self.assertEqual(args.pop("version"), ["2"])
-        lo, hi = (int(args.pop(k)[0]) for k in ("start-date", "end-date"))
-        self.assertTrue(0 < hi - lo <= PAGE)
-        pending = args.pop("pending", None)
-        self.assertIn(pending, (None, ["1"]))
-        self.assertEqual(args, {})
-        self.calls.append((lo, hi, pending is not None))
-        data = dict(connections=[dict(conn_id="fictional-connection")], errlist=[],
-                    accounts=[dict(a, transactions=[
-                        t for t in a["transactions"] if
-                        (pending is not None if t.get("pending") else lo <= t["posted"] < hi)])
-                        for a in self.accounts.values()])
-        reply = self.alter(data)
-        return reply if isinstance(reply, tuple) else (200, json.dumps(reply).encode())
-
-    def add(self, account, *rows):
-        self.accounts[account]["transactions"].extend(rows)
-
-    def sync(self, **kwargs):
-        return sync_transactions(self.batch, **({"now": NOW} | kwargs))
-
-    def snap(self, month="2026-11", view="Household", **opts):
-        return monthly_snapshot(self.db, month, view, **opts)
-
-    def row(self, description, month="2026-11", **opts):
-        return next(r for r in self.snap(month, **opts).rows if r["description"] == description)
-
-    def post(self, row=None, path=EDIT, allowed_views=VIEWS, can_sync=True, **fields):
-        data = dict(token=TOKEN, month="2026-11", view="Household") | fields
-        if row is not None:
-            data["row"] = str(row)
-        return post_transactions(self.db, path, urlencode(data).encode(), token=TOKEN,
-                                 allowed_views=allowed_views, can_sync=can_sync)
-
+class TransactionsTest(Fixture, unittest.TestCase):
     def test_corroborated_payment_exact_currency_and_joint_views(self):
         self.account("Joint checking", owner="Joint")
         self.account("Joint card", "Credit card", owner="Joint")
@@ -292,6 +208,7 @@ class TransactionsTest(unittest.TestCase):
         p = self.row("Pending purchase", "2026-12", show_pending=True)
         self.assertIsNone(p["posted_date"])
         self.assertEqual(self.snap("2026-12", show_pending=True).totals, {})
+        self.cat("Fictional")
         self.post(p["row_id"], action="category", category="Fictional", month="2026-12")
         posted = tx("same", "2026-12-14", "-8.75", "Posted purchase")
         self.accounts["Bank"]["transactions"] = [posted]
@@ -351,6 +268,7 @@ class TransactionsTest(unittest.TestCase):
         self.assertIn("No posted data with sufficient coverage", html(""))
         self.sync()
         row = self.row(desc)["row_id"]
+        self.cat('"><b>Groceries</b>')
         self.post(row, action="category", category='"><b>Groceries</b>')
         rendered = html("")
         for raw in ("<script>", "<svg", "<img", "<b>Groceries", "style=", "https://"):
@@ -364,12 +282,12 @@ class TransactionsTest(unittest.TestCase):
         self.assertIn("No posted data with sufficient coverage", html("month=2024-10"))
         for expected, fields in [(403, {"token": "incorrect"}), (404, {"view": "Nanami"}),
                                  (404, {"month": "2026-12"}), (400, {"view": "Joint"}),
-                                 (400, {"month": "2026-00"}), (422, {"category": "\x00"})]:
+                                 (400, {"month": "2026-00"}), (422, {"category": "\x00"}), (422, {"category": "Not in the list"})]:
             with self.subTest(fields=fields), self.assertRaises(RouteProblem) as caught:
-                self.post(row, **(dict(action="category", category="bad") | fields))
+                self.post(row, **(dict(action="category", category="Dining") | fields))
             self.assertEqual(caught.exception.status, expected)
         with self.assertRaises(RouteProblem) as caught:
-            self.post(row, action="category", category="bad", allowed_views={"Young"})
+            self.post(row, action="category", category="Dining", allowed_views={"Young"})
         self.assertEqual(caught.exception.status, 403)
         with self.assertRaises(RouteProblem) as caught:
             render_transactions(self.db, "view=Nanami", token=TOKEN, allowed_views={"Young"})
@@ -401,6 +319,7 @@ class TransactionsTest(unittest.TestCase):
         self.add("Yen", tx("fx", "2026-12-12", "-300", "Yen debit"))
         self.add("Excluded", tx("excluded", "2026-12-12", "-90", "Excluded debit"))
         self.sync(include_pending=True)
+        self.cat("Food")
         self.post(self.row("Grocery", "2026-12")["row_id"], month="2026-12",
                   action="category", category="Food")
         for view in VIEWS:
@@ -442,6 +361,7 @@ class TransactionsTest(unittest.TestCase):
         edit("Manual non-transfer", action="category", category="")
         edit("Manual transfer", action="transfer", transfer="yes")
         self.assertEqual(self.db.execute("SELECT count(*) FROM transaction_merchant_rules").fetchone()[0], 0)
+        self.cat("Test category")
         edit("Credit card payment", action="rule", category="Test category")
         self.assertIsNone(self.row("Credit card payment", "2026-12")["merchant_transfer"])
         edit("Credit card payment", action="transfer_rule", merchant_transfer="yes")
@@ -459,7 +379,7 @@ class TransactionsTest(unittest.TestCase):
         self.assertEqual(self.row("Credit card payment", "2026-12")["flow"], "Cash flow (merchant rule)")
         self.assertTrue(self.row("Manual transfer", "2026-12")["effective_transfer"])
         rendered = render_transactions(self.db, "month=2026-12", token=TOKEN, allowed_views=VIEWS)
-        self.assertIn('value="transfer_rule"', rendered)
+        self.assertIn('name="merchant_transfer"', rendered)
         self.assertIn('<option value="no" selected>Not a transfer</option>', rendered)
         self.assertIn("Cash flow (merchant rule)", rendered)
         edit("Credit card payment", action="transfer_rule", merchant_transfer="none")

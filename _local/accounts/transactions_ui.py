@@ -14,7 +14,9 @@ import re
 import secrets
 from urllib.parse import parse_qsl, urlencode
 
-from transactions import CURRENCY, VIEWS, edit_transaction, month_dates, monthly_snapshot
+from transactions import (CURRENCY, VIEWS, category_context, edit_transaction, manual_index, month_dates,
+                          monthly_snapshot)
+from tx_categories import list_categories
 
 
 TRANSACTIONS = "/transactions"
@@ -24,9 +26,15 @@ _FILTERS = ("month", "view", "currency", "q", "pending")
 
 
 class RouteProblem(Exception):
-    def __init__(self, status, message):
+    def __init__(self, status, message, body=None):
         super().__init__(message)
         self.status = status
+        self.body = body  # Optional full rendered fragment (e.g. the page with the drawer kept open).
+
+
+def problem_body(exc):
+    """HTML fragment for a RouteProblem: the kept-open form page when there is one."""
+    return exc.body or f'<p class="notice" role="alert">{escape(str(exc))}</p>'
 
 
 def _params(raw, keys):
@@ -79,12 +87,58 @@ def _stamp(stamp):
     return datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def render_transactions(db, query, *, token, allowed_views, can_sync=False, today=None):
+_SOURCES = {"manual": ' <span class="acct-sub">(set by you)</span>',
+            "rule": ' <span class="acct-sub">(merchant rule)</span>',
+            "stamp": ' <span class="acct-sub">(saved rule)</span>'}
+
+
+def _drawer(r, f, token, categories, manual, attempt, error):
+    """One edit drawer per row: a single form and a single Save."""
+    chosen = attempt.get("category", r["category"])
+    names = list(categories) + ([chosen] if chosen and chosen not in categories else [])
+    cats = _option("", "Uncategorized", chosen) + "".join(_option(c, c, chosen) for c in names)
+    transfer = attempt.get("transfer") or (("yes" if r["is_transfer"] else "no") if r["transfer_manual"] else "auto")
+    choices = "".join(_option(value, label, transfer) for value, label in
+                      (("auto", "Use merchant rule or automatic"), ("yes", "Transfer"), ("no", "Not a transfer")))
+    can_rule = not r["pending"] and bool(r["merchant"])
+    rules = ""
+    if can_rule:
+        key = r["clean_key"]
+        others = manual.get((r["account_id"], r["source"], r["currency"], key or r["merchant"]), 0) \
+            - (1 if r["category_manual"] else 0)
+        scope = f' matching “{escape(key)}”' if key else " with this exact description"
+        note = (f" {others} other row(s) with a category you set by hand will not change." if others > 0 else "")
+        rule_choice = attempt.get("merchant_transfer") or {None: "none", 1: "yes", 0: "no"}[r["merchant_transfer"]]
+        rule_choices = "".join(_option(value, label, rule_choice) for value, label in
+                               (("none", "No rule"), ("yes", "Transfer"), ("no", "Not a transfer")))
+        rules = (f'<label class="check"><input type="checkbox" name="apply" value="1"'
+                 f'{" checked" if attempt.get("apply") == "1" else ""}> Apply to this merchant on this account '
+                 f'({escape(r["currency"])}){scope}.</label><small>{note.strip()}</small>'
+                 f'<label>Merchant transfer rule<select name="merchant_transfer">{rule_choices}</select></label>')
+    problem = f'<p class="notice" role="alert">{escape(error)}</p>' if error else ""
+    return (
+        f'<details class="inline-pop tx-drawer"{" open" if error else ""}><summary class="sec-chip">Edit</summary>'
+        f'<form method="post" action="{EDIT}" class="drawer-form tx-form">{problem}'
+        + _hidden(f, token=token, row=r["row_id"])
+        + f'<div class="tx-grid"><label>Category<select name="category">{cats}</select></label>'
+        f'<label>New category<input name="new_category" maxlength="48" autocomplete="off" '
+        f'value="{escape(attempt.get("new_category", ""))}" placeholder="e.g. Pets"></label>'
+        '<button class="button secondary" name="action" value="add_category">Add category</button>'
+        f'<label>Transfer<select name="transfer">{choices}</select></label></div>'
+        + rules + '<div class="drawer-left"><button name="action" value="save">Save</button></div>'
+        '</form></details>')
+
+
+def render_transactions(db, query, *, token, allowed_views, can_sync=False, today=None,
+                        open_row=None, attempt=None, error=None):
     """Return fragment for parent page()/send(); read DB in a single parent snapshot."""
     today = today or datetime.now(timezone.utc).date()
     f = _filters(_params(query, set(_FILTERS)), allowed_views, today.isoformat()[:7])
+    context = category_context(db)
     snap = monthly_snapshot(db, f["month"], f["view"], show_pending=f["pending"] == "1",
-                            household_matching="Household" in allowed_views)
+                            household_matching="Household" in allowed_views, context=context)
+    categories, manual = list_categories(db), manual_index(db)
+    attempt = attempt or {}
     views = "".join(_option(v, v, f["view"]) for v in VIEWS if v in allowed_views)
     currencies = sorted({r["currency"] for r in snap.coverage} | ({f["currency"]} - {""}))
     currencies = _option("", "All currencies", f["currency"]) + "".join(
@@ -147,42 +201,21 @@ def render_transactions(db, query, *, token, allowed_views, can_sync=False, toda
                          ("description", "payee", "category", "nickname", "institution", "flow")):
             continue
         category = escape(r["category"])
-        transfer = ("yes" if r["is_transfer"] else "no") if r["transfer_manual"] else "auto"
-        choices = "".join(_option(value, label, transfer) for value, label in
-                          (("auto", "Use merchant rule or automatic"), ("yes", "Transfer"), ("no", "Not a transfer")))
-        rules = ""
-        if not r["pending"] and r["merchant"]:
-            rule_choice = {None: "none", 1: "yes", 0: "no"}[r["merchant_transfer"]]
-            rule_choices = "".join(_option(value, label, rule_choice) for value, label in
-                                   (("none", "No rule"), ("yes", "Transfer"), ("no", "Not a transfer")))
-            rules = ('<fieldset><legend>Merchant rules · this account and currency</legend>'
-                     '<button class="button secondary" name="action" value="rule">'
-                     'Use the category above for this merchant</button>'
-                     '<label>Merchant transfer rule<select name="merchant_transfer">'
-                     + rule_choices + '</select></label>'
-                     '<button class="button secondary" name="action" value="transfer_rule">'
-                     'Save merchant transfer rule</button></fieldset>')
-        edit = (
-            f'<details class="inline-pop"><summary class="sec-chip">Edit</summary>'
-            f'<form method="post" action="{EDIT}" class="drawer-form">'
-            + _hidden(f, token=token, row=r["row_id"])
-            + f'<label>Category<input name="category" maxlength="48" value="{category}"></label>'
-            '<button name="action" value="category">Save category</button>'
-            f'<label>Transfer<select name="transfer">{choices}</select></label>'
-            '<button name="action" value="transfer">Save transfer</button>'
-            + rules + '</form></details>')
+        drawer = _drawer(r, f, token, categories, manual, attempt if open_row == r["row_id"] else {},
+                         error if open_row == r["row_id"] else None)
         when = escape(r["posted_date"] or r["pending_date"])
         label = "Pending · provider date or observed UTC date" if r["pending"] else "Posted UTC"
         payee = f'<div class="acct-sub">Payee: {escape(r["payee"])}</div>' if r["payee"] else ""
         suggestion = ('<div class="acct-sub">Possible internal transfer · still counted. '
                       'If confirmed, mark each leg as Transfer.</div>' if r["suggested_transfer"] else "")
+        origin = _SOURCES.get(r["category_source"], "")
         rows.append(
-            f'<tr class="acct-row"><td><time datetime="{when}">{when}</time>'
+            f'<tr class="acct-row" id="tx-{r["row_id"]}"><td><time datetime="{when}">{when}</time>'
             f'<div class="acct-sub">{label}</div></td><th scope="row" class="acct-cell">'
             f'<span class="acct-name">{escape(r["description"] or "No description")}</span>{payee}'
             f'<div class="acct-sub">SimpleFIN · {escape(r["institution"])} · {escape(r["nickname"])}</div></th>'
             f'<td class="num">{escape(r["currency"])} {escape(r["amount"])}</td>'
-            f'<td>{category or "Uncategorized"} · {escape(r["flow"])}{suggestion} {edit}</td></tr>')
+            f'<td>{category or "Uncategorized"}{origin} · {escape(r["flow"])}{suggestion} {drawer}</td></tr>')
     table = (
         '<div class="table-wrap"><table class="acct-table"><thead><tr><th>Date</th><th>Transaction</th>'
         '<th class="num">Signed amount</th><th>Classification</th></tr></thead><tbody>'
@@ -224,7 +257,8 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
         raw = body.decode("utf-8", "strict")
     except UnicodeError:
         raise RouteProblem(400, "Invalid transaction form.") from None
-    keys = set(_FILTERS) | {"token"} | ({"row", "category", "transfer", "merchant_transfer", "action"}
+    keys = set(_FILTERS) | {"token"} | ({"row", "category", "new_category", "apply", "transfer",
+                                         "merchant_transfer", "action"}
                                         if path == EDIT else {"include_pending"})
     data = _params(raw, keys)
     if not token or not secrets.compare_digest(data.get("token", "").encode("utf-8"), token.encode("utf-8")):
@@ -245,15 +279,23 @@ def post_transactions(db, path, body, *, token, allowed_views, can_sync=False):
     action = data.get("action")
     if ((action in ("category", "rule") and "category" not in data)
             or (action == "transfer" and "transfer" not in data)
-            or (action == "transfer_rule" and "merchant_transfer" not in data)):
+            or (action == "transfer_rule" and "merchant_transfer" not in data)
+            or data.get("apply", "1") != "1"):
         raise RouteProblem(400, "Incomplete transaction edit.")
     try:
         with db:
             db.execute("BEGIN IMMEDIATE")
             if not edit_transaction(db, int(row), f["view"], f["month"], action=action,
                                     category=data.get("category", ""), transfer=data.get("transfer", ""),
-                                    merchant_transfer=data.get("merchant_transfer", "")):
+                                    merchant_transfer=data.get("merchant_transfer", ""),
+                                    new_category=data.get("new_category", ""), apply=data.get("apply") == "1"):
                 raise RouteProblem(404, "Transaction not found in this view and month.")
     except ValueError as exc:
-        raise RouteProblem(422, str(exc) or "Enter a printable category of up to 48 characters.") from None
-    return PostResult(_location(f))
+        message = str(exc) or "Enter a printable category of up to 48 characters."
+        try:
+            body = render_transactions(db, urlencode(f), token=token, allowed_views=allowed_views,
+                                       can_sync=can_sync, open_row=int(row), attempt=data, error=message)
+        except Exception:
+            body = None
+        raise RouteProblem(422, message, body=body) from None
+    return PostResult(_location(f) + f"#tx-{row}")

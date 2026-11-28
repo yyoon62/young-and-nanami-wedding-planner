@@ -352,3 +352,14 @@ input, select {
 }
 .projection-cards strong, .projection-cards div { overflow-wrap: anywhere; }
 .history-plot .projection-zero { stroke: var(--text-muted); }
+
+/* ---- Transactions: one drawer per row ---- */
+.tx-drawer > summary { cursor: pointer; }
+.tx-form { margin-top: .5rem; min-width: min(21rem, 78vw); }
+.tx-form label { display: block; font-size: .78rem; font-weight: 600; color: var(--text-secondary); margin: 0 0 .45rem; }
+.tx-form label.check { display: flex; gap: .45rem; align-items: flex-start; }
+.tx-form label.check input { width: auto; min-height: 0; margin-top: .15rem; }
+.tx-form select, .tx-form input:not([type=checkbox]) { min-height: 34px; padding: .3rem .5rem; font-size: .88rem; border-radius: 7px; }
+.tx-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .1rem .6rem; align-items: end; }
+.tx-form .button, .tx-form button { padding: .38rem .85rem; font-size: .86rem; border-radius: 8px; }
+.tx-form small { margin: -.2rem 0 .5rem 1.5rem; }
