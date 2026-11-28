@@ -311,7 +311,8 @@ class Acceptance(Base, unittest.TestCase):
             self.assertEqual(C.after_sync(self.path, hosted=True, transport=fake), [])
         self.assertEqual((fake.calls, result.sent, result.status), ([], 0, "Disabled in hosted mode."))
         source = (HERE / "server.py").read_text()
-        self.assertIn("classify_after_sync(self.server.db, hosted=bool(self.server.auth))", source)
+        # L30b: the server treats a hosted host as "disabled" unless it opted in (--transactions); local is never hosted.
+        self.assertIn("classify_after_sync(self.server.db, hosted=not self.tx_enabled())", source)
 
     # ---- 15 (classifier part; the rest is in test_tx_categories) ----
     def test_migration_creates_classifier_tables_once_on_a_pre_l22_database(self):

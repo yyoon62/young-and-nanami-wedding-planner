@@ -448,7 +448,7 @@ class Handler(BaseHTTPRequestHandler):
     def send(self, code, text, kind="text/html; charset=utf-8", location=None, preview=False, scripts=False,
              signin=False, cookies=()):
         if kind.startswith("text/html") and not signin:
-            if self.server.auth and not self.server.transactions:
+            if self.server.auth and not getattr(self.server, "transactions", False):
                 text = text.replace('<a href="/transactions">Transactions</a>', "", 1)
             text = text.replace("<main>", "<main>" + mode_banner(self.server), 1)
             if self.server.auth and "<main>" in text:
@@ -537,7 +537,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def tx_enabled(self):
         """Transactions are available locally, and on a hosted server only when it was started with --transactions."""
-        return not self.server.auth or self.server.transactions
+        return not self.server.auth or getattr(self.server, "transactions", False)   # fail closed if unset
 
     def exact_origin(self):
         return self.headers.get_all("Origin", []) == [self.server.auth.config.origin]

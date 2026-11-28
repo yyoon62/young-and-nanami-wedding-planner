@@ -2,6 +2,7 @@
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+import json
 import os
 import sqlite3
 import tempfile
@@ -17,6 +18,7 @@ from bridge import Problem
 from demo_batch import seed
 from server import init_db, serve
 from test_bulk import Fixture
+from tx_fixture import NOW, Fixture as TxFixture, tx
 
 DEPLOY = Path(__file__).resolve().parent / "deploy"
 
@@ -179,6 +181,92 @@ class Status(Base):
             html = page.read().decode()
         self.assertIn("Synced just now", html)
         self.assertNotIn("sync-stale", html)
+
+
+class WithTransactions(TxFixture, unittest.TestCase):
+    """L30b: --transactions also pulls transactions (the same sync_transactions as the page) and classifies."""
+
+    def setUp(self):
+        super().setUp()
+        os.chmod(self.path, 0o600)
+        self.account("Bank")
+        self.account("Card", "Credit card")
+        inner = self.bridge.transport
+
+        def both(method, host, path, headers):                 # balances-only requests and transaction windows
+            if "balances-only=1" in path:
+                fresh = int(time.time()) - 3600                    # a balance date the validation accepts (not in the future)
+                accounts = [{k: v for k, v in a.items() if k != "transactions"} | {"balance-date": fresh}
+                            for a in self.accounts.values()]
+                body = dict(connections=[dict(conn_id="fictional-connection", name="Fictional institution")],
+                            errlist=[], accounts=accounts)
+                return 200, json.dumps(body).encode()
+            return inner(method, host, path, headers)
+        self.bridge.transport = both
+        self.lines, self.errors = [], []
+        self.add("Bank", tx("p1", "2026-12-10", "-12.50", "Corner Cafe"))
+        self.add("Card", tx("p2", "2026-12-11", "-30.00", "Gadget Barn"))
+
+    def go(self, **kw):
+        return daily_sync.run(self.path, self.bridge, out=self.lines.append, err=self.errors.append,
+                              transactions=True, now=kw.pop("now", NOW), **kw)
+
+    def count(self, table="account_transactions"):
+        return self.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+
+    def test_pulls_balances_then_transactions_and_a_second_day_adds_no_duplicates(self):
+        self.assertEqual(self.go(), 0, self.errors)
+        self.assertEqual(self.errors, [])
+        self.assertIn("2 updated", self.lines[0])
+        self.assertIn("Transactions:", self.lines[0])
+        self.assertIn("caught up", self.lines[0])
+        self.assertEqual(self.count(), 2)
+        before = len(self.calls)
+        self.add("Bank", tx("p3", "2026-12-15", "-4.00", "Corner Cafe"))
+        self.assertEqual(self.go(now=NOW + 86400), 0, self.errors)
+        self.assertEqual(self.count(), 3)                      # the new one only; p1 and p2 were not added twice
+        self.assertEqual(len(self.calls) - before, 1)          # one transaction window the next day
+        # every request, balances and transaction windows, was counted against the shared 24/day guard
+        self.assertEqual(self.count("fetch_attempts"), len(self.calls) + 2)       # + one balances request per run
+
+    def test_a_transaction_failure_keeps_the_balances_and_exits_1(self):
+        self.alter = lambda data: data | {"errlist": [{"code": "act.missingdata", "msg": "<private>"}]}
+        self.assertEqual(self.go(), 1)
+        self.assertIn("balances were saved, transactions were not", self.errors[0])
+        self.assertNotIn("<private>", self.errors[0])
+        self.assertEqual(self.db.execute("SELECT count(*) FROM source_links WHERE status IN ('Updated','Unchanged')").fetchone()[0], 2)
+        self.assertIsNotNone(sync_status.last_ok(self.path))
+
+    def test_a_balance_failure_spends_no_transaction_requests(self):
+        def refuse(*args):
+            return 403, b""
+        self.bridge.transport = refuse
+        self.assertEqual(self.go(), 1)
+        self.assertIn("access denied", self.errors[0])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.count(), 0)
+
+    def test_hosted_guard_follows_the_flag_in_both_directions(self):
+        self.assertEqual(self.go(), 0)                                   # puts transaction rows in the database
+        self.errors.clear()
+        # the opted-in host starts and syncs with those rows present ...
+        self.assertEqual(self.go(hosted=True), 0, self.errors)
+        # ... and the same database is refused by a run that did not opt in, before any request
+        calls = len(self.calls)
+        self.assertEqual(daily_sync.run(self.path, self.bridge, hosted=True, err=self.errors.append), 1)
+        self.assertIn("account_transactions", self.errors[0])
+        self.assertEqual(len(self.calls), calls)
+
+    def test_the_classifier_hook_runs_unhosted_and_its_notice_is_reported_not_fatal(self):
+        with patch.object(daily_sync, "classify_after_sync", return_value=["Classifier: 3 merchants categorised."]) as hook:
+            self.assertEqual(self.go(), 0)
+        hook.assert_called_once_with(self.path, hosted=False)
+        self.assertIn("Classifier: 3 merchants categorised.", self.lines[0])
+
+    def test_cli_refuses_transactions_without_hosted(self):
+        with self.assertRaises(SystemExit) as caught, patch("sys.stderr"):
+            daily_sync.main(["--transactions"])
+        self.assertEqual(caught.exception.code, 2)
 
 
 class Units(unittest.TestCase):
